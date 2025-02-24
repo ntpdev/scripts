@@ -80,7 +80,7 @@ class TestDataFrame(unittest.TestCase):
         self.assertEqual(sum(1 for x in input if x > 0), 5)
         # not as nice using reduce
         # functools.reduce(lambda acc, e : acc + e if e > 0 else acc, xs, 0)
-
+        self.assertEqual(fib.foldr1(lambda x, y: x + y, input), 9)
 
 if __name__ == "__main__":
     unittest.main()

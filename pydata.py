@@ -10,8 +10,20 @@ from typing_extensions import Annotated
 from uuid import uuid4, UUID
 from rich.console import Console
 from pathlib import Path
+from pystache import render
 
 console = Console()
+
+
+class BillingEntity(BaseModel):
+    type: str
+    id: int
+    code: str
+    name: str
+
+
+class BEList(BaseModel):
+    data: list[BillingEntity]
 
 
 class Person(BaseModel):
@@ -55,6 +67,40 @@ class PersonRepository:
             f.write(self.adapter.dump_json(xs, exclude_none=True))
 
 
+def billing_entity():
+    be_data = """
+    {
+    "data": [
+        {
+        "type": "billingEntity",
+        "id": 101,
+        "code": "RHE-RS",
+        "name": "ad asd"
+        },
+        {
+        "type": "billingEntity",
+        "id": 102,
+        "code": "WRE-RS",
+        "name": "wer wasd"
+        }
+    ]
+    }
+    """
+    xs = BEList.model_validate_json(be_data)
+    console.print(xs)
+
+    xml_tmpl = """
+<SeedData>
+<Communications>
+{{#data}}
+<Communication {{type}}.code="{{code}}">{{id}}:{{name}}</Communication>
+{{/data}}
+</Communications>
+</SeedData>
+"""
+    console.print(render(xml_tmpl, xs))
+
+
 def main():
     person1 = Person(name="John", age=4)  # construct named params
     print(person1)  # default pydantic does not show class name, prints: id='...', name='John' age=4
@@ -95,6 +141,8 @@ def main():
     ys = repo.load(p)
     console.print(f"loaded {len(ys)} from {p}", style="cyan")
     console.print(ys)
+
+    billing_entity()
 
 
 if __name__ == "__main__":

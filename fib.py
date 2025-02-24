@@ -23,21 +23,21 @@ def fib(n):
     return n if n < 2 else fib(n - 1) + fib(n - 2)
 
 
-def fibm(maxN):
-    memo = [-1] * maxN
+def fibm(maxn):
+    memo = [-1] * maxn
     memo[0] = 0
     memo[1] = 1
 
-    def fibImpl(n):
+    def impl(n):
         if memo[n] < 0:
             # print(f'calculating {n}')
-            memo[n] = fibImpl(n - 1) + fibImpl(n - 2)
+            memo[n] = impl(n - 1) + impl(n - 2)
         return memo[n]
 
-    return fibImpl
+    return impl
 
 
-def fibIter(n: int) -> Iterator[int]:
+def fib_iter(n: int) -> Iterator[int]:
     """return a generator iterator"""
     a, b = 0, 1
     for _ in range(n):
@@ -51,7 +51,7 @@ def fib2(n):
     return n if n < 2 else fib2(n - 1) + fib2(n - 2)
 
 
-def collatzIter(n):
+def collatz_iter(n):
     while n > 1:
         yield n
         n = n // 2 if n % 2 == 0 else 3 * n + 1
@@ -60,7 +60,7 @@ def collatzIter(n):
 
 def draw_collatz_seq_length():
     # draw barchart of lengths of various sequences
-    d = {x: sum(1 for _ in collatzIter(x)) for x in range(10, 100)}
+    d = {x: sum(1 for _ in collatz_iter(x)) for x in range(10, 100)}
     df = pd.DataFrame.from_dict(d, orient="index")
 
     fig = px.bar(df, x=df.index, y=df.iloc[:, 0], title="Collatz Seq length")
@@ -74,7 +74,7 @@ def gen_expr():
     # which can be evaluated later on demand eg list(ex) or sum(ex)
     ex = (x**2 for x in range(10))
     for x in ex:
-        console.print(x, style='cyan')
+        console.print(x, style="cyan")
 
 
 def foldr1(op, xs: list[int]) -> int:
@@ -322,7 +322,6 @@ def np_search(xs, target):
 if __name__ == "__main__":
     # draw_collatz_seq_length()
 
-    console.print(f"sum {xs} = {foldr1(lambda x, y: x + y, xs)}", style="green")
     s = "neg 7"
     console.print(f"command {s} = {pattern_match_commands(s)}", style="green")
     s = "add 2 3"
@@ -338,4 +337,4 @@ if __name__ == "__main__":
     stm.send(None)
     for i in [0, 1, 2, 1, 1, 1, 2, 2, 1, 0, 1]:
         x = stm.send(i)
-        console.print(f"iter {i} ret {x}", style='cyan')
+        console.print(f"iter {i} ret {x}", style="cyan")
