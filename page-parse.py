@@ -18,9 +18,7 @@ from pathlib import Path
 
 
 def parse_fool_disclosure(cols: list[str]) -> dict[str, str | int]:
-    '''parses a row with format
-    ['1', 'Apple - NASDAQ:AAPL\nAAPL', 'AAPL', '313']
-    '''
+    # ['1', 'Apple - NASDAQ:AAPL\nAAPL', 'AAPL', '313']
     d = {}
     d["rank"] = int(cols[0])
     parts = re.split(r"[-:\n]", cols[1])
@@ -43,7 +41,8 @@ def extract_fool_stocks(soup: BeautifulSoup) -> pd.DataFrame:
     rows = table_body.find_all("tr")
     for row in rows:
         cols = row.find_all("td")
-        data.append(parse_fool_disclosure(e.text.strip() for e in cols))
+        xs = [e.text.strip() for e in cols]
+        data.append(parse_fool_disclosure(xs))
     return pd.DataFrame(data).astype(
         {"company": "string", "exchange": "string", "ticker": "string"}
     )
@@ -57,7 +56,6 @@ def download_fool_disclosure(url: str, fn: Path):
         raise Exception(f"failed to load page {url}")
     soup = BeautifulSoup(r.text, "html.parser")
     df = extract_fool_stocks(soup)
-    breakpoint()
     print(df)
     df.to_csv(fn, index=False)
     print("saved " + str(fn))
