@@ -57,16 +57,12 @@ class PersonRepository:
 
 def main():
     person1 = Person(name="John", age=4)  # construct named params
-    print(
-        person1
-    )  # default pydantic does not show class name, prints: id='...', name='John' age=4
+    print(person1)  # default pydantic does not show class name, prints: id='...', name='John' age=4
     data = {"name": "Janet", "age": 5, "best_friend": person1.name}
     person2 = Person(**data)  # construct from dict
     print(person2)  # prints: Person(id='...', name='Jane', age=5)
 
-    person3 = Person.model_validate_json(
-        '{"name": "Zed", "age": 1}'
-    )  # construct from JSON
+    person3 = Person.model_validate_json('{"name": "Zed", "age": 1}')  # construct from JSON
 
     # pydantic models do not validate property sets so person2.age = -9 is allowed
     try:
@@ -88,7 +84,7 @@ def main():
     p = Path.home() / "Documents" / "z.json"
 
     repo.save(xs, p)
-    console.print(f"saved list to {p}", style='cyan')
+    console.print(f"saved list to {p}", style="cyan")
 
     # print_json will pretty print
     with open(p, "r") as f:
@@ -97,7 +93,7 @@ def main():
         console.print("---", style="yellow")
 
     ys = repo.load(p)
-    console.print(f"loaded {len(ys)} from {p}", style='cyan')
+    console.print(f"loaded {len(ys)} from {p}", style="cyan")
     console.print(ys)
 
 

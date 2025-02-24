@@ -1,5 +1,4 @@
 instructions:
 - clone repo
 - run **uv sync**
-- run **..\.venv\Scripts\activate.ps1 **
-
+- run **.venv\Scripts\activate.ps1**

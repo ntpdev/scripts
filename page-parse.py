@@ -43,9 +43,7 @@ def extract_fool_stocks(soup: BeautifulSoup) -> pd.DataFrame:
         cols = row.find_all("td")
         xs = [e.text.strip() for e in cols]
         data.append(parse_fool_disclosure(xs))
-    return pd.DataFrame(data).astype(
-        {"company": "string", "exchange": "string", "ticker": "string"}
-    )
+    return pd.DataFrame(data).astype({"company": "string", "exchange": "string", "ticker": "string"})
 
 
 def download_fool_disclosure(url: str, fn: Path):
@@ -72,10 +70,7 @@ def print_changes() -> None:
     paths = [s for s in fn.glob("Motley Fool Disclosure*.csv")]
     # load each csv into a df and index by date
     # df has cols rank and ticker and makes the ticker the index
-    ds = {
-        date.fromisoformat(str(f)[-14:-4]): pd.read_csv(f, usecols=["rank", "ticker"])
-        for f in paths
-    }
+    ds = {date.fromisoformat(str(f)[-14:-4]): pd.read_csv(f, usecols=["rank", "ticker"]) for f in paths}
     for k, v in ds.items():
         v.set_index("ticker", inplace=True)
         v.rename(columns={"rank": k}, inplace=True)

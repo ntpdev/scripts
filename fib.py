@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 import math
-import unittest
 from collections import defaultdict, deque
 from datetime import date, timedelta
 from decimal import Decimal
@@ -17,8 +16,6 @@ from rich.pretty import pprint
 # import graphviz
 from scipy.optimize import brentq
 
-# import plotly.graph_objs as go
-# import plotly.offline as py
 console = Console()
 
 
@@ -77,7 +74,7 @@ def gen_expr():
     # which can be evaluated later on demand eg list(ex) or sum(ex)
     ex = (x**2 for x in range(10))
     for x in ex:
-        print(x)
+        console.print(x, style='cyan')
 
 
 def foldr1(op, xs: list[int]) -> int:
@@ -176,7 +173,7 @@ def draw_gantt_chart():
     2023-04-01	2023-06-06	£39.00
     2022-06-01	2022-11-20	£94.85
     2022-06-01	2023-03-31	-£240.00"""
-    df = pd.read_csv(StringIO(s), delim_whitespace=True)
+    df = pd.read_csv(StringIO(s), sep="\\s+")
     df.sort_values("start", inplace=True)
 
     # Create the chart
@@ -230,15 +227,10 @@ def evaluate_cashflow(df, repayment, interest_rate):
             df.at[i, "capital"] = df.at[prev, "outstanding"]
         # calculate row
         carried_interest = df.at[prev, "frac_int"] if prev else 0.0
-        df.at[i, "interest"] = (
-            df.at[i, "days"] * df.at[i, "capital"] * interest_rate / 365
-            + carried_interest
-        )
+        df.at[i, "interest"] = df.at[i, "days"] * df.at[i, "capital"] * interest_rate / 365 + carried_interest
         df.at[i, "int_paid"] = math.floor(df.at[i, "interest"] * 100) / 100
         df.at[i, "frac_int"] = df.at[i, "interest"] - df.at[i, "int_paid"]
-        df.at[i, "outstanding"] = (
-            df.at[i, "capital"] - df.at[i, "repayment"] + df.at[i, "int_paid"]
-        )
+        df.at[i, "outstanding"] = df.at[i, "capital"] - df.at[i, "repayment"] + df.at[i, "int_paid"]
         prev = i
     return df.iat[-1, 6]
 
@@ -256,9 +248,7 @@ def example_cashflow():
     # re-evaluate with rounded repayment
     evaluate_cashflow(df, round(r, 2), interest_rate)
     console.print("--- example cashflow ---", style="yellow")
-    console.print(
-        f"drawdown {drawdown:.2f}, interest rate {interest_rate * 100:.4f}%, monthly payment {round(r, 2)}"
-    )
+    console.print(f"drawdown {drawdown:.2f}, interest rate {interest_rate * 100:.4f}%, monthly payment {round(r, 2)}")
     console.print(
         f"total paid {df['repayment'].sum():.2f} , total interest {df['int_paid'].sum():.2f}, total frac {df['frac_int'].sum()}"
     )
@@ -299,19 +289,6 @@ def topological_sort(graph):
     return sorted_list
 
 
-# Example usage:
-graph = {
-    "A": ["C"],
-    "B": ["C", "D"],
-    "C": ["E"],
-    "D": ["F"],
-    "E": ["F", "H"],
-    "F": ["G"],
-    "G": ["H"],
-    "H": [],
-}
-
-
 def weekly_df(dt: date, sz: int) -> pd.DataFrame:
     """Creates a DataFrame with weekly index starting on first monday after dt."""
 
@@ -342,81 +319,15 @@ def np_search(xs, target):
     return -1 if n >= xs.size or xs[n] != target else n
 
 
-class TestDataFrame(unittest.TestCase):
-    def test_weekly_df(self):
-        df = weekly_df(date(2024, 9, 1), 10)
-        self.assertEqual(df.index[0].date(), date(2024, 9, 2))
-        self.assertEqual(df.index[-1].date(), date(2024, 11, 4))
-
-        xs = df.index.values
-        for i in range(xs.size):
-            self.assertEqual(binary_search(xs, xs[i]), i)
-
-        # same search
-        ys = [
-            binary_search(xs, i)
-            for i in np.arange("2024-10-21", "2024-11-09", dtype="datetime64[D]")
-        ]
-        self.assertEqual(
-            ys,
-            [7, -1, -1, -1, -1, -1, -1, 8, -1, -1, -1, -1, -1, -1, 9, -1, -1, -1, -1],
-        )
-
-        zs = [
-            np_search(xs, i)
-            for i in np.arange("2024-10-21", "2024-11-09", dtype="datetime64[D]")
-        ]
-        self.assertEqual(
-            zs,
-            [7, -1, -1, -1, -1, -1, -1, 8, -1, -1, -1, -1, -1, -1, 9, -1, -1, -1, -1],
-        )
-
-    def test_fib(self):
-        xs = [fib(x) for x in range(10)]
-        self.assertEqual(xs, [0, 1, 1, 2, 3, 5, 8, 13, 21, 34])
-
-        f = fibm(20)
-        print(f(9))
-        xs = [f(x) for x in range(11)]
-        self.assertEqual(xs, [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55])
-
-        print([x for x in fibIter(18)])
-        print(list(collatzIter(27)))
-
-    def test_top_sort(self):
-        xs = topological_sort(graph)
-        # sort is not unique as there are items at same depth
-        self.assertEqual(xs, ["A", "B", "C", "D", "E", "F", "G", "H"])
-
-    def test_np_date(self):
-        dates = np.array(["2023-01-01", "2023-02-15", "2023-03-31"], dtype="datetime64")
-        pprint(dates)
-        dt = dates[1].astype(date)
-        self.assertEqual(dt, date(2023, 2, 15))
-
-
 if __name__ == "__main__":
-    # unittest.main()
     # draw_collatz_seq_length()
-
-    xs = [5, -7, 3, 5, 2, -2, 4, -1]
-    # replace neg values by 0
-    [x if x > 0 else 0 for x in xs]
-    # filter out
-    [x for x in xs if x > 0]
-    # generator expresions can be used on the fly. will sum the positive integers
-    sum(x for x in xs if x > 0)
-    # count number positive
-    sum(1 for x in xs if x > 0)
-    # not as nice using reduce
-    # functools.reduce(lambda acc, e : acc + e if e > 0 else acc, xs, 0)
 
     console.print(f"sum {xs} = {foldr1(lambda x, y: x + y, xs)}", style="green")
     s = "neg 7"
-    console.print(f"command  {s} = {pattern_match_commands(s)}", style="green")
+    console.print(f"command {s} = {pattern_match_commands(s)}", style="green")
     s = "add 2 3"
-    console.print(f"command  {s} = {pattern_match_commands(s)}", style="green")
-    draw_gantt_chart()
+    console.print(f"command {s} = {pattern_match_commands(s)}", style="green")
+    # draw_gantt_chart()
     # draw_diag()
     example_cashflow()
 
@@ -427,4 +338,4 @@ if __name__ == "__main__":
     stm.send(None)
     for i in [0, 1, 2, 1, 1, 1, 2, 2, 1, 0, 1]:
         x = stm.send(i)
-        print(f"iter {i} ret {x}")
+        console.print(f"iter {i} ret {x}", style='cyan')
