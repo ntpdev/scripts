@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 import argparse
-from dataclasses import dataclass, asdict
-from typing import List
-from dataclasses_json import dataclass_json
-from chatutils import (
-    CodeBlock,
-    make_fullpath,
-    extract_code_block,
-    execute_script,
-    save_content,
-    translate_latex,
-    input_multi_line,
-)
-from firecrawl import FirecrawlApp
 import datetime
-
-# from datetime import datetime, date, time
-from openai import OpenAI
+import json
 import os
 import platform
-from rich.console import Console
-from rich.markdown import Markdown
-from rich import print as rprint
-from rich.pretty import pprint
-import requests
-import json
-import yaml
 
 # import sympy # used by eval
 import re
+from dataclasses import asdict, dataclass
+
+import requests
+import yaml
+from dataclasses_json import dataclass_json
+from firecrawl import FirecrawlApp
+
+# from datetime import datetime, date, time
+from openai import OpenAI
+from rich import print as rprint
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.pretty import pprint
+
+from chatutils import (
+    CodeBlock,
+    execute_script,
+    extract_code_block,
+    input_multi_line,
+    make_fullpath,
+    save_content,
+    translate_latex,
+)
 
 # pip install dataclasses-json
 # OpenAI Python library: https://github.com/openai/openai-python
@@ -232,7 +233,7 @@ def load_msg(s: str) -> ChatMessage:
     role = "assistant" if len(xs) > 2 else "user"
 
     try:
-        with open(fname, "r", encoding="utf-8") as f:
+        with open(fname, encoding="utf-8") as f:
             return ChatMessage(role, f.read())
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
@@ -244,7 +245,7 @@ def load_textfile(s: str) -> str:
     xs = s.split()
     fname = make_fullpath(xs[1])
     try:
-        with open(fname, "r", encoding="utf-8") as f:
+        with open(fname, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
@@ -257,7 +258,7 @@ def load_template(s: str) -> ChatMessage:
     rprint(xs)
 
     try:
-        with open(fname, "r") as f:
+        with open(fname) as f:
             templ = f.read()
             if len(xs) > 2:
                 templ = templ.replace("{input}", xs[2])
@@ -284,7 +285,7 @@ def load_log(s: str) -> list[ChatMessage]:
     fname = make_fullpath(xs[1])
 
     try:
-        with open(fname, "r") as f:
+        with open(fname) as f:
             data = json.load(f)
             all_msgs = ChatMessage.schema().load(data, many=True)
             console.print(f"loaded from log {len(xs)} messages {len(all_msgs)}", style="red")
@@ -355,8 +356,8 @@ def tool_response(s: str) -> str:
     return '<tool_response>\n{"name": "eval", "content": "xxx"}\n</tool_response>\n'.replace("xxx", xs)
 
 
-def load(filename: str) -> List[ChatMessage]:
-    with open(filename, "r") as f:
+def load(filename: str) -> list[ChatMessage]:
+    with open(filename) as f:
         return ChatMessage.schema().parse_raw(f.read())
 
 
@@ -444,7 +445,7 @@ def extract_code_block_from_response(response) -> CodeBlock:
     return extract_code_block(response.choices[0].message.content, "```")
 
 
-def process_commands(inp: str, messages: List[ChatMessage]) -> bool:
+def process_commands(inp: str, messages: list[ChatMessage]) -> bool:
     global code1
     next_action = False
     if inp.startswith("%load"):

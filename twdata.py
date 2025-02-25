@@ -2,18 +2,20 @@
 # Note chmod +x *.py
 # ensure Unix style line endings
 
+import argparse
+import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from twelvedata import TDClient
-import argparse
+
 import numpy as np
-import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.subplots as subp
 import requests as req
+from twelvedata import TDClient
 from xlsxwriter.utility import xl_range
+
 import tsutils
 
 # pip install twelvedata
@@ -356,7 +358,7 @@ def main_concat():
 
 
 def concat(filename1, filename2, output_name):
-    with open(filename1, 'r') as f1, open(filename2, 'r') as f2, open(output_name, 'w') as f3:
+    with open(filename1) as f1, open(filename2) as f2, open(output_name, 'w') as f3:
         for line in f1:
             f3.write(line)
         for line in f2:
