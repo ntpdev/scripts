@@ -1,4 +1,5 @@
 instructions:
 - clone repo
-- run **uv sync**
-- run **.venv\Scripts\activate.ps1**
+- uv sync
+- .venv\Scripts\activate.ps1
+- python -m unittest tests.test_fib

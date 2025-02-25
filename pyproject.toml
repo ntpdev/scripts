@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [tool.ruff]
-line-length = 120
+line-length = 256
 
 [tool.ruff.lint]
-extend-select = ["N", "R"]
+extend-select = ["E", "F", "N", "R"]

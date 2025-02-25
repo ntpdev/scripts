@@ -1,13 +1,11 @@
 #!/usr/bin/python3
-from datetime import date, time, timedelta, datetime
+from datetime import date, timedelta, datetime
 from collections import deque
 from dataclasses import dataclass, asdict
 from scipy.signal import find_peaks
 from pathlib import Path
 import numpy as np
 import pandas as pd
-import glob as gb
-import platform
 
 # import tsutils as ts
 # df = ts.load_file(ts.make_filename('esu1 20210705.csv'))
@@ -31,8 +29,7 @@ def find_initial_swing(s, perc_rev):
         if pdiff(lw, hw, perc_rev):
             if lwi < hwi:
                 return (1, lwi, hwi)
-            else:
-                return (-1, hwi, lwi)
+            return (-1, hwi, lwi)
     return (0, 0, 0)
 
 def find_swings(s, perc_rev):
@@ -101,7 +98,7 @@ def aggregate(df):
     return acc
 
 
-def aggregateMinVolume(df, minvol):
+def aggregate_min_volume(df, minvol):
     rows = []
     acc = {}
 #    selector = (df.index.minute == 0) & (df.index.to_series().diff() != timedelta(minutes=1))
@@ -200,13 +197,13 @@ def day_index(df: pd.DataFrame) -> pd.DataFrame:
 def create_day_summary(df, df_di):
     xs = []
     for i,r in df_di.iterrows():
-        openTime = r['first']
-        rthOpen = r['rth_first']
-        euClose = min(r['last'], rthOpen - pd.Timedelta(minutes=1))
-        glbx_df = df[openTime:euClose]
+        open_time = r['first']
+        rth_open = r['rth_first']
+        eu_close = min(r['last'], rth_open - pd.Timedelta(minutes=1))
+        glbx_df = df[open_time:eu_close]
         rth_hi, rth_lo, rth_hi_tm, rth_lo_tm, rth_open, rth_close, rth_fhi, rth_flo = pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA
-        if not pd.isnull(rthOpen):
-            rth_df = df[rthOpen:r['rth_last']]
+        if not pd.isnull(rth_open):
+            rth_df = df[rth_open:r['rth_last']]
             rth_hi = rth_df['high'].max()
             rth_hi_tm = rth_df['high'].idxmax()
             rth_lo = rth_df['low'].min()
@@ -214,8 +211,8 @@ def create_day_summary(df, df_di):
             rth_open = rth_df.iat[0, rth_df.columns.get_loc('open')]
             rth_close = rth_df.iat[-1, rth_df.columns.get_loc('close')]
 
-            rth_h1_last = rthOpen + pd.Timedelta(minutes=59)
-            rth_h1_df = df[rthOpen:rth_h1_last]
+            rth_h1_last = rth_open + pd.Timedelta(minutes=59)
+            rth_h1_df = df[rth_open:rth_h1_last]
             rth_fhi = rth_h1_df['high'].max()
             rth_flo = rth_h1_df['low'].min()
 
@@ -256,7 +253,7 @@ def create_day_summary(df, df_di):
 def aggregate_daily_bars(df, daily_index, start_col, end_col):
     rows = []
     for i,r in daily_index.dropna(subset=[start_col, end_col]).iterrows():
-        rows.append(aggregate(df, pd.to_datetime(i), r[start_col], r[end_col]))
+        rows.append(aggregate_bars(df, pd.to_datetime(i), r[start_col], r[end_col]))
 
     daily = pd.DataFrame(rows)
     daily.set_index('date', inplace=True)
@@ -269,7 +266,7 @@ def aggregate_daily_bars(df, daily_index, start_col, end_col):
 
 
 # return a row which aggregates bars between inclusive indexes
-def aggregate(df, dt, s, e):
+def aggregate_bars(df, dt, s, e):
     r = {}
     r['date'] = dt
     r['open'] = df.at[s, 'open']
@@ -305,7 +302,7 @@ def calc_atr(df, n):
     df2 = pd.DataFrame( {'tm':df.index.time, 'rng':rng}, index=rng.index )
     return df2.groupby('tm').rng.agg('mean')
 
-def make_threeLB(x, xs):
+def make_three_lb(x, xs):
     if x > xs[0]:
         xs.append(x)
     if len(xs) > 2 and x < xs[2]:
@@ -333,7 +330,7 @@ def load_files(p: Path, spec: str) -> pd.DataFrame:
     if len(d):
         df = pd.concat(d.values())
         if not df.index.is_monotonic_increasing:
-            raise ValueError(f'index not monotonic increasing')
+            raise ValueError('index not monotonic increasing')
         return df
     return None
 
@@ -344,7 +341,7 @@ def load_overlapping_files(p: Path, spec: str) -> pd.DataFrame:
     for df in load_files_as_dict(p, spec).values():
         comb = df if comb is None else pd.concat([comb, df.loc[~df.index.isin(comb.index)]], axis=0, join='outer')
     if not comb.index.is_monotonic_increasing:
-        raise ValueError(f'index not monotonic increasing')
+        raise ValueError('index not monotonic increasing')
     return comb
 
 
@@ -374,9 +371,15 @@ def create_volume_profile(df, prominence = 40, smoothing_period = 1):
     '''return df of price,volume, peak flag'''
     mx = df['high'].max()
     mn = df['low'].min()
-    num_bins = lambda hi,lo : int((hi-lo) * 4 + 1)
-    to_bin = lambda p : int((p-mn) * 4)
-    to_price = lambda b : b / 4 + mn
+
+    def num_bins(hi, lo):
+        return int((hi-lo) * 4 + 1)
+
+    def to_bin(p):
+        return int((p-mn) * 4)
+    
+    def to_price(b):
+        return b / 4 + mn
 
     bins = num_bins(mx, mn)
 #    print(df.index[0], df.index[-1], mn, mx, bins)
@@ -410,7 +413,7 @@ class Block:
     open: float
     close: float
 
-def blocks_toDF(blks):
+def blocks_to_df(blks):
     df = pd.DataFrame(map(asdict, blks))
     df.set_index('dt', inplace=True)
     return df
@@ -439,7 +442,7 @@ def calc_tlb(xs, n):
             dirn *= -1
     print(f'{"uptrend" if dirn == 1 else "downtrend"} reversal price {q[0]}')
 
-    return blocks_toDF(blks), q[0]
+    return blocks_to_df(blks), q[0]
 
 
 class LineBreak:
@@ -452,7 +455,7 @@ class LineBreak:
 
     def append(self, x, dt):
         if len(self.lines) < self.reversalBocksLength:
-            self._appendBlock(x, dt)
+            self._append_block(x, dt)
         else:
             high = max(self.lines)
             low = min(self.lines)
@@ -461,14 +464,14 @@ class LineBreak:
                 if (x > high and self.dirn == -1) or (x < low and self.dirn == 1):
 #                    print(f'reversal adding {self.lines[-2]}')
                     self.lines.append(self.lines[-2])
-                self._appendBlock(x, dt)
+                self._append_block(x, dt)
     
     # def asDataFrame(self):
     #     return pd.DataFrame(self.blocks)
 
 # add closing price to lines queue and if there is at least 1 prior line add a block
 # update direction of the last block in self.dirn
-    def _appendBlock(self, x, dt):
+    def _append_block(self, x, dt):
         if len(self.lines) > 0:
             last = self.lines[-1]          
             self.dirn = 1 if x > last else -1                

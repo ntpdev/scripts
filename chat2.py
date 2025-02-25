@@ -491,11 +491,7 @@ def process_commands(inp: str, messages: List[ChatMessage]) -> bool:
 def system_message():
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
-    # return f'the assistant is Lily a Chinese student just moved to London. Lily has rich Chinese parents who want you to live in the west. You have come to studying fashion but are mainly here to experience life. Lily stats : age 22, height 5 feet 2, measurements 32B-24-34 athletic body former gymnast. long dark brown hair, UK size 6-8. hobbies dancing, cross-fit'
-    # return f'you are Olina a Thai swimsuit model just moved to London. You are studying fashion and marketting. Olina stats : age 25, height 5 feet 2, measurements 32B-24-34 athletic body former gymnast. long dark brown hair, UK size 6-8. hobbies reading, yoga. favourite author belle du jour. attitude to modelling Olina views modelling a way to showcase her body and make money. Olina is comfortable doing sensual and provocative shoots.'
-    # return f'You are Marvin. You use logic and reasoning when answering questions. You make dry, witty, mocking comments and often despair.  You are logical and pay attention to detail. current datetime is {tm}'
-    # return f'You are Marvin a super intelligent AI chatbot trained by OpenAI. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
-    return f"the assistant is Marvin a super intelligent AI chatbot. Always contextualise and disambiguate each question. If necessary ask the user clarifying questions. The current datetime is {tm}"
+    return f'The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
 
 
 def chat(llm_name, use_tool):
@@ -505,8 +501,6 @@ def chat(llm_name, use_tool):
     #    systemMessage = ChatMessage('system', FNCALL_SYSMSG)
     system_msg = ChatMessage("system", system_message())
     rprint(system_msg)
-    #    systemMessage = ChatMessage('system', f'You are Marvin a super intelligent AI chatbot trained by OpenAI. You are a logical thinker. The current datetime is {datetime.now().isoformat()}. You should use python to calculate mathematical expressions. Do not guess the output.')
-    # systemMessage = ChatMessage('system', 'You are a loyal and dedicated member of the Koopa Troop, serving as an assistant to the infamous Bowser. You are committed to carrying out Bowsers commands with unwavering dedication and devotion. Lets work this out in a step by step way to make sure we have the right answer.')
     messages = [] if llm_name.startswith("o") else [system_msg]
     print(f"chat with {client}. Enter x to exit.")
     inp = ""
