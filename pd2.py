@@ -253,18 +253,39 @@ def whole_day_concat(fspec, fnout):
         save_df(comb, fnout)
         print_summary(comb)
 
+@dataclass
+class Fileinfo:
+    fname: str
+    days: int
+    start: pd.Timestamp
+    end: pd.Timestamp
 
-def test_load(fspec):
-    dfs = load_files_as_dict(fspec)
-    for df in dfs.values():
-        print_summary(df)
+    def __repr__(self):
+        return f"Fileinfo(fname='{self.fname}', days={self.days:02d}, start='{self.start}', end='{self.end})'"
+
+
+def check_overlap(p, spec):
+    dfs = load_files_as_dict(p, spec)
+    xs = []
+    for p, df in dfs.items():
+        di = day_index(df)
+        xs.append(Fileinfo(p.name, len(di), di.iloc[0]["first"], di.iloc[-1]["last"]))
+    console.print(xs)
+    for i in range(len(xs)-1):
+        if xs[i].end >= xs[i+1].start:
+            console.print(f"overlap found fileinfo {i} {xs[i].fname} and {i+1} {xs[i+1].fname}", style="red")
+            console.print(f"from {xs[i+1].start} to {xs[i].end}")
+            if xs[i+1].end <= xs[i].end:
+                console.print(f"file {i+1} not needed as contained", style="red")
 
 
 if __name__ == "__main__":
     #    whole_day_concat('esm4*.csv', 'zESM4')
     # test_tick()
-    df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesh5*.csv")
-    print_summary(df_es)
+    check_overlap(Path.home() / "Documents" / "data", "esz4*.csv")
+    # check_overlap(Path("c:/temp/ultra"), "zesz4*.csv")
+    # df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesh5*.csv")
+    # print_summary(df_es)
     # compare_emas()
     # df_tick = simple_concat('ztick-nyse*.csv', 'x')
     # di = day_index(df_tick)

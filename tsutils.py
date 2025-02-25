@@ -209,14 +209,14 @@ def create_day_summary(df, df_di):
         rth_open = r["rth_first"]
         eu_close = min(r["last"], rth_open - pd.Timedelta(minutes=1))
         glbx_df = df[open_time:eu_close]
-        rth_hi, rth_lo, rth_hi_tm, rth_lo_tm, rth_open, rth_close, rth_fhi, rth_flo = pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA
+        rth_hi, rth_lo, rth_hi_tm, rth_lo_tm, rth_open_price, rth_close, rth_fhi, rth_flo = pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA
         if not pd.isnull(rth_open):
             rth_df = df[rth_open : r["rth_last"]]
             rth_hi = rth_df["high"].max()
             rth_hi_tm = rth_df["high"].idxmax()
             rth_lo = rth_df["low"].min()
             rth_lo_tm = rth_df["low"].idxmin()
-            rth_open = rth_df.iat[0, rth_df.columns.get_loc("open")]
+            rth_open_price = rth_df.iat[0, rth_df.columns.get_loc("open")]
             rth_close = rth_df.iat[-1, rth_df.columns.get_loc("close")]
 
             rth_h1_last = rth_open + pd.Timedelta(minutes=59)
@@ -229,7 +229,7 @@ def create_day_summary(df, df_di):
                 "date": i,
                 "glbx_high": glbx_df["high"].max(),
                 "glbx_low": glbx_df["low"].min(),
-                "rth_open": rth_open,
+                "rth_open": rth_open_price,
                 "rth_high": rth_hi,
                 "rth_low": rth_lo,
                 "close": rth_close,

@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-# python -m pip install pymongo
 import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -16,13 +15,13 @@ import tsutils as ts
 
 @dataclass
 class MinVolDay:
-    tradeDt: date
-    startTm: datetime
-    startBar: int
-    euStartBar: int
-    euEndBar: int
-    rthStartBar: int
-    rthEndBar: int
+    trade_dt: date
+    start_tm: datetime
+    start_bar: int
+    eu_start_bar: int
+    eu_end_bar: int
+    rth_start_bar: int
+    rth_end_bar: int
 
 
 def samp():
@@ -37,7 +36,7 @@ def samp():
     fig.show()
 
 
-def samp3LB():
+def samp_3lb():
     df = pd.read_csv("d:/3lb.csv", delimiter="\\s+", converters={"date": lambda e: datetime.strptime(e, "%Y-%m-%d")})
     colours = df["dirn"].map({-1: "red", 1: "green"})
     xs = df["date"].dt.strftime("%m-%d")
@@ -85,9 +84,9 @@ def add_hilo_labels(df, tms, fig):
     hs = highs(df, 21)
     ls = lows(df, 21)
 
-    fig.add_trace(go.Scatter(x=[tm for tm in df.loc[hs.index].tm], y=hs.add(1), text=["%.2f" % p for p in df.loc[hs.index].high], mode="text", textposition="top center", name="local high"))
+    fig.add_trace(go.Scatter(x=[tm for tm in df.loc[hs.index].tm], y=hs.add(1), text=[f"{p:.2f}" for p in df.loc[hs.index].high], mode="text", textposition="top center", name="local high"))
 
-    fig.add_trace(go.Scatter(x=[tm for tm in df.loc[ls.index].tm], y=ls.sub(1), text=["%.2f" % p for p in df.loc[ls.index].low], mode="text", textposition="bottom center", name="local low"))
+    fig.add_trace(go.Scatter(x=[tm for tm in df.loc[ls.index].tm], y=ls.sub(1), text=[f"{p:.2f}" for p in df.loc[ls.index].low], mode="text", textposition="bottom center", name="local low"))
 
 
 def bar_containing(df, dt):
@@ -96,9 +95,9 @@ def bar_containing(df, dt):
 
 # return a high and low range to nearest multiple of n
 def make_yrange(df, op, cl, n):
-    h = df["high"][op:cl].max() + n // 2
-    l = df["low"][op:cl].min() - n // 2
-    return (l // n) * n, ((h // n) + 1) * n
+    hi = df["high"][op:cl].max() + n // 2
+    lo = df["low"][op:cl].min() - n // 2
+    return (lo // n) * n, ((hi // n) + 1) * n
 
 
 # pair of start_index:end_index suitable for use with iloc[s:e]
@@ -146,8 +145,8 @@ def plot(index):
 
     op, cl = xs[index]
     fig.layout.xaxis.range = [op, cl]
-    l, h = make_yrange(df, op, cl, 4)
-    fig.layout.yaxis.range = [l, h]
+    lo, hi = make_yrange(df, op, cl, 4)
+    fig.layout.yaxis.range = [lo, hi]
     fig.show()
 
 
@@ -155,18 +154,18 @@ def color_bars(df, tm, opt):
     if opt == "strat":
         df["tm"] = tm
         df["btype"] = ts.calc_strat(df)
-        dfInside = df.loc[df["btype"] == 0]
-        dfUp = df.loc[df["btype"] == 1]
-        dfDown = df.loc[df["btype"] == 2]
-        dfOutside = df.loc[df["btype"] == 3]
+        df_inside = df.loc[df["btype"] == 0]
+        df_up = df.loc[df["btype"] == 1]
+        df_down = df.loc[df["btype"] == 2]
+        df_outside = df.loc[df["btype"] == 3]
 
         fig = go.Figure(data=[go.Scatter(x=tm, y=df["vwap"], line=dict(color="orange"), name="vwap")])
         if "ema" in df:
             fig.add_trace(go.Scatter(x=tm, y=df["ema"], line=dict(color="yellow"), name="ema"))
-        fig.add_trace(go.Ohlc(x=dfInside["tm"], open=dfInside["open"], high=dfInside["high"], low=dfInside["low"], close=dfInside["close"], name="inside"))
-        fig.add_trace(go.Ohlc(x=dfUp["tm"], open=dfUp["open"], high=dfUp["high"], low=dfUp["low"], close=dfUp["close"], name="up"))
-        fig.add_trace(go.Ohlc(x=dfDown["tm"], open=dfDown["open"], high=dfDown["high"], low=dfDown["low"], close=dfDown["close"], name="down"))
-        fig.add_trace(go.Ohlc(x=dfOutside["tm"], open=dfOutside["open"], high=dfOutside["high"], low=dfOutside["low"], close=dfOutside["close"], name="outside"))
+        fig.add_trace(go.Ohlc(x=df_inside["tm"], open=df_inside["open"], high=df_inside["high"], low=df_inside["low"], close=df_inside["close"], name="inside"))
+        fig.add_trace(go.Ohlc(x=df_up["tm"], open=df_up["open"], high=df_up["high"], low=df_up["low"], close=df_up["close"], name="up"))
+        fig.add_trace(go.Ohlc(x=df_down["tm"], open=df_down["open"], high=df_down["high"], low=df_down["low"], close=df_down["close"], name="down"))
+        fig.add_trace(go.Ohlc(x=df_outside["tm"], open=df_outside["open"], high=df_outside["high"], low=df_outside["low"], close=df_outside["close"], name="outside"))
 
         fig.data[2].increasing.line.color = "yellow"
         fig.data[2].decreasing.line.color = "yellow"
@@ -210,28 +209,28 @@ def plot_tick(days: int):
     fig.show()
 
 
-def create_minVol_index(dfMinVol, day_index) -> list[MinVolDay]:
+def create_min_vol_index(df_min_vol, day_index) -> list[MinVolDay]:
     # first bar will either be at 23:00 most of the time but 22:00 when US/UK clocks change at different dates
-    startTm = dfMinVol.index[0]
-    last = dfMinVol.shape[0] - 1
+    start_tm = df_min_vol.index[0]
+    last = df_min_vol.shape[0] - 1
     xs = []
     for i, r in day_index.iterrows():
-        startTm = r["first"]
+        start_tm = r["first"]
         #    for startTm in day_index.openTime:
-        startBar = floor_index(dfMinVol, startTm)
-        print(startTm, startBar)
-        euStart = startTm + timedelta(minutes=540)
-        euStartBar = floor_index(dfMinVol, euStart)
-        euEndBar, rthStartBar, rthEndBar = -1, -1, -1
-        if euStartBar < last:
-            euEnd = startTm + timedelta(minutes=929)
-            euEndBar = floor_index(dfMinVol, euEnd)
-            if euEndBar < last:
-                rthStart = startTm + timedelta(minutes=930)
-                rthStartBar = floor_index(dfMinVol, rthStart)
-                rthEnd = startTm + timedelta(minutes=1320)
-                rthEndBar = floor_index(dfMinVol, rthEnd)
-        xs.append(MinVolDay(i, startTm, startBar, euStartBar, euEndBar, rthStartBar, rthEndBar))
+        start_bar = floor_index(df_min_vol, start_tm)
+        print(start_tm, start_bar)
+        eu_start = start_tm + timedelta(minutes=540)
+        eu_start_bar = floor_index(df_min_vol, eu_start)
+        eu_end_bar, rth_start_bar, rth_end_bar = -1, -1, -1
+        if eu_start_bar < last:
+            eu_end = start_tm + timedelta(minutes=929)
+            eu_end_bar = floor_index(df_min_vol, eu_end)
+            if eu_end_bar < last:
+                rth_start = start_tm + timedelta(minutes=930)
+                rth_start_bar = floor_index(df_min_vol, rth_start)
+                rth_end = start_tm + timedelta(minutes=1320)
+                rth_end_bar = floor_index(df_min_vol, rth_end)
+        xs.append(MinVolDay(i, start_tm, start_bar, eu_start_bar, eu_end_bar, rth_start_bar, rth_end_bar))
     return xs
 
 
@@ -260,61 +259,61 @@ def plot_mongo(symbol, dt, n):
     num_days = idx.shape[0]
     # loaded an additional day for hi-lo info but create minVol for display skipping first day
     slice = df[idx.iat[1, 0] : idx.iat[num_days - 1, 1]] if num_days > 1 else df
-    dfMinVol = ts.aggregate_min_volume(slice, 1500)
+    df_min_vol = ts.aggregate_min_volume(slice, 1500)
 
     # create a string for X labels
-    tm = dfMinVol.index.strftime("%d/%m %H:%M")
-    fig = color_bars(dfMinVol, tm, "strat")
-    add_hilo_labels(dfMinVol, tm, fig)
-    mvds = create_minVol_index(dfMinVol, idx)
+    tm = df_min_vol.index.strftime("%d/%m %H:%M")
+    fig = color_bars(df_min_vol, tm, "strat")
+    add_hilo_labels(df_min_vol, tm, fig)
+    mvds = create_min_vol_index(df_min_vol, idx)
 
     for i in mvds[1:]:
-        euOpen = dfMinVol.at[dfMinVol.index[i.euStartBar], "open"]
-        fig.add_shape(type="line", x0=tm[i.euStartBar], y0=euOpen, x1=tm[i.euEndBar], y1=euOpen, line=dict(color="LightSeaGreen", dash="dot"))
-        xstart = tm[i.startBar]
-        xend = tm[i.rthEndBar]
-        if i.rthStartBar > 0:
-            xstart_rth = tm[i.rthStartBar]
+        eu_open = df_min_vol.at[df_min_vol.index[i.eu_start_bar], "open"]
+        fig.add_shape(type="line", x0=tm[i.eu_start_bar], y0=eu_open, x1=tm[i.eu_end_bar], y1=eu_open, line=dict(color="LightSeaGreen", dash="dot"))
+        xstart = tm[i.start_bar]
+        xend = tm[i.rth_end_bar]
+        if i.rth_start_bar > 0:
+            xstart_rth = tm[i.rth_start_bar]
             fig.add_vline(x=xstart_rth, line_width=1, line_dash="dash", line_color="blue")
-            if i.rthEndBar > 0:
+            if i.rth_end_bar > 0:
                 fig.add_vline(x=xend, line_width=1, line_dash="dash", line_color="blue")
-            rthOpen = day_summary_df.at[i.tradeDt, "rth_open"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=rthOpen, x1=xend, y1=rthOpen, line=dict(color="LightSeaGreen", dash="dot"))
-            fig.add_annotation(text=f"open {rthOpen:.2f}", x=xend, y=rthOpen, showarrow=False)
+            rth_open = day_summary_df.at[i.trade_dt, "rth_open"]
+            fig.add_shape(type="line", x0=xstart_rth, y0=rth_open, x1=xend, y1=rth_open, line=dict(color="LightSeaGreen", dash="dot"))
+            fig.add_annotation(text=f"open {rth_open:.2f}", x=xend, y=rth_open, showarrow=False)
             # fig.add_annotation(x=tm[i.rthStartBar], y=rthOpen, text=f"open {rthOpen:.2f}", showarrow=False, font=dict(color="LightSeaGreen"))
-            glbxHi = day_summary_df.at[i.tradeDt, "glbx_high"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=glbxHi, x1=xend, y1=glbxHi, line=dict(color="Gray", dash="dot"))
-            fig.add_annotation(text=f"glbx h h {glbxHi:.2f}", x=xend, y=glbxHi, showarrow=False)
-            glbxLo = day_summary_df.at[i.tradeDt, "glbx_low"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=glbxLo, x1=xend, y1=glbxLo, line=dict(color="Gray", dash="dot"))
-            fig.add_annotation(text=f"glbx lo {glbxLo:.2f}", x=xend, y=glbxLo, showarrow=False)
+            glbx_hi = day_summary_df.at[i.trade_dt, "glbx_high"]
+            fig.add_shape(type="line", x0=xstart_rth, y0=glbx_hi, x1=xend, y1=glbx_hi, line=dict(color="Gray", dash="dot"))
+            fig.add_annotation(text=f"glbx h h {glbx_hi:.2f}", x=xend, y=glbx_hi, showarrow=False)
+            glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
+            fig.add_shape(type="line", x0=xstart_rth, y0=glbx_lo, x1=xend, y1=glbx_lo, line=dict(color="Gray", dash="dot"))
+            fig.add_annotation(text=f"glbx lo {glbx_lo:.2f}", x=xend, y=glbx_lo, showarrow=False)
 
         # add first hour hi-lo
-        h1Hi = day_summary_df.at[i.tradeDt, "rth_h1_high"]
-        if pd.notna(h1Hi):
-            xstart_rth = tm[i.rthStartBar]
-            fig.add_shape(type="line", x0=xstart_rth, y0=h1Hi, x1=xend, y1=h1Hi, line=dict(color="Gray", dash="dot"))
-            h1Lo = day_summary_df.at[i.tradeDt, "rth_h1_low"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=h1Lo, x1=xend, y1=h1Lo, line=dict(color="Gray", dash="dot"))
-            fig.add_annotation(text=f"h1 h {h1Hi:.2f}", x=xend, y=h1Hi, showarrow=False)
-            fig.add_annotation(text=f"h1 l {h1Lo:.2f}", x=xend, y=h1Lo, showarrow=False)
+        h1_hi = day_summary_df.at[i.trade_dt, "rth_h1_high"]
+        if pd.notna(h1_hi):
+            xstart_rth = tm[i.rth_start_bar]
+            fig.add_shape(type="line", x0=xstart_rth, y0=h1_hi, x1=xend, y1=h1_hi, line=dict(color="Gray", dash="dot"))
+            h1_lo = day_summary_df.at[i.trade_dt, "rth_h1_low"]
+            fig.add_shape(type="line", x0=xstart_rth, y0=h1_lo, x1=xend, y1=h1_lo, line=dict(color="Gray", dash="dot"))
+            fig.add_annotation(text=f"h1 h {h1_hi:.2f}", x=xend, y=h1_hi, showarrow=False)
+            fig.add_annotation(text=f"h1 l {h1_lo:.2f}", x=xend, y=h1_lo, showarrow=False)
 
         # add previous day rth hi-lo-close
-        ix = day_summary_df.index.searchsorted(i.tradeDt)
+        ix = day_summary_df.index.searchsorted(i.trade_dt)
         if ix > 0:
             x = day_summary_df.iloc[ix - 1]
-            prevRthHi = x.rth_high
-            prevRthLo = x.rth_low
-            prevRthClose = x.close
-            glbxLo = day_summary_df.at[i.tradeDt, "glbx_low"]
-            if prevRthLo > glbxLo:
-                fig.add_shape(type="line", x0=xstart, y0=prevRthLo, x1=xend, y1=prevRthLo, line=dict(color="chocolate", dash="dot"))
-                fig.add_annotation(text=f"yl {prevRthLo:.2f}", x=xend, y=prevRthLo, showarrow=False)
+            prev_rth_hi = x.rth_high
+            prev_rth_lo = x.rth_low
+            prev_rth_close = x.close
+            glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
+            if prev_rth_lo > glbx_lo:
+                fig.add_shape(type="line", x0=xstart, y0=prev_rth_lo, x1=xend, y1=prev_rth_lo, line=dict(color="chocolate", dash="dot"))
+                fig.add_annotation(text=f"yl {prev_rth_lo:.2f}", x=xend, y=prev_rth_lo, showarrow=False)
 
-            fig.add_shape(type="line", x0=xstart, y0=prevRthHi, x1=xend, y1=prevRthHi, line=dict(color="chocolate", dash="dot"))
-            fig.add_shape(type="line", x0=xstart, y0=prevRthClose, x1=xend, y1=prevRthClose, line=dict(color="cyan", dash="dot"))
-            fig.add_annotation(text=f"yh {prevRthHi:.2f}", x=xend, y=prevRthHi, showarrow=False)
-            fig.add_annotation(text=f"cl {prevRthClose:.2f}", x=xend, y=prevRthClose, showarrow=False)
+            fig.add_shape(type="line", x0=xstart, y0=prev_rth_hi, x1=xend, y1=prev_rth_hi, line=dict(color="chocolate", dash="dot"))
+            fig.add_shape(type="line", x0=xstart, y0=prev_rth_close, x1=xend, y1=prev_rth_close, line=dict(color="cyan", dash="dot"))
+            fig.add_annotation(text=f"yh {prev_rth_hi:.2f}", x=xend, y=prev_rth_hi, showarrow=False)
+            fig.add_annotation(text=f"cl {prev_rth_close:.2f}", x=xend, y=prev_rth_close, showarrow=False)
 
     fig.show()
 
@@ -322,21 +321,21 @@ def plot_mongo(symbol, dt, n):
 def plot_volp(symbol, dt, n):
     df = md.load_price_history(symbol, dt, n)
     idx = ts.day_index(df)
-    day_summary_df = ts.create_day_summary(df, idx)
-    num_days = idx.shape[0]
+    # day_summary_df = ts.create_day_summary(df, idx)
+    # num_days = idx.shape[0]
     s, e = (idx.iat[0, 0], idx.iat[n - 1, 1]) if n > 0 else (idx.iat[n, 0], idx.iat[-1, 1])
     title = f"volume profile from {s} to {e}"
     # loaded an additional day for hi-lo info but create minVol for display skipping first day
     df_day = df[s:e]
-    dfMinVol = ts.aggregateMinVolume(df_day, 2500)
+    df_min_vol = ts.aggregate_min_volume(df_day, 2500)
     profile_df = ts.create_volume_profile(df_day, 25, 5)
-    peaks = profile_df[profile_df["is_peak"] == True]
+    peaks = profile_df[profile_df["is_peak"]]
 
-    # plot the unsmooted volume profile but use smoothed one for peaks
+    # plot the unsmoothed volume profile but use smoothed one for peaks
     bar_graph = go.Bar(y=profile_df.index, x=profile_df["volume"], orientation="h")
     annots = go.Scatter(x=peaks["volume"], y=peaks.index, text=peaks.index, mode="markers+text", textposition="bottom center")
-    tm = dfMinVol.index.strftime("%d/%m %H:%M")
-    price_chart = go.Scatter(y=dfMinVol["close"], x=tm)
+    tm = df_min_vol.index.strftime("%d/%m %H:%M")
+    price_chart = go.Scatter(y=df_min_vol["close"], x=tm)
 
     fig = make_subplots(rows=1, cols=2, shared_yaxes=True)
     fig.add_trace(bar_graph, row=1, col=1)
@@ -360,10 +359,10 @@ def floor_index(df, tm):
     return df.index.searchsorted(tm, side="right") - 1
 
 
-def load_trading_days(collection, symbol, minVol):
+def load_trading_days(collection, symbol, min_vol):
     """return dataframe of complete trading days [date, bar-count, volume, normalised-volume]"""
     cursor = collection.aggregate(
-        [{"$match": {"symbol": symbol}}, {"$group": {"_id": {"$dateTrunc": {"date": "$timestamp", "unit": "day"}}, "count": {"$sum": 1}, "volume": {"$sum": "$volume"}}}, {"$match": {"volume": {"$gte": minVol}}}, {"$sort": {"_id": 1}}]
+        [{"$match": {"symbol": symbol}}, {"$group": {"_id": {"$dateTrunc": {"date": "$timestamp", "unit": "day"}}, "count": {"$sum": 1}, "volume": {"$sum": "$volume"}}}, {"$match": {"volume": {"$gte": min_vol}}}, {"$sort": {"_id": 1}}]
     )
     df = pd.DataFrame(list(cursor))
     v = df.volume
@@ -419,7 +418,7 @@ def main():
 
 # plot_atr()
 # hilo(df)
-# samp3LB()
+# samp_3lb()
 if __name__ == "__main__":
     main()
     # compare_emas()

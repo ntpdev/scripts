@@ -13,7 +13,7 @@ console = Console()
 
 def load_summary(collection):
     """return a summary of all symbols in the collection. df [symbol, count, start, end]. symbol is index"""
-    cursor = collection.aggregate([{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$first": "$timestamp"}, "end": {"$last": "$timestamp"}}}, {"$sort": {"_id": 1}}])
+    cursor = collection.aggregate([{"$sort": {"symbol": 1, "timestamp":1}},{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$first": "$timestamp"}, "end": {"$last": "$timestamp"}}}, {"$sort": {"_id": 1}}])
     xs = []
     for r in cursor:
         xs.append({"symbol": r["_id"], "count": r["count"], "start": r["start"], "end": r["end"]})
@@ -202,4 +202,4 @@ def main(symbol: str, dt: date = None):
 
 if __name__ == "__main__":
     #    whole_day_concat('esm4*.csv', 'zESM4')
-    main("esz4")
+    main("esh5")
