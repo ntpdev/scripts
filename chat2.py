@@ -305,35 +305,19 @@ def load_log(s: str) -> list[ChatMessage]:
 def load_http(s: str) -> ChatMessage:
     url = s.split()[1]
     try:
-        crawler = FirecrawlApp(api_key=os.environ.get("FC_API_KEY", "fc-536657e48e2c4bc1b58066211939c77e"))
+        crawler = FirecrawlApp(api_key=os.environ["FC_API_KEY"])
         result = crawler.scrape_url(url, params={"formats": ["markdown"]})
         pprint(result)
         if result["metadata"]["statusCode"] == 200:
             text = result["markdown"]
             title = result["metadata"]["title"]
-            title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", title)
-            title = re.sub("_+", "_", title)
-            console.print(f"saving {url}\n to {title}.md", style="red")
-            with open(make_fullpath(title + ".md"), "w", encoding="utf-8") as f:
+            fname = ''.join(c for c in title if c.isalnum() or c.isspace()) + ".md"
+            console.print(f"saving {url}\n to {fname}", style="red")
+            with open(make_fullpath(fname), "w", encoding="utf-8") as f:
                 f.write(f"[*source* {result['metadata']['title']}]({url})\n\n")
                 f.write(text)
             return ChatMessage("user", text)
-        # breakpoint()
-        # # Get the content of the web page
-        # response = None # requests.get(url)
-        # response.raise_for_status()  # Raise an exception for bad status codes
 
-        # # Parse the HTML content
-        # soup = None # BeautifulSoup(response.content, 'html.parser')
-
-        # # Extract all text recursively, stripping tags and extra whitespace
-        # all_text = [f'source: ' + url, '\n\n## page content\n\n']
-        # for element in soup.findAll('p'):
-        #     text = element.get_text(strip=True)
-        #     if text:
-        #         all_text.append(text + '\n')  # Add newline between elements
-
-        # breakpoint()
     except Exception as e:  # requests.exceptions.RequestException as e:
         print(f"Error: An error occurred while fetching the webpage: {e}")
 
@@ -492,7 +476,8 @@ def process_commands(inp: str, messages: list[ChatMessage]) -> bool:
 def system_message():
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
-    return f'The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
+    return f'you are Marvin a super intelligent AI assistant. You use logic and reasoning.  current datetime is {tm}'
+#you consider whether to use tools or ansewr from your own knowledge. the local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
 
 
 def chat(llm_name, use_tool):

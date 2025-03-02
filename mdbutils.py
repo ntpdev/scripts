@@ -13,7 +13,7 @@ import tsutils as ts
 console = Console()
 
 
-class SymbolSummary(BaseModel):
+class SummaryResults(BaseModel):
     """Model representing a summary for a single symbol."""
     model_config = ConfigDict(populate_by_name=True)
 
@@ -23,103 +23,145 @@ class SymbolSummary(BaseModel):
     end: datetime
 
 
-def print_symbol_summary_table(symbol_summaries: list[SymbolSummary]):
+def print_symbol_summary_table(symbol_summaries: list[SummaryResults]):
     # Create a table instance
-    table = Table(title="Symbol Summaries")
+    table = Table(title="symbol summaries")
 
     # Add columns to the table
-    table.add_column("Symbol", justify="left", style="cyan")
-    table.add_column("Count", justify="right", style="magenta")
-    table.add_column("Start", justify="center", style="green")
-    table.add_column("End", justify="center", style="green")
+    table.add_column("symbol", justify="left", style="cyan")
+    table.add_column("count", justify="right", style="magenta")
+    table.add_column("start", justify="center", style="green")
+    table.add_column("end", justify="center", style="green")
 
     # Add rows to the table
-    for summary in symbol_summaries:
-        table.add_row(summary.symbol, str(summary.count), summary.start.strftime("%Y-%m-%d %H:%M:%S"), summary.end.strftime("%Y-%m-%d %H:%M:%S"))
+    for s in symbol_summaries:
+        table.add_row(s.symbol, str(s.count), s.start.strftime("%Y-%m-%d %H:%M:%S"), s.end.strftime("%Y-%m-%d %H:%M:%S"))
 
     # Print the table to the console
     console.print(table)
 
 
-def load_summary(collection: MongoClient):
-    """Return a summary of all symbols in the collection as a DataFrame with columns [count, start, end], indexed by symbol."""
+class MDBRepository:
+    def __init__(self, host:str, database: str):
+        self.host = host
+        self.db = database
+        self.coll = None
+        self.client = None
+    
+    def collection(self):
+        if self.client is None: 
+            self.client = MongoClient(self.host, 27017)
+            self.coll = self.client[self.db].m1
+        return self.coll
 
-    pipeline = [{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$min": "$timestamp"}, "end": {"$max": "$timestamp"}}}, {"$sort": {"_id": 1}}]
+    def load_summary(self):
+        """Return a summary of all symbols in the collection as a DataFrame with columns [count, start, end], indexed by symbol."""
 
-    df = pd.DataFrame(collection.aggregate(pipeline))
-    df.rename(columns={"_id": "symbol"}, inplace=True)
-    return df.set_index("symbol")
+        pipeline = [ {
+                "$group": {
+                    "_id": "$symbol",
+                    "count": {"$sum": 1},
+                    "start": {"$min": "$timestamp"},
+                    "end": {"$max": "$timestamp"}
+                }
+            },{
+                "$sort": {"_id": 1}
+        } ]
 
-
-def load_summary_ex(collection: MongoClient) -> list[SymbolSummary]:
-    """Return a summary of all symbols in the collection as a pydantic model."""
-
-    pipeline = [{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$min": "$timestamp"}, "end": {"$max": "$timestamp"}}}, {"$sort": {"_id": 1}}]
-    return [SymbolSummary(**doc) for doc in collection.aggregate(pipeline)]
-
-
-def load_timeseries(collection, symbol, tm_start, tm_end):
-    """Load time series data for a specific symbol within a time range with exclusive end and calculate EMA."""
-    print(f"loading {symbol} {tm_start} to {tm_end}")
-
-    cursor = collection.find(filter={"symbol": symbol, "timestamp": {"$gte": tm_start, "$lt": tm_end}}, sort=["timestamp"])
-
-    df = pd.DataFrame(map(lambda d: {"date": d["timestamp"], "open": d["open"], "high": d["high"], "low": d["low"], "close": d["close"], "volume": d["volume"], "vwap": d["vwap"]}, cursor)).set_index("date")
-
-    # Calculate EMA and add it to the DataFrame
-    df["ema"] = df.close.ewm(span=87, adjust=False).mean()
-
-    return df
-
-
-def load_trading_days(collection, symbol, min_vol):
-    """return df of complete trading days. the bars are aggregated by calendar date [date, bar-count, volume, standardised-volume]"""
-    pipeline = [{"$match": {"symbol": symbol}}, {"$group": {"_id": {"$dateTrunc": {"date": "$timestamp", "unit": "day"}}, "count": {"$sum": 1}, "volume": {"$sum": "$volume"}}}, {"$match": {"volume": {"$gte": min_vol}}}, {"$sort": {"_id": 1}}]
-    df = pd.DataFrame(collection.aggregate(pipeline))
-    v = df.volume
-    df["stdvol"] = (v - v.mean()) / v.std()
-    df.set_index("_id", inplace=True)
-    df.index.rename("date", inplace=True)
-    return df
+        df = pd.DataFrame(self.collection().aggregate(pipeline))
+        df.rename(columns={"_id": "symbol"}, inplace=True)
+        return df.set_index("symbol")
 
 
-def load_gaps(collection, symbol, gap_mins):
-    """return table of gaps in m1 time series. last bar of day and first bar of next day [last_bar, first_bar, gap]"""
-    cursor = collection.aggregate(
-        [
-            {
-                "$match": {"symbol": symbol},
-            },
-            {
-                "$setWindowFields": {
-                    "sortBy": {"timestamp": 1},
-                    "output": {
-                        "lastTm": {
-                            "$shift": {
-                                "output": "$timestamp",
-                                "by": -1,
+    def load_summary_ex(self) -> list[SummaryResults]:
+        """Return a summary of all symbols in the collection as a pydantic model."""
+        pipeline = [ {
+                "$group": {
+                    "_id": "$symbol",
+                    "count": {"$sum": 1},
+                    "start": {"$min": "$timestamp"},
+                    "end": {"$max": "$timestamp"}
+                }
+            },{
+                "$sort": {"_id": 1}
+        } ]
+        return [SummaryResults(**doc) for doc in self.collection().aggregate(pipeline)]
+
+
+    def load_timeseries(self, symbol: str, tm_start: pd.Timestamp, tm_end: pd.Timestamp) -> pd.DataFrame:
+        """Load time series data for a specific symbol within a time range with exclusive end and calculate EMA."""
+        print(f"loading {symbol} {tm_start} to {tm_end}")
+
+        cursor = self.collection().find(filter={"symbol": symbol, "timestamp": {"$gte": tm_start, "$lt": tm_end}}, sort=["timestamp"])
+
+        df = pd.DataFrame(map(lambda d: {"date": d["timestamp"], "open": d["open"], "high": d["high"], "low": d["low"], "close": d["close"], "volume": d["volume"], "vwap": d["vwap"]}, cursor)).set_index("date")
+
+        # Calculate EMA and add it to the DataFrame
+        df["ema"] = df.close.ewm(span=87, adjust=False).mean()
+
+        return df
+
+
+    def load_trading_days(self, symbol: str, min_vol: int) -> pd.DataFrame:
+        """return df of complete trading days. the bars are aggregated by calendar date [date, bar-count, volume, standardised-volume]"""
+        cursor = self.collection().aggregate( [ {
+                    "$match": { "symbol": symbol }
+                },{
+                    "$group": {
+                        "_id": { "$dateTrunc": {"date": "$timestamp", "unit": "day"} },
+                        "count": { "$sum": 1 },
+                        "volume": { "$sum": "$volume" } }
+                },{
+                    "$match": {
+                        "volume": { "$gte": min_vol } }
+                },{
+                    "$sort": { "_id": 1 }
+                } ] )
+        df = pd.DataFrame(cursor)
+        v = df.volume
+        df["stdvol"] = (v - v.mean()) / v.std()
+        df.set_index("_id", inplace=True)
+        df.index.rename("date", inplace=True)
+        return df
+
+
+    def load_gaps(self, symbol: str, gap_mins: int) -> pd.DataFrame:
+        """return table of gaps in m1 time series. last bar of day and first bar of next day [last_bar, first_bar, gap]"""
+        cursor = self.collection().aggregate(
+            [
+                {
+                    "$match": {"symbol": symbol},
+                },
+                {
+                    "$setWindowFields": {
+                        "sortBy": {"timestamp": 1},
+                        "output": {
+                            "lastTm": {
+                                "$shift": {
+                                    "output": "$timestamp",
+                                    "by": -1,
+                                },
                             },
                         },
                     },
                 },
-            },
-            {
-                "$project": {
-                    "timestamp": 1,
-                    "lastTm": 1,
-                    "gap": {
-                        "$dateDiff": {
-                            "startDate": "$lastTm",
-                            "endDate": "$timestamp",
-                            "unit": "minute",
+                {
+                    "$project": {
+                        "timestamp": 1,
+                        "lastTm": 1,
+                        "gap": {
+                            "$dateDiff": {
+                                "startDate": "$lastTm",
+                                "endDate": "$timestamp",
+                                "unit": "minute",
+                            },
                         },
                     },
                 },
-            },
-            {"$match": {"gap": {"$gte": gap_mins}}},
-        ]
-    )
-    return pd.DataFrame(map(lambda r: {"last_bar": r["lastTm"], "first_bar": r["timestamp"], "gap": r["gap"]}, cursor))
+                {"$match": {"gap": {"$gte": gap_mins}}},
+            ]
+        )
+        return pd.DataFrame(map(lambda r: {"last_bar": r["lastTm"], "first_bar": r["timestamp"], "gap": r["gap"]}, cursor))
 
 
 def find_datetime_range(df, dt, n):
@@ -161,31 +203,30 @@ def calculate_trading_hours(df_trade_days, dt, range_name):
 
 def load_price_history(symbol, dt, n=1):
     """return m1 bars for n days. if n is negative dt is the last day loaded"""
-    client = MongoClient("localhost", 27017)
-    collection = client["futures"].m1
-    df_summary = load_summary(collection)
-    df_gaps = load_gaps(collection, symbol, 30)
+    mdb = MDBRepository("localhost", "futures")
+    df_summary = mdb.load_summary()
+    df_gaps = mdb.load_gaps(symbol, 30)
     df_trade_days = make_trade_dates(df_summary.at[symbol, "start"], df_summary.at[symbol, "end"], df_gaps)
     s, e = find_datetime_range(df_trade_days, dt, n)
-    return load_timeseries(collection, symbol, s, e)
+    return mdb.load_timeseries(symbol, s, e)
 
 
 def main(symbol: str):
-    client = MongoClient("localhost", 27017)
-    collection = client["futures"].m1
+    mdb = MDBRepository("localhost", "futures")
 
-    df_summary = load_summary(collection)
+    df_summary = mdb.load_summary()
     console.print("--- summary of collection", style="yellow")
     console.print(df_summary)
 
     console.print("\n\n--- summary of collection from pydantic", style="yellow")
-    print_symbol_summary_table(load_summary_ex(collection))
+    print_symbol_summary_table(mdb.load_summary_ex())
 
-    df_days = load_trading_days(collection, symbol, 100000)
-    console.print(f"\n\n--- trading days for {symbol}", style="yellow")
+    min_vol = 100000
+    df_days = mdb.load_trading_days(symbol, min_vol)
+    console.print(f"\n\n--- trading days for {symbol} min volumne {min_vol}", style="yellow")
     console.print(df_days)
 
-    df_gaps = load_gaps(collection, symbol, 30)
+    df_gaps = mdb.load_gaps(symbol, 30)
     console.print(f"\n\n--- gaps for {symbol}", style="yellow")
     console.print(df_gaps)
 
@@ -194,10 +235,12 @@ def main(symbol: str):
     console.print(f"\n\n--- trade date index for {symbol}", style="yellow")
     console.print(df_trade_days)
 
-    tms, tme = find_datetime_range(df_trade_days, date.today(), -5)
-    df = load_timeseries(collection, symbol, tms, tme)
+    dt = date.today()
+    tms, tme = find_datetime_range(df_trade_days, dt, -5)
+    console.print(f"\nloaded 5 days before {dt} bars from {tms} to {tme}", style="cyan")
+    df = mdb.load_timeseries(symbol, tms, tme)
     tms, tme = calculate_trading_hours(df_trade_days, tme.date(), "rth")
-    console.print(f"\n\n--- m1 bars from {tms} to {tme}", style="yellow")
+    console.print(f"\n\n--- m1 rth bars from {tms} to {tme}", style="yellow")
     rows = df[tms:tme]
     if not rows.empty:
         console.print(rows.head())

@@ -9,7 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-import mdbutils as md
+from mdbutils import load_price_history
 import tsutils as ts
 
 
@@ -253,7 +253,7 @@ def create_min_vol_index(df_min_vol, day_index) -> list[MinVolDay]:
 
 
 def plot_mongo(symbol, dt, n):
-    df = md.load_price_history(symbol, dt, n)
+    df = load_price_history(symbol, dt, n)
     idx = ts.day_index(df)
     day_summary_df = ts.create_day_summary(df, idx)
     num_days = idx.shape[0]
@@ -319,7 +319,7 @@ def plot_mongo(symbol, dt, n):
 
 
 def plot_volp(symbol, dt, n):
-    df = md.load_price_history(symbol, dt, n)
+    df = load_price_history(symbol, dt, n)
     idx = ts.day_index(df)
     # day_summary_df = ts.create_day_summary(df, idx)
     # num_days = idx.shape[0]
