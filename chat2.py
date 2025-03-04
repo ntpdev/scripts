@@ -20,6 +20,7 @@ from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
+from ftutils import retrieve_ft_most_read, retrieve_ft_article, get_function_definitions
 
 from chatutils import (
     CodeBlock,
@@ -160,25 +161,26 @@ class LLM:
     def __init__(self, llm_name: str, use_tool: bool = False):
         # o1 model does not support tool use or temperature
         self.llm_name = llm_name
-        self.model = model_info[llm_name]["name"] if llm_name in model_info else "local"
+        self.model = model_info.get(llm_name, "local")
         self.client = self.create_client(llm_name)
         self.use_tool = use_tool
         self.supportsTemp = False if llm_name.startswith("o") else True
+
 
     def __str__(self):
         return f"{self.model} {self.llm_name} tool use = {self.use_tool}"
 
     def create_client(self, llm_name):
-        mi = model_info[llm_name]
-        if mi["provider"] == "openai":
+        provider = model_info[llm_name]['provider']
+        if provider == "openai":
             return OpenAI()
-        if mi["provider"] == "togetherai":
+        if provider == "togetherai":
             return OpenAI(api_key=os.environ["TOGETHERAI_API_KEY"], base_url="https://api.together.xyz/v1")
-        if mi["provider"] == "groq":
+        if provider == "groq":
             return OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
-        if mi["provider"] == "sambanova":
+        if provider == "sambanova":
             return OpenAI(api_key=os.environ["SAMBANOVA_API_KEY"], base_url="https://api.sambanova.ai/v1")
-        if mi["provider"] == "ollama":
+        if provider == "ollama":
             return OpenAI(api_key="dummy", base_url="http://localhost:11434/v1")
         # lmstudio port
         return OpenAI(api_key="dummy", base_url="http://localhost:1234/v1")
@@ -186,21 +188,26 @@ class LLM:
     def chat(self, messages):
         if self.use_tool:
             return self.client.chat.completions.create(
-                model=self.model, messages=[asdict(m) for m in messages], tools=self.tool_fns, temperature=0.2
+                model=self.model['name'],
+                messages=[asdict(m) for m in messages],
+                tools=get_function_definitions(),
+                temperature=0.2
+                # model=self.model, messages=[asdict(m) for m in messages], tools=get_function_definitions(), temperature=0.2
             )
-        return (
-            self.client.chat.completions.create(
-                model=self.model, messages=[asdict(m) for m in messages], temperature=0.7
-            )
-            if self.supportsTemp
-            else self.client.chat.completions.create(model=self.model, messages=[asdict(m) for m in messages])
-        )
+        return self.client.chat.completions.create(
+                model=self.model['name'],
+                messages=[asdict(m) for m in messages],
+                temperature=0.7) if self.supportsTemp else self.client.chat.completions.create(
+                model=self.model['name'],
+                messages=[asdict(m) for m in messages])
+        
 
 
 tokens = Usage(0.15, 0.60)
 
 
 def is_toolcall(s: str) -> str:
+    console.print(s, style='yellow')
     start = s.find("<tool_call>")
     if start >= 0:
         end = s.find("</tool_call>")
@@ -370,6 +377,15 @@ def process_tool_call(tool_call):
         #      "tool_call_id": tool_call.id,
         #      "content": str(r)}
         return ChatToolMessageResponse(fnname, tool_call.id, str(r))
+    elif fnname == "retrieve_ft_most_read":
+        r = retrieve_ft_most_read()
+        console.print(f"result = {r}", style="yellow")
+        return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
+    elif fnname == "retrieve_ft_article":
+        r = retrieve_ft_article(args["url"])
+        console.print(f"result = {r}", style="yellow")
+        return ChatToolMessageResponse(fnname, tool_call.id, r)
+
 
     s = "Unknown function name " + fnname
     console.print(s, style="red")

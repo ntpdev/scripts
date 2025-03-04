@@ -1,11 +1,14 @@
 #!/usr/bin/python3
+from dataclasses import dataclass
 from bs4 import BeautifulSoup
-from datetime import date
+from datetime import date, datetime
 import requests
 import pandas as pd
 import re
 import itertools
 from pathlib import Path
+from rich.pretty import pprint
+
 
 # extract table of stocks from motley fool disclosure page
 # using requests http library https://requests.readthedocs.io/en/latest/
@@ -88,5 +91,7 @@ def print_changes() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # main()
     # print_changes()
+    items = download_ft()
+    pprint(items)
