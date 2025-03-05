@@ -20,7 +20,7 @@ from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
-from ftutils import retrieve_ft_most_read, retrieve_ft_article, get_function_definitions
+from ftutils import retrieve_ft_most_read, retrieve_ft_article, retrieve_wsj_most_read, get_function_definitions
 
 from chatutils import (
     CodeBlock,
@@ -309,17 +309,24 @@ def load_log(s: str) -> list[ChatMessage]:
     return None
 
 
+def make_clean_filename(text: str) -> str:
+    words = re.sub(r"[\\\.\/[\]<>'\":]", " ", text).split()
+    return "_".join(words[:5]) + ".md"
+
+
 def load_http(s: str) -> ChatMessage:
     url = s.split()[1]
     try:
         crawler = FirecrawlApp(api_key=os.environ["FC_API_KEY"])
         result = crawler.scrape_url(url, params={"formats": ["markdown"]})
-        pprint(result)
+#        pprint(result)
         if result["metadata"]["statusCode"] == 200:
             text = result["markdown"]
             title = result["metadata"]["title"]
-            fname = ''.join(c for c in title if c.isalnum() or c.isspace()) + ".md"
+            fname = make_clean_filename(title) + ".md"
             console.print(f"saving {url}\n to {fname}", style="red")
+            markdown = Markdown(text, style="yellow", code_theme="monokai")
+            console.print(markdown, width=80)
             with open(make_fullpath(fname), "w", encoding="utf-8") as f:
                 f.write(f"[*source* {result['metadata']['title']}]({url})\n\n")
                 f.write(text)
@@ -383,13 +390,14 @@ def process_tool_call(tool_call):
         return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
     elif fnname == "retrieve_ft_article":
         r = retrieve_ft_article(args["url"])
-        console.print(f"result = {r}", style="yellow")
+        markdown = Markdown(r, style="yellow", code_theme="monokai")
+        console.print(markdown, width=80)
         return ChatToolMessageResponse(fnname, tool_call.id, r)
 
 
-    s = "Unknown function name " + fnname
-    console.print(s, style="red")
-    return ChatToolMessageResponse(fnname, tool_call.id, "ERROR: " + s)
+    err_msg = "Unknown function name " + fnname
+    console.print(err_msg, style="red")
+    return ChatToolMessageResponse(fnname, tool_call.id, "ERROR: " + err_msg)
 
 
 def check_and_process_tool_call(client, messages, response):
@@ -464,7 +472,6 @@ def process_commands(inp: str, messages: list[ChatMessage]) -> bool:
         msg = load_http(inp)
         if msg:
             messages.append(msg)
-            prt(msg)
             next_action = True
     if inp.startswith("%code"):
         code1 = load_textfile(inp)
