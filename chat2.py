@@ -226,7 +226,7 @@ def prt(msg: ChatMessage):
     c = role_to_color[msg.role]
     console.print(f"{msg.role}:\n", style=c)
     md = Markdown(translate_latex(msg.content))
-    console.print(md, style=c)
+    console.print(md, style=c, width=80)
 
 
 def save(xs, filename):
@@ -310,8 +310,8 @@ def load_log(s: str) -> list[ChatMessage]:
 
 
 def make_clean_filename(text: str) -> str:
-    words = re.sub(r"[\\\.\/[\]<>'\":]", " ", text).split()
-    return "_".join(words[:5]) + ".md"
+    words = re.sub(r"[\\\.\/[\]<>'\":*?|]", " ", text.lower()).split()
+    return "_".join(words[:5])
 
 
 def load_http(s: str) -> ChatMessage:
