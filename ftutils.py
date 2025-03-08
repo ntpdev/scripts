@@ -1,20 +1,23 @@
 #!/usr/bin/python3
-from bs4 import BeautifulSoup
-from datetime import date, datetime
-import requests
-from playwright.sync_api import sync_playwright
 import re
-from pydantic import BaseModel
+from datetime import datetime
 from pathlib import Path
+
+import requests
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
+from pydantic import BaseModel, Field
+from rich.console import Console
 from rich.pretty import pprint
 from rich.table import Table
-from rich.markdown import Markdown
-from rich.console import Console
+
+from htm2md import html_to_markdown
 
 console = Console()
 
 class ArticleLink(BaseModel):
     headline: str
+    summary: str = Field(default="")
     url: str
 
 class ArticleList(BaseModel):
@@ -29,18 +32,28 @@ class Citation(BaseModel):
     archiveurl: str
     archivedate: str
 
-ft_most_read_fn = {
+retrieve_headlines_fn = {
             "type": "function",
             "function": {
-                "name": "retrieve_ft_most_read",
-                "description": "Retrieves the most read articles from the Financial Times",
+                "name": "retrieve_headlines",
+                "description": "Retrieve headlines from a news web site",
+                "parameters": {
+                    "type": "object", 
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                            "enum": ["bbc", "ft", "wsj"],
+                            "description": "the name of the news web site"
+                        } }
+                    },
+                    "required": ["source"]
             } }
 
-ft_article_fn = {
+retrieve_article_fn = {
             "type": "function",
             "function": {
-                "name": "retrieve_ft_article",
-                "description": "Downloads the content of a Financial Times article given its URL",
+                "name": "retrieve_article",
+                "description": "Downloads the text content of a news article from the URL",
                 "parameters": {
                     "type": "object", 
                     "properties": {
@@ -54,11 +67,11 @@ ft_article_fn = {
             } }
 
 def get_function_definitions():
-    return [ft_most_read_fn, ft_article_fn]
+    return [retrieve_headlines_fn, retrieve_article_fn]
 
 
 def make_clean_filename(text: str) -> str:
-    words = re.sub(r"[\\\.\/[\]<>'\":*?|]", " ", text.lower()).split()
+    words = re.sub(r"[\\\.\/[\]<>'\",:*?|]", " ", text.lower()).split()
     return "_".join(words[:5])
 
 
@@ -86,46 +99,69 @@ def extract_bbc_most_read() -> ArticleList:
     return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="BBC News", articles=xs)
 
 
-def retrieve_wsj_home_page(url: str) -> str:
-    content = ""
-    with sync_playwright() as p:
-        console.print(f"fetching {url}", style='yellow')
-
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
-        page = context.new_page() #     page = browser.new_page()
-
-        page.goto(url)
-        page.wait_for_load_state('domcontentloaded')
-
-        # Check for and click the cookie consent button (if it exists)
-        if cookie_button := page.query_selector(".agree-btn"):
-            cookie_button.click()
-            # Optionally, wait for the cookie popup to disappear
-            # page.wait_for_selector(".agree-btn", state="detached", timeout=5000)
-
-        page.wait_for_selector(".subscribe")
-
-        content = page.content()
-        browser.close()
-    return content
-
-
-def retrieve_wsj_most_read() -> ArticleList:
-    """
-    find most popular news stories
-    """
-    content = retrieve_wsj_home_page('http://www.wsj.com/')
+def retrieve_wsj_article(url: str) -> str:
+    content, citation = retrieve_archive(url)
+    pprint(citation)
     soup = BeautifulSoup(content, "html.parser")
 
-    divs = soup.find_all('div', {'data-layout-type': 'most-popular-news'})
+    # remove some divs before extracting text
+    divs = soup.find_all('div')
+    if divs:
+        xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get('style')]
+        console.print(f'removing divs with style {len(xs)}', style="red")
+        for d in xs:
+            d.decompose()
+
+    md = html_to_markdown(soup = soup.find('section'), title= soup.find('h1').get_text().strip(), subtitle= soup.find('h2').get_text().strip())
+    save_markdown_article(citation.title, md)
+    return md
+
+
+def retrieve_wsj_home_page() -> ArticleList:
+    """retrieve first 10 headlines from wsj mobile home page"""
     xs = []
-    for h3 in divs[0].find_all('h3'):
-        text = h3.get_text(strip=True)
-        anchor = h3.find('a')
-        url = anchor.get('href')
-        xs.append(ArticleLink(headline= text, url= url[:url.find('?')]))
+    with sync_playwright() as p:
+        console.print("fetching wsj.com via google translate", style='yellow')
+
+        browser = p.chromium.launch(headless=False)
+
+        iphone_15 = p.devices['iPhone 15']
+        context = browser.new_context(**iphone_15)
+        page = context.new_page()
+
+        page.goto('https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true')
+
+        if cards := page.locator('.e1u7xa1g1.css-1x52dtc-CardLayoutItem'):
+            for i in range(10):
+                card = cards.nth(i)
+                h3 = card.locator('h3')
+                title = h3.text_content()
+                anchor = h3.locator('a')
+                subtitle = card.locator('p').first.text_content().strip()
+                url = anchor.get_attribute('href')
+                # console.print(f"Title: {title}, Subtitle: {subtitle}, URL: {href}")
+                xs.append(ArticleLink(headline=title, summary=subtitle, url=url[:url.find('?')]))
+
+        browser.close()
+
     return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
+
+
+# def retrieve_wsj_most_read() -> ArticleList:
+#     """
+#     find most popular news stories
+#     """
+#     content = retrieve_wsj_home_page('https://wsj.com/')
+#     soup = BeautifulSoup(content, "html.parser")
+
+#     divs = soup.find_all('div', {'data-layout-type': 'most-popular-news'})
+#     xs = []
+#     for h3 in divs[0].find_all('h3'):
+#         text = h3.get_text(strip=True)
+#         anchor = h3.find('a')
+#         url = anchor.get('href')
+#         xs.append(ArticleLink(headline= text, url= url[:url.find('?')]))
+#     return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
 
 
 def print_most_read_table(most_read: ArticleList):
@@ -170,8 +206,9 @@ def retrieve_archive(url: str):
         # go to archive home page and search for URL
         page.goto('https://archive.is/')
 
-        page.fill('#q', url)
-        page.click('input[type="submit"][value="search"]')
+        if input := page.wait_for_selector("#q"):
+            input.fill(url)
+            page.click('input[type="submit"][value="search"]')
 
         # find list of page snapshots and click latest one
         if anchor := page.locator('div.TEXT-BLOCK').locator('a').first:
@@ -182,8 +219,8 @@ def retrieve_archive(url: str):
         content = page.content()
 
         browser.close()
-
-    return content
+    
+    return content, parse_citation(content)
 
 
 def tool_call_handler(messages: list, tool_calls: list) -> list:
@@ -210,17 +247,15 @@ def retrieve_ft_most_read() -> ArticleList:
 
 
 def retrieve_ft_article(url: str) -> str:
-    content = retrieve_archive(url)
+    content, citation = retrieve_archive(url)
+    pprint(citation)
+
     buffer = ''
 
     if content:
-        citation = parse_citation(content)
-        pprint(citation)
         if title := text_between(content, "<title>", "</title>"):
             citation.title = title # citation can contain abbreviated title so replace
         buffer = f"## {citation.title}\n\n**source:** {citation.url}\n\n**date:** {citation.date}\n\n"
-
-        filename = make_clean_filename(citation.title) + '.md'
 
         # the archive version of ft articles contains the extracted text as well as the html
         start = content.find("articleBody")
@@ -230,21 +265,44 @@ def retrieve_ft_article(url: str) -> str:
             s = s.replace('\\n', '\n')
             buffer += s
     
-    p = Path.home() / 'Documents' / 'chats' / filename
-    pprint(f'saved {p}')
-    p.write_text(buffer, encoding="utf-8")
+    save_markdown_article(citation.title, buffer)
     return buffer
+
+
+def save_markdown_article(title: str, text: str) -> None:
+    if title:
+        filename = make_clean_filename(title) + '.md'
+        p = Path.home() / 'Documents' / 'chats' / filename
+        pprint(f'saved {p}')
+        p.write_text(text, encoding="utf-8")
+
+
+def retrieve_headlines(source: str) -> ArticleList:
+    s = source.lower()
+    if s == 'ft':
+        return retrieve_ft_most_read()
+    if s == 'wsj':
+        return retrieve_wsj_home_page()
+    return extract_bbc_most_read()
+
+
+def retrieve_article(url: str) -> str:
+    if 'www.ft.com' in url:
+        return retrieve_ft_article(url)
+    if 'www.wsj.com' in url:
+        return retrieve_wsj_article(url)
+    return "" # retrieve_bbc_article(url)
 
 
 if __name__ == "__main__":
     items = retrieve_ft_most_read()
     print_most_read_table(items)
-    # s = retrieve_ft_article(items.articles[2].url)
-    # markdown = Markdown(s, style="cyan", code_theme="monokai")
+    # md = retrieve_wsj_article('https://www.wsj.com/politics/elections/democrat-party-strategy-progressive-moderates-13e8df10')
+    # markdown = Markdown(md, style="cyan", code_theme="monokai")
     # console.print(markdown, width=80)
     items = extract_bbc_most_read()
     print_most_read_table(items)
 
-    items = retrieve_wsj_most_read()
+    items = retrieve_wsj_home_page()
     print_most_read_table(items)
-    # pprint(items)
+    pprint(items)

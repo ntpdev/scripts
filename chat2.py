@@ -20,7 +20,7 @@ from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
-from ftutils import retrieve_ft_most_read, retrieve_ft_article, retrieve_wsj_most_read, get_function_definitions
+from ftutils import retrieve_headlines, retrieve_article, get_function_definitions
 
 from chatutils import (
     CodeBlock,
@@ -42,7 +42,8 @@ model_info = {
     "o3m": {"name": "o3-mini", "provider": "openai"},
     "groq": {"name": "llama-3.3-70b-versatile", "provider": "groq"},
     "groq-r1": {"name": "deepseek-r1-distill-llama-70b", "provider": "groq"},
-    "qwen": {"name": "qwen-2.5-coder-32b", "provider": "groq"},
+    # "qwen": {"name": "qwen-2.5-coder-32b", "provider": "groq"},
+    "qwen": {"name": "qwen-qwq-32b", "provider": "groq"},
     "llama": {"name": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "provider": "togetherai"},
     "llama-big": {"name": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", "provider": "togetherai"},
     "ds": {"name": "deepseek-ai/DeepSeek-V3", "provider": "togetherai"},
@@ -384,16 +385,15 @@ def process_tool_call(tool_call):
         #      "tool_call_id": tool_call.id,
         #      "content": str(r)}
         return ChatToolMessageResponse(fnname, tool_call.id, str(r))
-    elif fnname == "retrieve_ft_most_read":
-        r = retrieve_ft_most_read()
+    elif fnname == "retrieve_headlines":
+        r = retrieve_headlines(args["source"])
         console.print(f"result = {r}", style="yellow")
         return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
-    elif fnname == "retrieve_ft_article":
-        r = retrieve_ft_article(args["url"])
+    elif fnname == "retrieve_article":
+        r = retrieve_article(args["url"])
         markdown = Markdown(r, style="yellow", code_theme="monokai")
         console.print(markdown, width=80)
         return ChatToolMessageResponse(fnname, tool_call.id, r)
-
 
     err_msg = "Unknown function name " + fnname
     console.print(err_msg, style="red")
