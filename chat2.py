@@ -386,11 +386,11 @@ def process_tool_call(tool_call):
         #      "content": str(r)}
         return ChatToolMessageResponse(fnname, tool_call.id, str(r))
     elif fnname == "retrieve_headlines":
-        r = retrieve_headlines(args["source"])
+        r = retrieve_headlines(**args)
         console.print(f"result = {r}", style="yellow")
         return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
     elif fnname == "retrieve_article":
-        r = retrieve_article(args["url"])
+        r = retrieve_article(**args)
         markdown = Markdown(r, style="yellow", code_theme="monokai")
         console.print(markdown, width=80)
         return ChatToolMessageResponse(fnname, tool_call.id, r)
