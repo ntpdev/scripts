@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import os
 import platform
 from pathlib import Path
+import sys
+from typing import Optional
 from rich.console import Console
 from rich.markup import escape
 import subprocess
@@ -46,19 +48,33 @@ def make_fullpath(fn: str) -> Path:
     return Path.home() / "Documents" / "chats" / fn
 
 
-def find_file(dir: Path) -> tuple[Path, int]:
+def get_python() -> Path:
+    """Returns the path to the Python executable in the virtual environment."""
+    if "VIRTUAL_ENV" in os.environ:
+        # Virtual environment is activated
+        venv_path = Path(os.environ["VIRTUAL_ENV"])
+        if sys.platform == "win32":
+            return venv_path / "Scripts" / "python.exe"
+        else:
+            return venv_path / "bin" / "python"
+    else:
+        # Fallback to the current Python interpreter
+        console.print("no virtual env found. running default python environment", style="red")
+        return Path(sys.executable)
+
+
+def find_last_file(dir: Path) -> tuple[Optional[Path], int]:
     matching_files = [(x, int(x.stem[1:])) for x in dir.glob("z*.md") if x.stem[1:].isdigit()]
 
     if not matching_files:
         return None, 0
 
     matching_files.sort(key=lambda e: e[1], reverse=True)
-    fname, n = matching_files[0]
-    return fname, n
+    return matching_files[0]
 
 
 def save_content(msg: str):
-    fn, next = find_file(Path.home() / "Documents" / "chats")
+    fn, next = find_last_file(Path.home() / "Documents" / "chats")
     next += 1
     fout = f"z{next:02}.md"
     filename = make_fullpath(fout)
@@ -69,8 +85,8 @@ def save_content(msg: str):
 
 
 def save_code(fn: str, code: CodeBlock) -> Path:
-    console.print("executing code...", style="red")
     full_path = make_fullpath(fn)
+    console.print(f"saving code {full_path}", style="red")
     with open(full_path, "w", encoding="utf-8") as f:
         f.write("\n".join(code.lines))
     return full_path
@@ -80,7 +96,7 @@ def save_and_execute_python(code: CodeBlock):
     try:
         script_path = save_code("temp.py", code)
 
-        result = subprocess.run(["python", script_path], capture_output=True, text=True, timeout=60)
+        result = subprocess.run([str(get_python()), script_path], cwd=script_path.parent, capture_output=True, text=True, timeout=60)
 
         if len(result.stdout) > 0:
             console.print(result.stdout, style="yellow")

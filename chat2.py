@@ -20,7 +20,7 @@ from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
-from ftutils import retrieve_headlines, retrieve_article, get_function_definitions
+from ftutils import ftutils_functions  # retrieve_headlines, retrieve_article, retrieve_stock_quotes, get_function_map
 
 from chatutils import (
     CodeBlock,
@@ -43,10 +43,11 @@ model_info = {
     "groq": {"name": "llama-3.3-70b-versatile", "provider": "groq"},
     "groq-r1": {"name": "deepseek-r1-distill-llama-70b", "provider": "groq"},
     # "qwen": {"name": "qwen-2.5-coder-32b", "provider": "groq"},
-    "qwen": {"name": "qwen-qwq-32b", "provider": "groq"},
+    "qwenqwq": {"name": "qwen-qwq-32b", "provider": "groq"},
     "llama": {"name": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "provider": "togetherai"},
     "llama-big": {"name": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", "provider": "togetherai"},
     "ds": {"name": "deepseek-ai/DeepSeek-V3", "provider": "togetherai"},
+    "qwen72": {"name": "Qwen/Qwen2.5-72B-Instruct-Turbo", "provider": "togetherai"},
     "samba": {"name": "Meta-Llama-3.3-70B-Instruct", "provider": "sambanova"},
     #    'samba-r1': {'name': 'DeepSeek-R1', 'provider': 'sambanova'}, not avail on API
     "ollama": {"name": "llama3.1:8b-instruct-q5_K_M", "provider": "ollama"},
@@ -167,12 +168,11 @@ class LLM:
         self.use_tool = use_tool
         self.supportsTemp = False if llm_name.startswith("o") else True
 
-
     def __str__(self):
         return f"{self.model} {self.llm_name} tool use = {self.use_tool}"
 
     def create_client(self, llm_name):
-        provider = model_info[llm_name]['provider']
+        provider = model_info[llm_name]["provider"]
         if provider == "openai":
             return OpenAI()
         if provider == "togetherai":
@@ -188,27 +188,26 @@ class LLM:
 
     def chat(self, messages):
         if self.use_tool:
+            fn_definitions = [v["defn"] for v in ftutils_functions().values()]
+            # console.print(f"registering functions {ftutils_functions().keys()}")
             return self.client.chat.completions.create(
-                model=self.model['name'],
+                model=self.model["name"],
                 messages=[asdict(m) for m in messages],
-                tools=get_function_definitions(),
-                temperature=0.2
+                tools=fn_definitions,
+                temperature=0.2,
                 # model=self.model, messages=[asdict(m) for m in messages], tools=get_function_definitions(), temperature=0.2
             )
-        return self.client.chat.completions.create(
-                model=self.model['name'],
-                messages=[asdict(m) for m in messages],
-                temperature=0.7) if self.supportsTemp else self.client.chat.completions.create(
-                model=self.model['name'],
-                messages=[asdict(m) for m in messages])
-        
+        elif self.supportsTemp:
+            return self.client.chat.completions.create(model=self.model["name"], messages=[asdict(m) for m in messages], temperature=0.7)
+        else:
+            return self.client.chat.completions.create(model=self.model["name"], messages=[asdict(m) for m in messages])
 
 
 tokens = Usage(0.15, 0.60)
 
 
 def is_toolcall(s: str) -> str:
-    console.print(s, style='yellow')
+    console.print(s, style="yellow")
     start = s.find("<tool_call>")
     if start >= 0:
         end = s.find("</tool_call>")
@@ -320,7 +319,7 @@ def load_http(s: str) -> ChatMessage:
     try:
         crawler = FirecrawlApp(api_key=os.environ["FC_API_KEY"])
         result = crawler.scrape_url(url, params={"formats": ["markdown"]})
-#        pprint(result)
+        #        pprint(result)
         if result["metadata"]["statusCode"] == 200:
             text = result["markdown"]
             title = result["metadata"]["title"]
@@ -385,15 +384,15 @@ def process_tool_call(tool_call):
         #      "tool_call_id": tool_call.id,
         #      "content": str(r)}
         return ChatToolMessageResponse(fnname, tool_call.id, str(r))
-    elif fnname == "retrieve_headlines":
-        r = retrieve_headlines(**args)
+    elif fnname in ftutils_functions():
+        r = ftutils_functions()[fnname]["fn"](**args)
+        # return value is either a string or a pydantic data type
+        if isinstance(r, str):
+            markdown = Markdown(r, style="yellow", code_theme="monokai")
+            console.print(markdown, width=80)
+            return ChatToolMessageResponse(fnname, tool_call.id, r)
         console.print(f"result = {r}", style="yellow")
         return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
-    elif fnname == "retrieve_article":
-        r = retrieve_article(**args)
-        markdown = Markdown(r, style="yellow", code_theme="monokai")
-        console.print(markdown, width=80)
-        return ChatToolMessageResponse(fnname, tool_call.id, r)
 
     err_msg = "Unknown function name " + fnname
     console.print(err_msg, style="red")
@@ -499,8 +498,10 @@ def process_commands(inp: str, messages: list[ChatMessage]) -> bool:
 def system_message():
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
-    return f'you are Marvin a super intelligent AI assistant. You use logic and reasoning.  current datetime is {tm}'
-#you consider whether to use tools or ansewr from your own knowledge. the local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
+    return f"you are Marvin a super intelligent AI assistant. You use logic and reasoning.  current datetime is {tm}"
+
+
+# you consider whether to use tools or ansewr from your own knowledge. the local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
 
 
 def chat(llm_name, use_tool):
@@ -541,9 +542,7 @@ def chat(llm_name, use_tool):
             tokens.update(ru.prompt_tokens, ru.completion_tokens)
             pprint(ru)
             pprint(tokens)
-            print(
-                f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}"
-            )
+            print(f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}")
 
     if len(messages) > 2:
         save(messages, make_fullpath(FNAME))

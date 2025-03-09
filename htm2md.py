@@ -2,8 +2,10 @@ import requests
 from bs4 import BeautifulSoup, NavigableString, Comment
 from playwright.sync_api import sync_playwright
 import re
+from datetime import datetime
 from rich.markdown import Markdown
 from rich.console import Console
+from rich.pretty import pprint
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -13,6 +15,7 @@ console = Console()
 class anchor_tag:
     text: str
     href: str
+
 
 def test():
     # open file c://test/z.htm
@@ -32,6 +35,29 @@ def test():
             print(f"{text} - {link}")
     except Exception as e:
         console.print(f"Error reading or parsing the file: {e}", style='red')
+
+def get_bnnbloomberg_quote(symbol: str) -> dict:
+    """
+    Fetches JNK:UN the rest request does not contain the last price as that is already on the page
+
+    Returns:
+        dict: The JSON response as a dictionary, or None if an error occurs.
+    """
+    url = "https://bnn.stats.bellmedia.ca/bnn/api/stock/Scorecard?symbol=" + symbol
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        data = response.json()
+        return data
+    except requests.exceptions.RequestException as e:
+        print(f"Error during request: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}") #catch any other errors
+        return None
 
 
 def get_wsj_html(url: str) -> str | None:
@@ -63,21 +89,22 @@ def get_wsj_html(url: str) -> str | None:
             browser.close()
 
 
-def get_bbc_html(url: str) -> str | None:
-    console.print(f'retrieve {url}', style='yellow')
+def get_bbc_html(url: str) -> BeautifulSoup | None:
+    console.print(f'navigate {url}', style='yellow')
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-
         page = browser.new_page()
         try:
             page.goto(url)
 
-            # Get the text content of the <h1> tag for some reason this is not in the html
+            # find the h1 by id
             locator = page.locator('#main-heading')
-            locator.wait_for()
-            title = locator.inner_text()
-            locator = page.locator('#main-content')
-            return title, locator.inner_html()
+            console.print(f'retrieved - {locator.text_content()}')
+
+            content = page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            save_soup(soup, Path('c://temp/z.htm'))
+            return soup
         except Exception as e:
             console.print(f"error retrieving {e}", style='red')
             return None
@@ -85,9 +112,10 @@ def get_bbc_html(url: str) -> str | None:
             browser.close()
 
 
-def html_to_markdown(url=None, html_content=None, soup=None, title=None, subtitle=None):
+def html_to_markdown(url=None, html_content=None, soup=None, href_base=None):
     """
-    Convert HTML to Markdown, preserving document structure and formatting.
+    Convert HTML to Markdown, preserving document structure and formatting. Anchors are replaced
+    with bold and repeated as links at the end
     
     Args:
         url (str, optional): URL of the webpage to extract text from.
@@ -259,11 +287,10 @@ def html_to_markdown(url=None, html_content=None, soup=None, title=None, subtitl
             href = node.get('href', '')
             if href:
                 text = re.sub('\n', '', children_md.strip())
-                if href.startswith('https'):
+                if 'archive.is' in href:
                     href = href[href.find('https', 5):]
                 anchors.append(anchor_tag(text, href))
-                return f"**{text}**"
-                #re.sub('\n', '', f"[]({href})")
+                return f"*{text}*"
             return children_md
         
         elif tag_name == 'img':
@@ -277,11 +304,11 @@ def html_to_markdown(url=None, html_content=None, soup=None, title=None, subtitl
         return children_md
     
     # Process the body recursively to maintain order
-    body = soup.body or soup
-    mn = body.find('main', id='main-content')
-    markdown_text = f'## {title}\n\n### {subtitle}\n\n' + process_children(mn if mn else body)
-    xs = [f"{str(i+1)}. {a.text} {a.href}" for i,a in enumerate(anchors)]
-    markdown_text += "### links\n\n" + "\n\n".join(xs)
+    # body = soup.body or soup
+    # mn = body.find('main', id='main-content')
+    markdown_text = process_children(soup)
+    xs = [f"{str(i+1)}. {a.text} {a.href if a.href.startswith("http") else href_base + a.href}" for i,a in enumerate(anchors)]
+    markdown_text += "\n### links\n\n" + "\n\n".join(xs)
     
     
     # Clean up whitespace
@@ -289,6 +316,34 @@ def html_to_markdown(url=None, html_content=None, soup=None, title=None, subtitl
     #markdown_text = re.sub(r'^\s+|\s+$', '', markdown_text, flags=re.MULTILINE)
     
     return markdown_text.strip()
+
+def test_soup(soup):
+    # directly walk tree NB because soup treats any name that is not a method as a selector
+    # soup.tag => soup.find['tag'] and soup['attr'] => soup.get('attr')
+    e = soup.body.h1.get_text()
+    # find find_all to search
+    e = soup.find(id="list") # find by id
+    xs = [e.name for e in soup.find_all(class_="list-item")]
+    pprint(xs)
+    xs = list(soup.find(id="list").stripped_strings) # retrieve all text under id=list
+    pprint(xs)
+    xs = [e['href'] for e in soup.find_all("a")]
+    pprint(xs)
+    if e := soup.find("div", attrs={"data-id": "animal"}):
+        pprint(e)
+
+    # select to find by css selectors which is slower but more powerful
+    # soup.select -> list
+    # soup.css.iselect -> generator
+    xs = [e.name for e in  soup.select("li.list-item")]
+    pprint(xs)
+    xs = list(soup.select("li > a")) # directly inside
+    pprint(xs)
+    xs = list(soup.select("ul a")) # contained anywhere
+    pprint(xs)
+    xs = [e.name for e in soup.css.iselect("#list li")] # contained anywhere
+    pprint(xs)
+
 
 # Example usage
 def main2():
@@ -299,10 +354,10 @@ def main2():
             <h1>Main Heading with <em>emphasis</em></h1>
             <p>This is a paragraph with <b>bold text</b> and <a href="https://example.com">a link</a>.</p>
             <h2>Subheading</h2>
-            <div>
+            <div id="list">
                 <ul>
-                    <li>List item 1</li>
-                    <li>List item <strong>2</strong>
+                    <li class="list-item">List item 1</li>
+                    <li class="list-item">List item <strong>2</strong>
                         <ul>
                             <li>Nested list item with <a href="https://example.org">link</a></li>
                             <li>Another nested item</li>
@@ -312,7 +367,7 @@ def main2():
             </div>
             <p>Another paragraph with <i>italic text</i> and <code>inline code</code>.</p>
             <div>the quick brown</div>
-            <div>fox jumped</div>
+            <div data-id="animal">fox jumped</div>
             <pre><code class="language-python">
 def hello_world():
     print("Hello, world!")
@@ -341,6 +396,8 @@ def hello_world():
         </body>
     </html>
     """
+    test_soup(BeautifulSoup(html_content, 'html.parser'))
+
     markdown_output = html_to_markdown(html_content=html_content)
     markdown = Markdown(markdown_output, style="cyan", code_theme="monokai")
     # console.print(markdown, width=80)
@@ -379,6 +436,7 @@ def hello_world():
     except Exception as e:
         print(f"Error: {e}")
 
+
 def save_soup(soup: BeautifulSoup, fname: Path):
         with fname.open('w', encoding='utf-8') as f:
             f.write(soup.prettify())
@@ -387,5 +445,26 @@ def load_soup(fname: Path) -> BeautifulSoup:
     with fname.open('r', encoding='utf-8') as f:
         return BeautifulSoup(f.read(), 'html.parser')
 
+def print_markdown(fname: Path):
+    # it seems rich-cli is not using utf-8 decoding and fails to parse the right double quote character \xe2\x80\x9d
+    # there is an unreleased fix with it in
+    # well below market expectations “This reflects the payback from earlier exports front-loading and Trump’s faster and broad-based tariff hikes,” economists at Barclays said in a note.
+    with fname.open('r', encoding='utf-8') as f:
+        console.print(Markdown(f.read(), style="cyan"), width=80)
+
+
 if __name__ == "__main__":
     main2()
+    # soup = get_bbc_html('https://www.bbc.co.uk/news/articles/cd7eyz3yn5do')
+    #  #find time tags with a datetime attribute.
+    # if headline := soup.find(id="main-heading"):
+    #     console.print(f"title: {headline.text}")
+    # if time_tag:= soup.find('time', attrs={'datetime': True}):
+    #     datetime_str = time_tag['datetime']
+    #     d = datetime.fromisoformat(datetime_str)
+    #     console.print(f"published: {d.strftime("%A %Y-%m-%d")}")
+    # md = html_to_markdown(soup = soup.find(id='main-content'), href_base = "https://bbc.co.uk")
+    # console.print(Markdown(md, style="cyan"), width=80)
+    scrape_stock_data(["SPY:UN", "XOM:UN", "TLT:UN", "JNK:UN"])
+
+    #print_markdown(Path.home() / 'Documents' / 'chats' / 'china_struggles_to_shake_off.md')
