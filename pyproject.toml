@@ -40,3 +40,6 @@ line-length = 256
 
 [tool.ruff.lint]
 extend-select = ["E", "F", "N", "R", "I", "UP"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
