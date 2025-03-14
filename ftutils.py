@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 import requests
+import math
 from bs4 import BeautifulSoup
 from functools import cache
 from playwright.sync_api import sync_playwright
@@ -19,9 +20,9 @@ from htm2md import html_to_markdown
 
 NYT_URL = "https://www.nytimes.com/"
 WSJ_URL = "https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true"
+BLOOMBERG_URL = "https://www-bloomberg-com.translate.goog/uk?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true"
 
 console = Console()
-
 
 class ErrorInfo(BaseModel):
     error: bool
@@ -87,7 +88,7 @@ retrieve_headlines_fn = {
     "function": {
         "name": "retrieve_headlines",
         "description": "Retrieve headlines from a news web site",
-        "parameters": {"type": "object", "properties": {"source": {"type": "string", "enum": ["bbc", "ft", "nyt", "wsj"], "description": "the name of the news web site"}}},
+        "parameters": {"type": "object", "properties": {"source": {"type": "string", "enum": ["bbc", "bloomberg", "ft", "nyt", "wsj"], "description": "the name of the news web site"}}},
         "required": ["source"],
     },
 }
@@ -105,11 +106,133 @@ retrieve_stock_quotes_fn = {
     "type": "function",
     "function": {
         "name": "retrieve_stock_quotes",
-        "description": "Retrieve stock quotes for a list of tickers from Bloomberg",
-        "parameters": {"type": "object", "properties": {"tickers": {"type": "array", "items": {"type": "string"}, "description": "A list of stock tickers"}}, "required": ["tickers"]},
+        "description": "Retrieve stock quotes for a list of symbols from Bloomberg",
+        "parameters": {"type": "object", "properties": {"symbols": {"type": "array", "items": {"type": "string"}, "description": "A list of stock symbols"}}, "required": ["symbols"]},
     },
 }
 
+evaluate_expression_fn = {
+            "type": "function",
+            "function": {
+                "name": "evaluate_expression",
+                "description":     """
+    Evaluates a mathematical or Python expression provided as a string.
+
+    This function evaluates a single-line Python expression, which can include mathematical
+    operations, functions and constants from standard Python modules like `math` or
+    `datetime`.
+
+    Args:
+        input (str): A string containing the expression to evaluate. If multiple lines are
+                     provided, the first non-empty, non-comment line is evaluated.
+
+    Returns:
+        str: The result of the evaluation as a string. If the evaluation is successful,
+             the result is returned as a string. If an error occurs, an error message
+             prefixed with 'ERROR:' is returned.
+
+    Examples:
+        >>> tool_eval("2 + 2 * 3")
+        '8'
+        >>> tool_eval("math.sqrt(5)")
+        '2.23606797749979'
+        >>> tool_eval("datetime.now().year")
+        '2025'
+        >>> tool_eval("1 / 0")
+        'ERROR: division by zero'
+        >>> tool_eval("# Comment\n2 + 2")
+        '4'
+    """,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {
+                            "type": "string",
+                            "description": "The mathematical expression to be evaluated. You can use python class math, datetime, date, time without import",
+                        }
+                    },
+                    "required": ["expression"],
+                },
+            },
+        }
+
+
+def evaluate_expression(expression: str) -> str:
+    exp = ""
+    for line in expression.splitlines():
+        s = line.strip()
+        if s and not s.startswith("#"):
+            exp = s
+            break
+
+    r = ""
+    if exp:
+        try:
+            console.print("eval: " + exp, style="yellow")
+            r = eval(exp)
+            console.print("result: " + str(r), style="yellow")
+        except Exception as e:
+            r = "ERROR: " + str(e)
+            console.print(r, style="red")
+    else:
+        r = "ERROR: no expression found"
+        console.print(r, style="red")
+    return str(r)
+
+
+def retrieve_headlines(source: str) -> ArticleList:
+    if not source:
+        return ErrorInfo(error=True, type="invalid argument", message= "source required", url="")
+
+    s = source.lower()
+    if s == "ft":
+        return merge(retrieve_ft_most_read(), retrieve_ft_most_read_section("https://www.ft.com/technology"), retrieve_ft_most_read_section("https://www.ft.com/markets"))
+    if s == "nyt":
+        xs = retrieve_cached_headlines()[NYT_URL]
+        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=xs)
+    if s == "wsj":
+        xs = retrieve_cached_headlines()[WSJ_URL]
+        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
+    if s == "bloomberg":
+        xs = retrieve_cached_headlines()[BLOOMBERG_URL]
+        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Bloomberg UK", articles=xs)
+    return extract_bbc_most_read()
+
+
+def retrieve_article(url: str) -> str:
+    if not url:
+        return ErrorInfo(error=True, type="invalid argument", message= "url required", url="")
+
+    if "www.ft.com" in url:
+        return retrieve_ft_article(url)
+    if "www.wsj.com" in url:
+        return retrieve_wsj_article(url)
+    return retrieve_bbc_article(url)
+
+
+def retrieve_stock_quotes(symbols: list[str]) -> QuoteList | ErrorInfo:
+    """Retrieves historical stock quotes for the given symbols.
+
+    Args:
+        symbols: A list of stock ticker symbols (e.g., ['AAPL', 'MSFT', 'GOOG']).
+
+    Returns:
+        a list of quotes and details about the symbol
+
+    """
+
+    if not symbols:
+        return ErrorInfo(error=True, type="invalid argument", message= "symbols required", url="")
+
+    def make_url(ticker: str) -> str:
+        t = ticker.upper()
+        return f"https://www.bnnbloomberg.ca/stock/{t}/" if ticker.find(":") >= 0 else f"https://www.bnnbloomberg.ca/stock/{t}:UN/"
+
+    d = {make_url(e): process_bnn_stock_page for e in symbols}
+    result = retrieve_using_playwright(d)
+    for r in result.values():
+        r.update(get_bnnbloomberg_quote(r["symbol"]))
+    return result if isinstance(result, ErrorInfo) else QuoteList(timestamp_retrieved=datetime.now().isoformat(), quotes=list(result.values()))
 
 @cache
 def ftutils_functions() -> dict[str, dict[str, Any]]:
@@ -119,6 +242,7 @@ def ftutils_functions() -> dict[str, dict[str, Any]]:
         return d["function"]["name"]
 
     return {
+        name(evaluate_expression_fn): {"defn": evaluate_expression_fn, "fn": evaluate_expression},
         name(retrieve_headlines_fn): {"defn": retrieve_headlines_fn, "fn": retrieve_headlines},
         name(retrieve_article_fn): {"defn": retrieve_article_fn, "fn": retrieve_article},
         name(retrieve_stock_quotes_fn): {"defn": retrieve_stock_quotes_fn, "fn": retrieve_stock_quotes},
@@ -191,7 +315,7 @@ def get_bnnbloomberg_quote(symbol: str) -> dict:
         scorecard = response.json()
         url = "https://bnn.stats.bellmedia.ca/bnn/api/stock/companyInfo?brand=bnn&lang=en&symbol=" + symbol
         response = requests.get(url)
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
         company_info = response.json()
 
         merge_from(scorecard)
@@ -199,48 +323,19 @@ def get_bnnbloomberg_quote(symbol: str) -> dict:
     except requests.exceptions.RequestException as e:
         print(f"Error during request: {e}")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")  # catch any other errors
+        print(f"An unexpected error occurred: {e}")
     return result
 
 
 def process_bnn_stock_page(page) -> dict | None:
-    # url = f"https://www.bnnbloomberg.ca/stock/{ticker}/"
-    # console.print("navigating to {url}", style="yellow")
-    # page.goto(url)
-
-    # the table is loaded on demand via a rest call when it is in view
-    # alternatively use page.keyboard.press("PageDown")
-    # <h2 id="bmw-scorecard--r86513c" class="bmw-header__title">Scorecard</h2>
-    # breakpoint()
-    page.wait_for_timeout(1000)
-    # page.keyboard.press("PageDown")
-    # page.wait_for_timeout(125)
-    # page.get_by_text("Scorecard").scroll_into_view_if_needed(timeout=9000)
-
     ticker_head = page.locator("h1.c-heading")
     name = page.locator("h2.bmw-market-status__title")
     close = page.locator("span.bmw-market-status__info__price")
-    d = {}
-    d["symbol"] = ticker_head.inner_text()
-    d["name"] = name.inner_text()
-    d["close"] = float(close.inner_text())
+    d = {
+        "symbol": ticker_head.inner_text(),
+        "name": name.inner_text(),
+        "close": float(close.inner_text())}
     console.print("scorecard found " + d["symbol"], style="yellow")
-    # Find all list items within the scorecard
-    # listitems = page.locator("section.bmw-scorecard > ul > li")
-    # for item in listitems.all():
-    #     label = item.locator("span").inner_text().lower()
-    #     value = item.locator("strong").inner_text()
-    #     if value != "-":
-    #         try:
-    #             v = float(value)
-    #         except ValueError:
-    #             v = value
-    #         d[label] = v
-
-    # page.get_by_text("Company Info").scroll_into_view_if_needed(timeout=9000)
-    # info = page.locator("section.bmw-company-info div.bmw-company-info__tab div.bmw-company-info__tab__content > p")
-    # d["description"] = info.inner_text()
-
     return d
 
 
@@ -341,14 +436,27 @@ def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = Fa
     pprint(results)
     return results
 
+def parse_bloomberg_homepage(page) -> list[ArticleLink]:
+    links = []
+    for anchor in page.query_selector_all('a[data-component="story-link"]'):
+        headline_element = anchor.query_selector('div[data-component="headline"]')
+        summary_element = anchor.query_selector('section[data-component="summary"]')
+        
+        if headline_element and summary_element:
+            headline = headline_element.inner_text()
+            summary = summary_element.inner_text()
+            href = anchor.get_attribute('href')
+            links.append(ArticleLink(headline=headline, summary=summary, url=href))
+
+    return links
 
 def parse_nyt_homepage(page) -> list[ArticleLink]:
     """retrieve first 10 headlines from nyt mobile home page"""
 
     def is_valid(text: str) -> bool:
-        return text is not None and text != "LIVE" and "min read" not in text
+        return text is not None and text != "LIVE" and text != "BREAKING" and "min read" not in text
 
-    xs = []
+    links = []
     # accept cookies
     if button := page.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
         button.click()
@@ -367,22 +475,22 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
             console.print(f"Error: Could not parse date string: {date_string}", style="red")
 
     story_elements = page.query_selector_all("section.story-wrapper")
-    for i, story_element in enumerate(story_elements):
-        if i >= 10:
-            break  # Stop after the first 10 elements
-
-        anchor = story_element.query_selector(" > a")
+    for section in story_elements:
+        anchor = section.query_selector(" > a")
         href = anchor.get_attribute("href") if anchor else ""
 
-        child_elements = story_element.query_selector_all("p")  # Get all p elements.
+        child_elements = section.query_selector_all("p")  # Get all p elements.
         texts = [e.text_content().strip() for e in child_elements if is_valid(e.text_content())]
 
         title = texts[0] if len(texts) > 0 else ""
         subtitle = texts[1] if len(texts) > 1 else ""
 
-        xs.append(ArticleLink(headline=title, summary=subtitle, url=href))
+        if len(title):
+            links.append(ArticleLink(headline=title, summary=subtitle, url=href))
+            if len(links) >= 10:
+                break
 
-    return xs
+    return links
 
 
 def parse_wsj_homepage(page) -> list[ArticleLink]:
@@ -400,9 +508,12 @@ def parse_wsj_homepage(page) -> list[ArticleLink]:
 
     return xs
 
+def retrieve_bloomberg_home_oage() -> ArticleList | None:
+    xs = retrieve_using_playwright({BLOOMBERG_URL: parse_bloomberg_homepage})
+    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=list(xs.values()))
 
-def retrieve_nyt_home_page() -> ArticleList:
-    xs = retrieve_using_playwright("https://www.nytimes.com/", parse_nytimes_homepage)
+def retrieve_nyt_home_page() -> ArticleList | None:
+    xs = retrieve_using_playwright({NYT_URL: parse_nyt_homepage})
     return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=list(xs.values()))
 
 
@@ -465,7 +576,7 @@ def retrieve_nyt_home_page_ex() -> ArticleList:
 
 
 def retrieve_wsj_home_page() -> ArticleList:
-    xs = retrieve_using_playwright("https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true", parse_wsj_homepage)
+    xs = retrieve_using_playwright({WSJ_URL: parse_wsj_homepage})
     return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
 
 
@@ -481,7 +592,7 @@ def retrieve_wsj_home_page_ex() -> ArticleList | None:
             context = browser.new_context(**iphone_15)
             page = context.new_page()
 
-            page.goto("https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true")
+            page.goto(WSJ_URL)
 
             if cards := page.locator(".e1u7xa1g1.css-1x52dtc-CardLayoutItem"):
                 for i in range(10):
@@ -638,54 +749,23 @@ def retrieve_ft_article(url: str) -> str:
 @cache
 def retrieve_cached_headlines():
     """retrieve from both sites as we need to web scrape. results are cached"""
-    return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage})
-
-
-def retrieve_headlines(source: str = "") -> ArticleList:
-    s = source.lower()
-    if s == "ft":
-        return merge(retrieve_ft_most_read(), retrieve_ft_most_read_section("https://www.ft.com/technology"), retrieve_ft_most_read_section("https://www.ft.com/markets"))
-    if s == "nyt":
-        xs = retrieve_cached_headlines()[NYT_URL]
-        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=xs)
-    if s == "wsj":
-        xs = retrieve_cached_headlines()[WSJ_URL]
-        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
-    return extract_bbc_most_read()
-
-
-def retrieve_article(url: str = "") -> str:
-    if "www.ft.com" in url:
-        return retrieve_ft_article(url)
-    if "www.wsj.com" in url:
-        return retrieve_wsj_article(url)
-    return retrieve_bbc_article(url)
-
-
-def retrieve_stock_quotes(tickers: list[str]) -> QuoteList | None:
-    "retrieve the closing price from the web page and other fields via REST calls"
-
-    def make_url(ticker: str) -> str:
-        t = ticker.upper()
-        return f"https://www.bnnbloomberg.ca/stock/{t}/" if ticker.find(":") >= 0 else f"https://www.bnnbloomberg.ca/stock/{t}:UN/"
-
-    d = {make_url(e): process_bnn_stock_page for e in tickers}
-    result = retrieve_using_playwright(d)
-    for r in result.values():
-        r.update(get_bnnbloomberg_quote(r["symbol"]))
-    return result if isinstance(result, ErrorInfo) else QuoteList(timestamp_retrieved=datetime.now().isoformat(), quotes=list(result.values()))
+    return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage, BLOOMBERG_URL: parse_bloomberg_homepage})
 
 
 if __name__ == "__main__":
+    pprint(f"force import of module {math.pi}")
     # get_bnnbloomberg_quote("JNK:UN")
     # exit(0)
-    # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
-    # exit(0)
+    # pprint(retrieve_stock_quotes([])) # ["JNK", "TLT", "SPY", "PBW"]))
     items = retrieve_headlines("nyt")
     print_most_read_table(items)
 
     items = retrieve_headlines("wsj")
     print_most_read_table(items)
+
+    items = retrieve_headlines("bloomberg")
+    print_most_read_table(items)
+
     # items = retrieve_ft_most_read()
     # items2 = retrieve_ft_most_read_section("https://www.ft.com/markets")
     # print_most_read_table(items)

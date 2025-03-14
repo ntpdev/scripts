@@ -140,25 +140,7 @@ class Usage:
 
 
 class LLM:
-    tool_fns = [
-        {
-            "type": "function",
-            "function": {
-                "name": "eval",
-                "description": "Evaluate a mathematical expression and return the result as a string",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "expression": {
-                            "type": "string",
-                            "description": "The mathematical expression to be evaluated. You can use python class math, datetime, date, time without import",
-                        }
-                    },
-                    "required": ["expression"],
-                },
-            },
-        }
-    ]
+
 
     def __init__(self, llm_name: str, use_tool: bool = False):
         # o1 model does not support tool use or temperature
@@ -202,6 +184,9 @@ class LLM:
         else:
             return self.client.chat.completions.create(model=self.model["name"], messages=[asdict(m) for m in messages])
 
+    def toggle_tool_use(self) -> bool:
+        self.use_tool = not self.use_tool
+        return self.use_tool
 
 tokens = Usage(0.15, 0.60)
 
@@ -363,40 +348,26 @@ def process_tool_call(tool_call):
     fnname = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
     console.print(f"tool call {fnname} {args}", style="yellow")
-    if fnname == "eval":
-        r = ""
+
+    if fnname in ftutils_functions():
         try:
-            # can get lines like - import sympy; sympy.factorint(30907)
-            stmts = re.split(r"[;\n]", args["expression"])
-            pprint(stmts)
-            # if it is a script fragment wrap the final statement in print and execute as a code block
-            if len(stmts) > 1:
-                stmts[-1] = "print(" + stmts[-1] + ")"
-                r = execute_script(CodeBlock("python", stmts))
-            else:
-                r = eval(stmts[0])
+            r = ftutils_functions()[fnname]["fn"](**args)
+            # tool return value is either a string or a pydantic data type
+            if isinstance(r, str):
+                markdown = Markdown(r, style="yellow", code_theme="monokai")
+                console.print(markdown, width=80)
+                return ChatToolMessageResponse(fnname, tool_call.id, r)
+            console.print(f"result = {r}", style="yellow")
         except Exception as e:
-            console.print(f"ERROR: {e}", style="red")
-            r = e
-        console.print(f"result = {str(r)}", style="yellow")
-        # d = {"role": "tool",
-        #      "name": fnname,
-        #      "tool_call_id": tool_call.id,
-        #      "content": str(r)}
-        return ChatToolMessageResponse(fnname, tool_call.id, str(r))
-    elif fnname in ftutils_functions():
-        r = ftutils_functions()[fnname]["fn"](**args)
-        # return value is either a string or a pydantic data type
-        if isinstance(r, str):
-            markdown = Markdown(r, style="yellow", code_theme="monokai")
-            console.print(markdown, width=80)
+            r = f"ERROR: {e}"
+            console.print(r, style="red")
             return ChatToolMessageResponse(fnname, tool_call.id, r)
-        console.print(f"result = {r}", style="yellow")
+
         return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
 
-    err_msg = "Unknown function name " + fnname
+    err_msg = f"ERROR: unknown funtion name " + fnname
     console.print(err_msg, style="red")
-    return ChatToolMessageResponse(fnname, tool_call.id, "ERROR: " + err_msg)
+    return ChatToolMessageResponse(fnname, tool_call.id, err_msg)
 
 
 def check_and_process_tool_call(client, messages, response):
@@ -452,7 +423,7 @@ def extract_code_block_from_response(response) -> CodeBlock:
     return extract_code_block(response.choices[0].message.content, "```")
 
 
-def process_commands(inp: str, messages: list[ChatMessage]) -> bool:
+def process_commands(client: LLM, inp: str, messages: list[ChatMessage]) -> bool:
     global code1
     next_action = False
     if inp.startswith("%load"):
@@ -492,6 +463,9 @@ def process_commands(inp: str, messages: list[ChatMessage]) -> bool:
         next_action = messages[-1].role == "user"
     elif inp.startswith("%save"):
         save_content(messages[-1].content)
+    elif inp.startswith("%tool"):
+        state = client.toggle_tool_use()
+        console.print(f"tool use changed to {state}", style="yellow")
     return next_action
 
 
@@ -499,9 +473,6 @@ def system_message():
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
     return f"you are Marvin a super intelligent AI assistant. You use logic and reasoning.  current datetime is {tm}"
-
-
-# you consider whether to use tools or ansewr from your own knowledge. the local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}'
 
 
 def chat(llm_name, use_tool):
@@ -518,11 +489,11 @@ def chat(llm_name, use_tool):
         inp = input_multi_line()
         if len(inp) > 3:
             if inp.startswith("%"):
-                if not process_commands(inp, messages):
+                if not process_commands(client, inp, messages):
                     continue
             else:
                 if code1:
-                    msg = ChatMessage("user", inp + "\n ## article \n" + code1)
+                    msg = ChatMessage(f"user", "{inp}\n## attachment \n\n{code1}")
                     code1 = None
                 else:
                     msg = ChatMessage("user", inp)

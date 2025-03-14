@@ -89,22 +89,36 @@ def get_wsj_html(url: str) -> str | None:
             browser.close()
 
 
-def get_bbc_html(url: str) -> BeautifulSoup | None:
+def get_html_playwright(url: str) -> BeautifulSoup | None:
     console.print(f'navigate {url}', style='yellow')
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
+        iphone_15 = p.devices["iPhone 15"]
+        context = browser.new_context(**iphone_15)
+
+        page = context.new_page()
         try:
             page.goto(url)
+            page.wait_for_load_state('domcontentloaded')
+            # page.click('button[aria-label="Yes, I Accept"]')
+
+            results = []
+            for anchor in page.query_selector_all('a[data-component="story-link"]'):
+                headline_element = anchor.query_selector('div[data-component="headline"]')
+                summary_element = anchor.query_selector('section[data-component="summary"]')
+                
+                if headline_element and summary_element:
+                    headline = headline_element.inner_text()
+                    summary = summary_element.inner_text()
+                    href = anchor.get_attribute('href')
+                    results.append((headline, summary, href))
+
+            pprint(results)
 
             # find the h1 by id
-            locator = page.locator('#main-heading')
-            console.print(f'retrieved - {locator.text_content()}')
-
-            content = page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-            save_soup(soup, Path('c://temp/z.htm'))
-            return soup
+            # soup = BeautifulSoup(content, 'html.parser')
+            # save_soup(soup, Path('c://temp/z.htm'))
+            return results
         except Exception as e:
             console.print(f"error retrieving {e}", style='red')
             return None
@@ -454,8 +468,8 @@ def print_markdown(fname: Path):
 
 
 if __name__ == "__main__":
-    main2()
-    # soup = get_bbc_html('https://www.bbc.co.uk/news/articles/cd7eyz3yn5do')
+    # main2()
+    soup = get_html_playwright('https://www-bloomberg-com.translate.goog/uk?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true')
     #  #find time tags with a datetime attribute.
     # if headline := soup.find(id="main-heading"):
     #     console.print(f"title: {headline.text}")
@@ -465,6 +479,6 @@ if __name__ == "__main__":
     #     console.print(f"published: {d.strftime("%A %Y-%m-%d")}")
     # md = html_to_markdown(soup = soup.find(id='main-content'), href_base = "https://bbc.co.uk")
     # console.print(Markdown(md, style="cyan"), width=80)
-    scrape_stock_data(["SPY:UN", "XOM:UN", "TLT:UN", "JNK:UN"])
+    # scrape_stock_data(["SPY:UN", "XOM:UN", "TLT:UN", "JNK:UN"])
 
     #print_markdown(Path.home() / 'Documents' / 'chats' / 'china_struggles_to_shake_off.md')

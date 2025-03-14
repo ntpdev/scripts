@@ -12,4 +12,6 @@ uvx ruff check --fix [file]
 uvx ruff format [file]
 
 uvx --from rich-cli rich -m [file]
+
+uvx --with pydantic mypy --ignore-missing-imports --follow-imports=skip --strict-optional [file]
 ```

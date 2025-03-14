@@ -92,11 +92,11 @@ def save_code(fn: str, code: CodeBlock) -> Path:
     return full_path
 
 
-def save_and_execute_python(code: CodeBlock):
+def save_and_execute_python(code: CodeBlock, timeout: int = 30):
     try:
         script_path = save_code("temp.py", code)
 
-        result = subprocess.run([str(get_python()), script_path], cwd=script_path.parent, capture_output=True, text=True, timeout=60)
+        result = subprocess.run([str(get_python()), script_path], cwd=script_path.parent, capture_output=True, text=True, timeout=timeout)
 
         if len(result.stdout) > 0:
             console.print(result.stdout, style="yellow")
