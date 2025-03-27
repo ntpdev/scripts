@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # pip install langchain-core langchain-community langchain-openai langchain-google-vertexai langchain-anthropic
 import argparse
+import base64
 import platform
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -62,19 +64,22 @@ class MarkSheet(BaseModel):
     correct: int = Field(description="count of correct answers")
 
 
+class Attachment(BaseModel):
+    type: str = Field(default="media", description="Type of the attachment")
+    mime_type: str = Field(default="application/pdf", description="MIME type of the attachment")
+    data: str = Field(description="Base64 encoded data")
+
+
 console = Console()
 store = {}
-# llm2 = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.2)
-# llm = ChatOpenAI(model="gpt-4-turbo-preview", temperature=0.2)
-# llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.2, base_url='http://localhost:1234/v1')
 
 
 @tool
-def retrieve_headlines(source: Literal["bbc", "ft", "nyt", "wsj"]) -> str:
+def retrieve_headlines(source: Literal["bbc", "bloomberg", "ft", "nyt", "wsj"]) -> str:
     """Retrieve headlines from a news web site.
 
     Args:
-       source: The name of the news web site.  Must be one of "bbc", "ft", "nyt", or "wsj".
+       source: The name of the news web site.  Must be one of "bbc", "bloomberg", "ft", "nyt", or "wsj".
 
     Returns:
        a list of article headlines
@@ -162,16 +167,30 @@ def evaluate_expression(input: str) -> str:
 available_tools = [evaluate_expression, retrieve_headlines, retrieve_article, retrieve_stock_quotes]
 
 
+def load_pdf(p: Path) -> Attachment | None:
+    try:
+        with open(p, "rb") as pdf_file:
+            pdf_binary = pdf_file.read()
+            pdf_base64 = base64.b64encode(pdf_binary).decode("utf-8")
+
+        return Attachment(data=pdf_base64)
+    except FileNotFoundError:
+        console.print(f"Error: The file {p} does not exist.", style="red")
+    except Exception as e:
+        console.print(f"An unexpected error occurred: {e}", style="red")
+
+    return None
+
+
 def process_tool_call(call) -> ToolMessage:
     """process tool call and return result in a ToolMessage"""
     # see https://python.langchain.com/docs/concepts/tools/ for @tools decorator docs
     name = call["name"].lower()
-    for t in available_tools:
-        if t.name == name:
-            r = t.invoke(call["args"])
-            return ToolMessage(r, tool_call_id=call["id"])
+    if tool := next((t for t in available_tools if t.name == name), None):
+        r = tool.invoke(call["args"])
+        return ToolMessage(r, tool_call_id=call["id"])
 
-    return ToolMessage("unknown tool: " + call["name"], tool_call_id=id)
+    return ToolMessage("unknown tool: " + call["name"], tool_call_id=call["id"])
 
 
 def check_and_process_tool_calls(llm, msg, session_id):
@@ -188,7 +207,7 @@ def check_and_process_tool_calls(llm, msg, session_id):
 
 
 def check_and_process_code_block(llm, aimsg, session_id, max_executions):
-    """check for a code block, execute it and pass output back to LLM. This can happen several times if there are errors. If there is no code block then the original response is returned"""
+    """check for a code block, execute it and pass output back to LLM. This can happen several times if the LLM replies with another code block. If there is no code block then the original response is returned"""
     code = extract_code_block(aimsg.content, "```")
     n = 0
     while code and len(code.language) > 0 and n < max_executions:
@@ -250,7 +269,6 @@ def load_msg(s: str) -> BaseMessage:
             return HumanMessage(s) if is_human else AIMessage(s)
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
-    #       raise FileNotFoundError(f"Chat message file not found: {filename}")
     return None
 
 
@@ -298,19 +316,19 @@ def test_structured_output(llm):
     # use 2 chains both produce structured output
     # feed output from first into second
     # no chat history used
-    prompt = ChatPromptTemplate.from_messages([("system", "you are a helpful assistant who is good at english language"), ("human", "{input}")])
-    prompt2 = ChatPromptTemplate.from_messages([("system", "you are a helpful assistant who is good at english language"), ("human", marking_template_q6)])
+    question_prompt = ChatPromptTemplate.from_messages([("system", "role: english language teacher"), ("human", "{input}")])
     question_llm = llm.with_structured_output(AnswerSheet)
-    marking_llm = llm.with_structured_output(MarkSheet)
     s = ""
     with open(make_fullpath("q6.md"), encoding="utf-8") as f:
         s = f.read()
-    question_chain = prompt | question_llm
+    question_chain = question_prompt | question_llm
     m = question_chain.invoke({"input": s})
     pprint(m)
 
     # feed the answers into the next chain as yaml
-    marking_chain = prompt2 | marking_llm
+    marking_llm = llm.with_structured_output(MarkSheet)
+    marking_prompt = ChatPromptTemplate.from_messages([("system", "role: english language teacher"), ("human", marking_template_q6)])
+    marking_chain = marking_prompt | marking_llm
     marks = marking_chain.invoke({"answers", m.to_yaml()})
     pprint(marks)
     # count number of yes and compare to llm answer
@@ -324,22 +342,39 @@ def test_single_message(llm):
     #    prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder(variable_name="history"), ('human', '{input}')])
     chain = prompt | llm
     chain_history = RunnableWithMessageHistory(chain, get_session_history, input_messages_key="input", history_messages_key="history")
-    chain_history.invoke({"input": "what is the largest (by mass) planet in the solar system"}, config={"configurable": {"session_id": session_id}})
-    chain_history.invoke({"input": "and is Pluto the smallest and if not what is"}, config={"configurable": {"session_id": session_id}})
+    cd = {"configurable": {"session_id": session_id}}
+    chain_history.invoke({"input": "what is the largest (by mass) planet in the solar system"}, config=cd)
+    chain_history.invoke({"input": "and is Pluto the smallest and if not what is"}, config=cd)
     print_history(session_id)
     # rprint(get_session_history('z1'))
 
 
-def create_llm_with_history(llm):
+def test_pdf_attachment(llm):
+    session_id = "z1"
+    att = load_pdf(Path("~/Downloads/Thayaparan_24254472_ProgressReport.pdf").expanduser())
+    prompt = ChatPromptTemplate.from_messages([
+        MessagesPlaceholder(variable_name="history"),
+        HumanMessage([{"type":"text", "text": "task: review the progress report for a medical physics project carefully before it is submitted to the project review board. suggest improvements to the English sentence structure, increase clarity. check for technical accuracy. check the grammar and sentence construction. ensure there are no filler or fluff words. suggest improvements by quoting original and improved version. ensure a professional tone. check all abbreviations are defined."}, att.model_dump()])]
+    )
+    chain = prompt | llm
+    chain_history = RunnableWithMessageHistory(chain, get_session_history, input_messages_key="input", history_messages_key="history")
+    chain_history.invoke({"input": "NA"}, config={"configurable": {"session_id": session_id}})
+    print_history(session_id)
+
+
+def create_llm_with_history(llm, attachment=None):
     s = """
 **question:**
 
 {input}
 
-**instructions:** first write down your thoughts. structure your answer as **thinking:** **answer:**
+**instructions:** first contextualise and disambiguate the question. then answer it. answer in a precise way using technical language if necessary.
 """
     s = "{input}"
-    prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder(variable_name="history"), ("human", s)])
+    if attachment:
+        prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder(variable_name="history"), HumanMessage([s, attachment.model_dump()])])
+    else:
+        prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder(variable_name="history"), ("human", s)])
     chain = prompt | llm
     return RunnableWithMessageHistory(chain, get_session_history, input_messages_key="input", history_messages_key="history")
 
@@ -349,16 +384,9 @@ def system_message():
     scripting_lang, plat = ("bash", "Ubuntu 24.04") if platform.system() == "Linux" else ("powershell", "Windows 11")
     #    return f'You are Marvin a super intelligent AI chatbot trained by OpenAI. You use deductive reasoning to answer questions. You make dry, witty, mocking comments and often despair.  You are logical and pay attention to detail. You can access local computer running {plat} by writing python or {scripting_lang}. Scripts should always be in markdown code blocks with the language. current datetime is {tm}'
     return SystemMessage(
-        f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}"
+        #        f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}"
+        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
     )
-
-
-# messages = [
-#     system_message(),
-# #     HumanMessage(dedent("""
-# # hello. what is the time.
-# #                         """))
-# ]
 
 
 def create_llm(llm_name, temp, tool_use):
@@ -395,6 +423,8 @@ def chat(llm_name, tool_use=False):
     console.print("chat with model: " + llm.model_name, style="yellow")
     chain = create_llm_with_history(llm)
     session_id = "xyz"
+    config_data = {"configurable": {"session_id": session_id}}
+    attach = None
 
     inp = ""
     while inp != "x":
@@ -412,9 +442,21 @@ def chat(llm_name, tool_use=False):
             elif inp.startswith("%save"):
                 save_content_from_history(session_id, -1)
                 continue
+            elif inp.startswith("%attach"):
+                x = inp.find(" ")
+                if x > 0:
+                    p = Path(inp[x:].strip()).expanduser()
+                    attach = load_pdf(p)
+                    console.print(f"attachment loaded {p}")
+                else:
+                    attach = None
+                    console.print("attachment dropped")
+                continue
 
             print_message(HumanMessage(inp))
-            msg = chain.invoke({"input": inp}, config={"configurable": {"session_id": session_id}})
+            use_chain = create_llm_with_history(llm, attach) if attach else chain
+            msg = use_chain.invoke({"input": inp}, config=config_data)
+
             print_message(msg)
             check_and_process_tool_calls(llm, msg, session_id)
             check_and_process_code_block(chain, msg, session_id, 3)

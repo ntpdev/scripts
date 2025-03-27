@@ -267,53 +267,52 @@ def plot_mongo(symbol, dt, n):
     add_hilo_labels(df_min_vol, tm, fig)
     mvds = create_min_vol_index(df_min_vol, idx)
 
+    def add_h_line(x_start, x_end, y_value, prefix="", color="Gray", dash="dot"):
+        fig.add_shape(type="line", x0=x_start, y0=y_value, x1=x_end, y1=y_value, line=dict(color=color, dash=dash))
+        if prefix:
+            label = f"{prefix} {y_value:.2f}"
+            fig.add_annotation(text=label, x=x_end, y=y_value, showarrow=False)
+
     for i in mvds[1:]:
         eu_open = df_min_vol.at[df_min_vol.index[i.eu_start_bar], "open"]
-        fig.add_shape(type="line", x0=tm[i.eu_start_bar], y0=eu_open, x1=tm[i.eu_end_bar], y1=eu_open, line=dict(color="LightSeaGreen", dash="dot"))
+        add_h_line(tm[i.eu_start_bar], tm[i.eu_end_bar], eu_open, "", color="LightSeaGreen")
+        
         xstart = tm[i.start_bar]
         xend = tm[i.rth_end_bar]
+        
         if i.rth_start_bar > 0:
             xstart_rth = tm[i.rth_start_bar]
             fig.add_vline(x=xstart_rth, line_width=1, line_dash="dash", line_color="blue")
+            
             if i.rth_end_bar > 0:
                 fig.add_vline(x=xend, line_width=1, line_dash="dash", line_color="blue")
+            
             rth_open = day_summary_df.at[i.trade_dt, "rth_open"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=rth_open, x1=xend, y1=rth_open, line=dict(color="LightSeaGreen", dash="dot"))
-            fig.add_annotation(text=f"open {rth_open:.2f}", x=xend, y=rth_open, showarrow=False)
-            # fig.add_annotation(x=tm[i.rthStartBar], y=rthOpen, text=f"open {rthOpen:.2f}", showarrow=False, font=dict(color="LightSeaGreen"))
+            add_h_line(xstart_rth, xend, rth_open, "open", color="LightSeaGreen")
+            
             glbx_hi = day_summary_df.at[i.trade_dt, "glbx_high"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=glbx_hi, x1=xend, y1=glbx_hi, line=dict(color="Gray", dash="dot"))
-            fig.add_annotation(text=f"glbx h h {glbx_hi:.2f}", x=xend, y=glbx_hi, showarrow=False)
+            add_h_line(xstart_rth, xend, glbx_hi, "glbx hi")
+            
             glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=glbx_lo, x1=xend, y1=glbx_lo, line=dict(color="Gray", dash="dot"))
-            fig.add_annotation(text=f"glbx lo {glbx_lo:.2f}", x=xend, y=glbx_lo, showarrow=False)
+            add_h_line(xstart_rth, xend, glbx_lo, "glbx lo")
 
         # add first hour hi-lo
         h1_hi = day_summary_df.at[i.trade_dt, "rth_h1_high"]
         if pd.notna(h1_hi):
             xstart_rth = tm[i.rth_start_bar]
-            fig.add_shape(type="line", x0=xstart_rth, y0=h1_hi, x1=xend, y1=h1_hi, line=dict(color="Gray", dash="dot"))
+            add_h_line(xstart_rth, xend, h1_hi, "h1 h")
+            
             h1_lo = day_summary_df.at[i.trade_dt, "rth_h1_low"]
-            fig.add_shape(type="line", x0=xstart_rth, y0=h1_lo, x1=xend, y1=h1_lo, line=dict(color="Gray", dash="dot"))
-            fig.add_annotation(text=f"h1 h {h1_hi:.2f}", x=xend, y=h1_hi, showarrow=False)
-            fig.add_annotation(text=f"h1 l {h1_lo:.2f}", x=xend, y=h1_lo, showarrow=False)
+            add_h_line(xstart_rth, xend, h1_lo, "h1 l")
 
         # add previous day rth hi-lo-close
         ix = day_summary_df.index.searchsorted(i.trade_dt)
         if ix > 0:
-            x = day_summary_df.iloc[ix - 1]
-            prev_rth_hi = x.rth_high
-            prev_rth_lo = x.rth_low
-            prev_rth_close = x.close
-            glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
-            if prev_rth_lo > glbx_lo:
-                fig.add_shape(type="line", x0=xstart, y0=prev_rth_lo, x1=xend, y1=prev_rth_lo, line=dict(color="chocolate", dash="dot"))
-                fig.add_annotation(text=f"yl {prev_rth_lo:.2f}", x=xend, y=prev_rth_lo, showarrow=False)
-
-            fig.add_shape(type="line", x0=xstart, y0=prev_rth_hi, x1=xend, y1=prev_rth_hi, line=dict(color="chocolate", dash="dot"))
-            fig.add_shape(type="line", x0=xstart, y0=prev_rth_close, x1=xend, y1=prev_rth_close, line=dict(color="cyan", dash="dot"))
-            fig.add_annotation(text=f"yh {prev_rth_hi:.2f}", x=xend, y=prev_rth_hi, showarrow=False)
-            fig.add_annotation(text=f"cl {prev_rth_close:.2f}", x=xend, y=prev_rth_close, showarrow=False)
+            prev_day = day_summary_df.iloc[ix - 1]
+            
+            add_h_line(xstart, xend, prev_day.rth_low, "yl", color="chocolate")
+            add_h_line(xstart, xend, prev_day.rth_high, "yh", color="chocolate")
+            add_h_line(xstart, xend, prev_day.close, "cl", color="cyan")
 
     fig.show()
 
@@ -398,7 +397,7 @@ def main():
     parser.add_argument("--atr", action="store_true", help="Display ATR")
     parser.add_argument("--tick", action="store_true", help="Display tick")
     parser.add_argument("--days", type=int, default=1, help="Number of days")
-    parser.add_argument("--sym", type=str, default="esz4", help="Index symbol")
+    parser.add_argument("--sym", type=str, default="esm5", help="Index symbol")
 
     argv = parser.parse_args()
     print(argv)

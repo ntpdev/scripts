@@ -5,7 +5,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-import requests
+import httpx
 import math
 from bs4 import BeautifulSoup
 from functools import cache
@@ -20,7 +20,11 @@ from htm2md import html_to_markdown
 
 NYT_URL = "https://www.nytimes.com/"
 WSJ_URL = "https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true"
-BLOOMBERG_URL = "https://www-bloomberg-com.translate.goog/uk?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true"
+BLOOMBERG_URL = "https://www.bloomberg.com/uk"
+# cookies from a bloomberg request
+ck = """
+exp_pref=UK; country_code=GB; _pxhd=hybJB-QwokZf4leNclckCnRVuIpFClaKV1llOjmL0jtP37YQSo3OvB3LQomq-H5WHuzFBOtLOYP6-94lFNOnYA==:xcFLr9qTPJw8sGEzPYHXuJc/hPFuxaP3C/CQ9l6KTqWEzP/bEwlbm11lGlIPx9iZG7/zyzfnN5LXSk2J/ImKNFYpsCly7dMgTOUK5jxixZY=; session_id=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; _session_id_backup=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; agent_id=7b759df2-41ab-48f2-8d18-e8f4c830e74f; session_key=05e93f9def0810c2a5f8f184dab9e72b2a664249; _reg-csrf-token=vUgp4QCG-ZhI6oKN1fp1d1IRVQcaDZdJojN8; _reg-csrf=s%3A_t_6ZTpMq4aJfacc4id6cG6T.N3kayACM%2BeU1su9PG3W38wIn0F5hjdkbfPezAkk%2Beck; _sp_krux=true; gatehouse_id=39936fa4-25a4-4ca0-b34b-6b0745e9aaaa; geo_info=%7B%22countryCode%22%3A%22GB%22%2C%22country%22%3A%22GB%22%2C%22field_n%22%3A%22hf%22%2C%22trackingRegion%22%3A%22Europe%22%2C%22cacheExpiredTime%22%3A1743438724334%2C%22region%22%3A%22Europe%22%2C%22fieldN%22%3A%22hf%22%7D%7C1743438724334; geo_info={%22country%22:%22GB%22%2C%22region%22:%22Europe%22%2C%22fieldN%22:%22hf%22}|1743438723668; consentUUID=44d6a9b5-52bd-46da-8b60-dacd569ab812_42; consentDate=2025-03-24T16:32:09.533Z; bbgconsentstring=req1fun1pad1; bdfpc=004.2124236125.1742833928898; _ga_GQ1PBLXZCT=GS1.1.1743025085.3.1.1743025481.0.0.0; _ga=GA1.1.2038307183.1742833929; _gcl_au=1.1.465814927.1742833929; usnatUUID=5e7f4c49-db91-48fa-95bc-fbd68e8b7c26; pxcts=890d621c-08cd-11f0-9cbe-2c6d2c51ccd5; _pxvid=840a3f28-08cd-11f0-a082-8df59c8c78b6; _user-data=%7B%22status%22%3A%22anonymous%22%7D; _last-refresh=2025-3-26%2021%3A38; _pxde=e0adf1db95f603de3ae8f5ccb5a02c822502d8210417fd7f4170bce2642f3ea3:eyJ0aW1lc3RhbXAiOjE3NDMwMjUzMjgxNDIsImZfa2IiOjAsImlwY19pZCI6W119; _px2=eyJ1IjoiOTlmOGY2NDAtMGE4YS0xMWYwLWFhZWItYTcwMjM0ZjFmN2U4IiwidiI6Ijg0MGEzZjI4LTA4Y2QtMTFmMC1hMDgyLThkZjU5YzhjNzhiNiIsInQiOjE3NDMwMjU2MjgxNDIsImgiOiIyOWQwNzNmMDU4NThlMjA1ZGUwNTllYTYxYjdmODIxYzQ1NTc1Mzg4ODFmMDNjMjQyMTJkOThhMWMwNzUxMTliIn0=
+"""
 
 console = Console()
 
@@ -38,7 +42,7 @@ class ArticleLink(BaseModel):
 
 
 class ArticleList(BaseModel):
-    timestamp_retrieved: str
+    timestamp_retrieved: str = Field(default_factory=lambda: datetime.now().isoformat())
     source: str
     articles: list[ArticleLink]
 
@@ -183,20 +187,23 @@ def evaluate_expression(expression: str) -> str:
 def retrieve_headlines(source: str) -> ArticleList:
     if not source:
         return ErrorInfo(error=True, type="invalid argument", message= "source required", url="")
+    try:
+        s = source.lower()
+        if s == "ft":
+            return retrieve_ft_headlines()
+        if s == "nyt":
+            xs = retrieve_cached_headlines()[NYT_URL]
+            return ArticleList(source="New York Times", articles=xs)
+        if s == "wsj":
+            xs = retrieve_cached_headlines()[WSJ_URL]
+            return ArticleList(source="Wall Street Journal", articles=xs)
+        if s == "bloomberg":
+            xs = retrieve_bloomberg_home_page()
+            return ArticleList(source="Bloomberg UK", articles=xs)
+        return retrieve_bbc_most_read()
+    except Exception as e:
+        return ErrorInfo(error=True, type=e.__class__.__name__, message=str(e), url=source)
 
-    s = source.lower()
-    if s == "ft":
-        return merge(retrieve_ft_most_read(), retrieve_ft_most_read_section("https://www.ft.com/technology"), retrieve_ft_most_read_section("https://www.ft.com/markets"))
-    if s == "nyt":
-        xs = retrieve_cached_headlines()[NYT_URL]
-        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=xs)
-    if s == "wsj":
-        xs = retrieve_cached_headlines()[WSJ_URL]
-        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
-    if s == "bloomberg":
-        xs = retrieve_cached_headlines()[BLOOMBERG_URL]
-        return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Bloomberg UK", articles=xs)
-    return extract_bbc_most_read()
 
 
 def retrieve_article(url: str) -> str:
@@ -230,8 +237,16 @@ def retrieve_stock_quotes(symbols: list[str]) -> QuoteList | ErrorInfo:
 
     d = {make_url(e): process_bnn_stock_page for e in symbols}
     result = retrieve_using_playwright(d)
-    for r in result.values():
-        r.update(get_bnnbloomberg_quote(r["symbol"]))
+    
+    headers = {
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+    }
+
+    with httpx.Client(http2=True, headers=headers) as client:
+        for r in result.values():
+            r.update(get_bnnbloomberg_quote(client, r["symbol"]))
     return result if isinstance(result, ErrorInfo) else QuoteList(timestamp_retrieved=datetime.now().isoformat(), quotes=list(result.values()))
 
 @cache
@@ -287,7 +302,7 @@ def add_citation(text: str, cite: Citation) -> str:
     return s + text
 
 
-def get_bnnbloomberg_quote(symbol: str) -> dict:
+def get_bnnbloomberg_quote(client: httpx.Client, symbol: str) -> dict:
     """
     Fetches JNK:UN summary info and company info
 
@@ -310,18 +325,16 @@ def get_bnnbloomberg_quote(symbol: str) -> dict:
     try:
         url = "https://bnn.stats.bellmedia.ca/bnn/api/stock/Scorecard?symbol=" + symbol
         console.print(f"get quote scorecard from {url}")
-        response = requests.get(url)
+        response = client.get(url)
         response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
         scorecard = response.json()
         url = "https://bnn.stats.bellmedia.ca/bnn/api/stock/companyInfo?brand=bnn&lang=en&symbol=" + symbol
-        response = requests.get(url)
+        response = client.get(url)
         response.raise_for_status()
         company_info = response.json()
 
         merge_from(scorecard)
         merge_from(company_info)
-    except requests.exceptions.RequestException as e:
-        print(f"Error during request: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
     return result
@@ -339,16 +352,74 @@ def process_bnn_stock_page(page) -> dict | None:
     return d
 
 
-def extract_bbc_most_read() -> ArticleList:
+def retrieve_bloomberg_home_page() -> list[ArticleList]:
+    """use httpx to get uk homepage and parse headlines"""
+
+    def find_parent_prop(element, tagname, attr):
+        """Traverse up the DOM tree to find the nearest parent <a> tag and return its href."""
+        elem = element
+        while (elem := elem.parent) is not None:
+            if elem.name == tagname and elem.has_attr(attr):
+                return elem[attr]
+        return None
+
+    def find_sibling_with_component(element, prop, component_value):
+        """Find the nearest sibling element with the specified data-component attribute."""
+        sibling = element
+        while (sibling := sibling.find_next_sibling()) is not None:
+            if sibling.has_attr(prop) and sibling[prop] == component_value:
+                return sibling.get_text(strip=True)
+        return ""
+
+    with httpx.Client(http2=True) as client:
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-UK,en;q=0.5",
+            "Connection": "keep-alive",
+            "Cookie": ck,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+        }
+        response = client.get(BLOOMBERG_URL, headers=headers)
+        response.raise_for_status()
+        content = response.text
+
+    soup = BeautifulSoup(content, 'html.parser')
+    save_soup(soup, Path.home() / "Downloads" / "bloomberg-uk.html")
+    section = soup.find('section', {'data-zoneid': 'Above the Fold'})
+    headlines = section.find_all('div', {'data-testid': 'headline'})
+    xs = []
+    for div in headlines:
+        href = find_parent_prop(div, "a", "href")
+        summary = find_sibling_with_component(div, "data-component", "summary")
+        if href:
+            xs.append(ArticleLink(headline=div.get_text(strip=True), summary = summary, url="https://www.bloomberg.com" + href))
+    return xs
+
+
+def retrieve_bbc_most_read() -> ArticleList:
     """
     find h2  with id=mostRead-label, from parent div find all child anchor tags
     """
-    r = requests.get("https://www.bbc.co.uk/news")
-    soup = BeautifulSoup(r.text, "html.parser")
+
+    with httpx.Client(http2=True) as client:
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-UK,en;q=0.5",
+            "Connection": "keep-alive",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+        }
+        response = client.get("https://www.bbc.co.uk/news", headers=headers)
+        response.raise_for_status()
+        content = response.text
+
+    soup = BeautifulSoup(content, 'html.parser')
+#    save_soup(soup, Path.home() / "Downloads" / "bbc-news.html")
     xs = []
     if mrs := soup.find("h2", id="mostRead-label"):
         xs = [ArticleLink(headline=anchor.get_text(strip=True), url="https://bbc.co.uk" + anchor["href"]) for anchor in mrs.find_parent("div").find_all("a")]
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="BBC News", articles=xs)
+    return ArticleList(source="BBC News", articles=xs)
 
 
 def get_bbc_article_contents(url: str) -> BeautifulSoup | None:
@@ -411,7 +482,7 @@ def retrieve_wsj_article(url: str) -> str:
 
 
 def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = False) -> dict[str, Any]:
-    """Generic wrapper for calling a parsing function on a web page."""
+    """Generic wrapper for parsing multiple web pages."""
     results = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
@@ -508,13 +579,13 @@ def parse_wsj_homepage(page) -> list[ArticleLink]:
 
     return xs
 
-def retrieve_bloomberg_home_oage() -> ArticleList | None:
+def retrieve_bloomberg_home_page_playright() -> ArticleList | None:
     xs = retrieve_using_playwright({BLOOMBERG_URL: parse_bloomberg_homepage})
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=list(xs.values()))
+    return ArticleList(source="Bloomberg", articles=list(xs.values()))
 
 def retrieve_nyt_home_page() -> ArticleList | None:
     xs = retrieve_using_playwright({NYT_URL: parse_nyt_homepage})
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=list(xs.values()))
+    return ArticleList(source="New York Times", articles=list(xs.values()))
 
 
 def retrieve_nyt_home_page_ex() -> ArticleList:
@@ -572,12 +643,12 @@ def retrieve_nyt_home_page_ex() -> ArticleList:
         finally:
             browser.close()
 
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="New York Times", articles=xs)
+    return ArticleList(source="New York Times", articles=xs)
 
 
 def retrieve_wsj_home_page() -> ArticleList:
     xs = retrieve_using_playwright({WSJ_URL: parse_wsj_homepage})
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
+    return ArticleList(source="Wall Street Journal", articles=xs)
 
 
 def retrieve_wsj_home_page_ex() -> ArticleList | None:
@@ -611,7 +682,7 @@ def retrieve_wsj_home_page_ex() -> ArticleList | None:
         finally:
             browser.close()
 
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Wall Street Journal", articles=xs)
+    return ArticleList(source="Wall Street Journal", articles=xs)
 
 
 def print_most_read_table(most_read: ArticleList):
@@ -677,19 +748,8 @@ def tool_call_handler(fnname: str, args: dict) -> str:
     pass
 
 
-def extract_article(div) -> ArticleLink:
-    # get "data-content-id" or find child with read attribute
-    id = div.get("data-content-id")
-    content_id = id if id else div.find("div", class_="headline").get("data-content-id")
-    # read child span with class="text" and get content
-    headline_text = div.find("span", class_="text").get_text(strip=True)
-    return ArticleLink(headline=headline_text, url="https://www.ft.com/content/" + content_id)
-
-
-def retrieve_ft_most_read_section(url: str) -> ArticleList:
+def parse_ft_most_read_section(soup) -> ArticleList:
     """return most read articles. retrieve articles from most-read list and augment with teasers"""
-    r = requests.get(url)
-    soup = BeautifulSoup(r.text, "html.parser")
 
     articles = {}
     if most_read := soup.find("div", class_="o-teaser-collection--numbered"):
@@ -710,17 +770,57 @@ def retrieve_ft_most_read_section(url: str) -> ArticleList:
             if len(articles[url].summary) < len(subtitle):
                 articles[url].summary = subtitle
 
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Financial Times", articles=articles.values())
+    return ArticleList(source="Financial Times", articles=articles.values())
 
 
-def retrieve_ft_most_read() -> ArticleList:
-    r = requests.get("https://www.ft.com/")
-    soup = BeautifulSoup(r.text, "html.parser")
+def parse_ft_most_read(soup) -> ArticleList:
+
+    def extract_article(div) -> ArticleLink:
+    # get "data-content-id" or find child with read attribute
+        id = div.get("data-content-id")
+        content_id = id if id else div.find("div", class_="headline").get("data-content-id")
+        # read child span with class="text" and get content
+        headline_text = div.find("span", class_="text").get_text(strip=True)
+        return ArticleLink(headline=headline_text, url="https://www.ft.com/content/" + content_id)
 
     xs = [extract_article(d) for d in soup.find_all("div", class_="headline--scale-7")]
     xs.extend(extract_article(d) for d in soup.find_all("div", {"data-id": "most-read-id"}))
 
-    return ArticleList(timestamp_retrieved=datetime.now().isoformat(), source="Financial Times", articles=xs)
+    return ArticleList(source="Financial Times", articles=xs)
+
+
+def retrieve_ft_headlines() -> ArticleList:
+    with httpx.Client(http2=True) as client:
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-UK,en;q=0.5",
+            "Connection": "keep-alive",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+        }
+
+        xs = []
+        response = client.get("https://www.ft.com/", headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        xs.append(parse_ft_most_read(soup))
+
+        response = client.get("https://www.ft.com/technology", headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        xs.append(parse_ft_most_read_section(soup))
+
+        response = client.get("https://www.ft.com/markets", headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        xs.append(parse_ft_most_read_section(soup))
+
+        response = client.get("https://www.ft.com/world-uk", headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        xs.append(parse_ft_most_read_section(soup))
+
+    return merge(*xs)
 
 
 def retrieve_ft_article(url: str) -> str:
@@ -749,31 +849,34 @@ def retrieve_ft_article(url: str) -> str:
 @cache
 def retrieve_cached_headlines():
     """retrieve from both sites as we need to web scrape. results are cached"""
-    return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage, BLOOMBERG_URL: parse_bloomberg_homepage})
+    return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage})
 
 
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
     # get_bnnbloomberg_quote("JNK:UN")
     # exit(0)
-    # pprint(retrieve_stock_quotes([])) # ["JNK", "TLT", "SPY", "PBW"]))
-    items = retrieve_headlines("nyt")
-    print_most_read_table(items)
+    # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
+    # exit(0)
+    # items = retrieve_headlines("nyt")
+    # print_most_read_table(items)
 
-    items = retrieve_headlines("wsj")
-    print_most_read_table(items)
+    # items = retrieve_headlines("wsj")
+    # print_most_read_table(items)
 
-    items = retrieve_headlines("bloomberg")
-    print_most_read_table(items)
+    # items = retrieve_headlines("bloomberg")
+    # print_most_read_table(items)
 
-    # items = retrieve_ft_most_read()
+    # items = retrieve_headlines("ft")
+
     # items2 = retrieve_ft_most_read_section("https://www.ft.com/markets")
     # print_most_read_table(items)
     # md = retrieve_wsj_article('https://www.wsj.com/politics/elections/democrat-party-strategy-progressive-moderates-13e8df10')
     # markdown = Markdown(md, style="cyan", code_theme="monokai")
     # console.print(markdown, width=80)
-    # items = extract_bbc_most_read()
-    # print_most_read_table(items)
+    items = retrieve_bbc_most_read()
+    # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
+    print_most_read_table(items)
 
     # items = retrieve_wsj_home_page()
     # print_most_read_table(items)

@@ -220,9 +220,9 @@ def save(xs, filename):
 
 
 def load_msg(s: str) -> ChatMessage:
-    xs = s.split()
-    fname = make_fullpath(xs[1])
-    role = "assistant" if len(xs) > 2 else "user"
+    # this function used to role = "assistant" if len(xs) > 2 else "user"
+    fname = make_fullpath(s)
+    role = "user"
 
     try:
         with open(fname, encoding="utf-8") as f:
@@ -234,26 +234,32 @@ def load_msg(s: str) -> ChatMessage:
 
 
 def load_textfile(s: str) -> str:
-    xs = s.split()
-    fname = make_fullpath(xs[1])
+    """loads a text file. if it is a code file wraps in markdown code block."""
+    fname = make_fullpath(s)
+    console.print(f"loading file {fname}")
     try:
         with open(fname, encoding="utf-8") as f:
-            return f.read()
+            content = f.read()
+            console.print(f"loaded file {fname} length {len(content)}", style="yellow")
+            if fname.suffix in (".py", ".htm", ".html", ".java"):
+                language = fname.suffix[1:] if fname.suffix != ".htm" else "html"
+                return f"\n## {fname.name}\n\n```{language}\n{content}\n```\n"
+            return content
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
     return None
 
 
 def load_template(s: str) -> ChatMessage:
-    xs = s.split(maxsplit=2)
-    fname = make_fullpath(xs[1])
+    xs = s.split(maxsplit=1)
+    fname = make_fullpath(xs[0])
     rprint(xs)
 
     try:
-        with open(fname) as f:
+        with open(fname, encoding="utf-8") as f:
             templ = f.read()
-            if len(xs) > 2:
-                templ = templ.replace("{input}", xs[2])
+            if len(xs) > 1:
+                templ = templ.replace("{input}", xs[1])
 
             return ChatMessage("user", templ)
     except FileNotFoundError:
@@ -263,9 +269,10 @@ def load_template(s: str) -> ChatMessage:
 
 {input}
 
-**instructions:** first write down your thoughts. structure your answer as **thinking:** **answer:**
+**instructions:**
+you answer should contextualize and disambiguate the question
 """
-    return ChatMessage("user", s.replace("{input}", xs[2]))
+    return ChatMessage("user", s.replace("{input}", xs[1]))
 
 
 #       raise FileNotFoundError(f"Chat message file not found: {filename}")
@@ -299,8 +306,7 @@ def make_clean_filename(text: str) -> str:
     return "_".join(words[:5])
 
 
-def load_http(s: str) -> ChatMessage:
-    url = s.split()[1]
+def load_http(url: str) -> ChatMessage:
     try:
         crawler = FirecrawlApp(api_key=os.environ["FC_API_KEY"])
         result = crawler.scrape_url(url, params={"formats": ["markdown"]})
@@ -423,47 +429,47 @@ def extract_code_block_from_response(response) -> CodeBlock:
     return extract_code_block(response.choices[0].message.content, "```")
 
 
-def process_commands(client: LLM, inp: str, messages: list[ChatMessage]) -> bool:
+def process_commands(client: LLM, cmd: str, inp: str, messages: list[ChatMessage]) -> bool:
     global code1
     next_action = False
-    if inp.startswith("%load"):
+    if cmd == "load":
         msg = load_msg(inp)
         if msg:
             messages.append(msg)
             prt(msg)
             next_action = msg.role == "user"
-    elif inp.startswith("%tmpl"):
+    elif cmd == "tmpl":
         msg = load_template(inp)
         if msg:
             messages.append(msg)
             prt(msg)
             next_action = True
-    if inp.startswith("%web"):
+    if cmd == "web":
         msg = load_http(inp)
         if msg:
             messages.append(msg)
             next_action = True
-    if inp.startswith("%code"):
+    if cmd == "code":
         code1 = load_textfile(inp)
-    elif inp.startswith("%resp"):
+    elif cmd == "resp":
         msg = ChatMessage("user", tool_response(inp))
-    elif inp.startswith("%reset"):
+    elif cmd == "reset":
         messages.clear()
         messages.append(ChatMessage("system", system_message()))
-    elif inp.startswith("%drop"):
+    elif cmd == "drop":
         # remove last response for LLM and user msg that triggered
         if len(messages) > 2:
             messages.pop()
             messages.pop()
-    elif inp.startswith("%log"):
+    elif cmd == "log":
         messages.clear()
         xs = load_log(inp)
         for x in xs:
             messages.append(x)
         next_action = messages[-1].role == "user"
-    elif inp.startswith("%save"):
+    elif cmd == "save":
         save_content(messages[-1].content)
-    elif inp.startswith("%tool"):
+    elif cmd == "tool":
         state = client.toggle_tool_use()
         console.print(f"tool use changed to {state}", style="yellow")
     return next_action
@@ -489,11 +495,12 @@ def chat(llm_name, use_tool):
         inp = input_multi_line()
         if len(inp) > 3:
             if inp.startswith("%"):
-                if not process_commands(client, inp, messages):
+                cmds = inp.split(maxsplit=1)
+                if not process_commands(client, cmds[0][1:], cmds[1] if len(cmds) > 1 else None, messages):
                     continue
             else:
                 if code1:
-                    msg = ChatMessage(f"user", "{inp}\n## attachment \n\n{code1}")
+                    msg = ChatMessage(f"user", f"{inp}\n{code1}")
                     code1 = None
                 else:
                     msg = ChatMessage("user", inp)

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-import os.path
 import argparse
 import io
+from typing import Any
 
 from pathlib import Path
 from datetime import datetime
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+from googleapiclient.discovery import build, Resource
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from rich.console import Console
@@ -29,7 +29,7 @@ Credentials_JSON = (
     Path.home() / "client_secret_32374387863-e7jikh2ktb31m25l27liebbunt0nfnkv.apps.googleusercontent.com.json"
 )
 
-TOKEN_FILE = Path("~/Downloads/token.json").expanduser()
+TOKEN_FILE = Path.home() / "Downloads" / "token.json"
 
 mime_types = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -39,7 +39,7 @@ mime_types = {
 }
 
 
-def print_table(items):
+def print_table(items: list[dict[str, Any]]) -> None:
     # items.sort(key=lambda e: e["name"])
     table = Table(title="Files")
     table.add_column("Name", style="cyan", no_wrap=True, max_width=32)
@@ -50,7 +50,7 @@ def print_table(items):
 
     for item in items:
         dt = datetime.strptime(item["modifiedTime"], "%Y-%m-%dT%H:%M:%S.%fZ")
-        sz = round(int(item["size"]) / 1024) if "size" in item else 0
+        sz = round(int(item.get("size", 0)) / 1024)
         table.add_row(
             Text(item["name"], style="red" if item["trashed"] else "cyan"),  # Inline style
             str(sz),
@@ -62,12 +62,12 @@ def print_table(items):
     console.print(table)
 
 
-def login(token_file: Path):
+def login(token_file: Path) -> Credentials | None:
     creds = None
     # The file TOKEN_FILE stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.
-    if os.path.exists(token_file):
+    if token_file.exists():
         creds = Credentials.from_authorized_user_file(token_file, SCOPES)
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
@@ -87,21 +87,21 @@ def login(token_file: Path):
     return creds
 
 
-def download_file(drive_service, file_id, fn):
+def download_file(drive_service: Resource, file_id: str, fn: Path) -> None:
     request = drive_service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while done is False:
         status, done = downloader.next_chunk()
-        print("Download %d%%." % int(status.progress() * 100))
+        console.print(f"Download {int(status.progress() * 100)}%")
 
     with open(fn, "wb") as f:
         f.write(fh.getvalue())
-    print(f"downloaded file {file_id} to {fn}")
+    console.print(f"Downloaded file {file_id} to {fn}", style="green")
 
 
-def create_file(drive_service, fn: Path):
+def create_file(drive_service: Resource, fn: Path) -> str | None:
     """Insert new file.
     Returns : Id's of the file uploaded
 
@@ -111,36 +111,35 @@ def create_file(drive_service, fn: Path):
     """
 
     try:
-        fname = os.path.basename(fn)
-        file_metadata = {"name": fname}
+        file_metadata = {"name": fn.name}
         media = MediaFileUpload(fn, mimetype=mime_types[fn.suffix])
         # pylint: disable=maybe-no-member
         file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        console.print(f"File created {fn} to Google Drive id = {file.get('id')}", style="green")
+        console.print(f"File created {fn} with Google Drive id = {file.get('id')}", style="green")
+        return file.get("id")
 
     except HttpError as error:
-        print(f"An error occurred: {error}")
-        file = None
+        console.print(f"An error occurred: {error}", style="red")
 
-    return file.get("id")
+    return None
 
 
-def update_file(drive_service, file_id: str, fn: Path):
+def update_file(drive_service: Resource, file_id: str, fn: Path) -> str | None:
     try:
         # file_metadata = {"id": file_id}
         media = MediaFileUpload(fn, mimetype=mime_types[fn.suffix])
         # pylint: disable=maybe-no-member
         file = drive_service.files().update(media_body=media, fileId=file_id, fields="id").execute()
-        console.print(f"File updated {fn} to Google Drive id = {file.get('id')}", style="green")
+        console.print(f"File updated {fn} with Google Drive id = {file.get('id')}", style="green")
+        return file.get("id")
 
     except HttpError as error:
-        print(f"An error occurred: {error}")
-        file = None
+        console.print(f"An error occurred: {error}", style="red")
 
-    return  # file.get("id")
+    return None
 
 
-def find_file(drive_service, spec):
+def find_file(drive_service: Resource, spec:str) -> str | None:
     """return file_id of highest version, not trashed file matching spec"""
     results = (
         drive_service.files()
@@ -150,22 +149,21 @@ def find_file(drive_service, spec):
     existing = results.get("files", [])
 
     if existing:
-        existing.sort(key=lambda e: int(e["version"]) if "version" in e else 0, reverse=True)
-        pprint(existing)
+        existing.sort(key=lambda e: int(e.get("version", 0)), reverse=True)
         for f in (e["id"] for e in existing if not e["trashed"]):
             return f
     else:
-        print(f"File {spec} not found")
+        console.print(f"File {spec} not found", style="yellow")
 
     return None
 
 
-def list_files(service):
-    """Shows basic usage of the Drive v3 API.
-    Prints the names and ids of the first 10 files the user has access to.
+def list_files(drive_service: Resource) -> None:
+    """
+    Prints the names and ids of the first 16 files the user has access to.
     """
     results = (
-        service.files()
+        drive_service.files()
         .list(
             pageSize=16,
             fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, version, trashed)",
@@ -174,55 +172,57 @@ def list_files(service):
         .execute()
     )
     items = results.get("files", [])
-    # print(f"{item['name']} ({item['id']} {item['mimeType']} {item['size']} {item['modifiedTime']})")
 
     if not items:
-        print("No files found.")
+        console.print("No files found.", style="red")
         return
-
     print_table(items)
 
 
-def delete_file(drive_service, file_id):
+def delete_file(drive_service: Resource, file_id: str) -> None:
     """Move a file to trash given its file_id."""
     try:
         # Update the file's trashed status
         drive_service.files().update(fileId=file_id, body={"trashed": True}).execute()
-        print(f"File with ID: {file_id} has been moved to trash.")
+        console.print(f"File with ID: {file_id} has been moved to trash.", style="green")
     except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+        console.print(f"Error deleting file: {e}", style="red")
 
 
 def main(cmd: str, fname: str):
     try:
-        creds = login(TOKEN_FILE)
-        if creds:
+        if creds := login(TOKEN_FILE):
             service = build("drive", "v3", credentials=creds)
-            if cmd == "list":
+        match cmd:
+            case "list":
                 list_files(service)
-            elif cmd == "find" and len(fname) > 0:
-                id = find_file(service, fname)
-            elif cmd == "up" and len(fname) > 0:
+                
+            case "find" if fname:
+                find_file(service, fname)
+                
+            case "up" if fname:
                 fn = Path.home() / "Downloads" / fname
                 if fn.exists():
-                    id = find_file(service, fname)
-                    if id:
-                        update_file(service, id, fn)
+                    if file_id := find_file(service, fname):
+                        update_file(service, file_id, fn)
                     else:
                         create_file(service, fn)
                 else:
-                    console.print(f"file not found {fn}", style="red")
-            elif cmd == "dn" and len(fname) > 0:
-                id = find_file(service, fname)
-                if id:
+                    console.print(f"File not found: {fn}", style="red")
+                    
+            case "dn" if fname:
+                if file_id := find_file(service, fname):
                     fn = Path.home() / "Downloads" / fname
-                    id = download_file(service, id, fn)
-            elif cmd == "rm" and len(fname) > 0:
-                id = find_file(service, fname)
-                if id:
-                    delete_file(service, id)
+                    download_file(service, file_id, fn)
+                    
+            case "rm" if fname:
+                if file_id := find_file(service, fname):
+                    delete_file(service, file_id)
                 else:
-                    console.print(f"file not found {fname}", style="red")
+                    console.print(f"File not found: {fname}", style="red")
+                    
+            case _:
+                console.print(f"Invalid command or missing filename: {cmd} {fname}", style="red")
 
     except HttpError as error:
         # TODO(developer) - Handle errors from drive API.
@@ -230,7 +230,17 @@ def main(cmd: str, fname: str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="access google drive")
+    parser = argparse.ArgumentParser(
+        description="Google Drive command-line interface",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s list            # List files in your Google Drive
+  %(prog)s find document   # Find files containing 'document' in the name
+  %(prog)s up report.xlsx  # Upload report.xlsx from Downloads folder
+  %(prog)s dn report.xlsx  # Download report.xlsx to Downloads folder
+  %(prog)s rm old_file.txt # Move old_file.txt to trash
+        """)
     parser.add_argument(
         "cmd", choices=["list", "find", "up", "dn", "rm"], type=str, help="command [list|find|upload|download|rm]"
     )

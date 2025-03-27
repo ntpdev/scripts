@@ -197,6 +197,7 @@ def day_index(df: pd.DataFrame) -> pd.DataFrame:
     idx["rth_first"] = rth_start.mask(idx["last"] < rth_start)
     idx["rth_last"] = np.minimum(idx["last"], idx["rth_first"] + timedelta(hours=6, minutes=29))
     idx["duration"] = ((idx["last"] - idx["first"]).dt.total_seconds()) / 60 + 1
+    # assume trade date is date of last bar
     idx.set_index(pd.to_datetime(idx["last"].dt.date), inplace=True)
     idx.index.name = "date"
     return idx
