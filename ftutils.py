@@ -13,6 +13,7 @@ from playwright.sync_api import sync_playwright
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
+from chatutils import execute_python_script
 from rich.pretty import pprint
 from rich.table import Table
 
@@ -161,19 +162,38 @@ evaluate_expression_fn = {
         }
 
 
-def evaluate_expression(expression: str) -> str:
-    exp = ""
-    for line in expression.splitlines():
-        s = line.strip()
-        if s and not s.startswith("#"):
-            exp = s
-            break
+def evaluate_multiline_expression(expression):
+    # Split into individual parts and remove whitespace
+    parts = [p.strip() for p in expression.split(';') if p.strip()]
+    if not parts:
+        return None  # Empty input
+    
+    # Separate assignment statements from final expression
+    *statements, last_part = parts
+    
+    # Create a namespace dictionary to store variables
+    namespace = {}
+    
+    # Execute all assignment statements
+    if statements:
+        exec('\n'.join(statements), namespace)
+    
+    # Evaluate and return the final expression
+    return eval(last_part, namespace)
 
+
+def evaluate_expression(expression: str) -> str:
+    lines = expression.splitlines()
+    # treat multiline as a script and run
+    if len(lines) > 1:
+        return execute_python_script(expression)
+
+    exp = lines[0]
     r = ""
     if exp:
         try:
-            console.print("eval: " + exp, style="yellow")
-            r = eval(exp)
+            console.print("eval: " + exp, style="yellow")           
+            r = evaluate_multiline_expression(exp)
             console.print("result: " + str(r), style="yellow")
         except Exception as e:
             r = "ERROR: " + str(e)
@@ -203,7 +223,6 @@ def retrieve_headlines(source: str) -> ArticleList:
         return retrieve_bbc_most_read()
     except Exception as e:
         return ErrorInfo(error=True, type=e.__class__.__name__, message=str(e), url=source)
-
 
 
 def retrieve_article(url: str) -> str:
@@ -852,6 +871,18 @@ def retrieve_cached_headlines():
     return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage})
 
 
+def test_eval_multiline():
+    s = "10 - (7 * .52 + 4 * .47)"
+    print(evaluate_multiline_expression(s))
+    s = "apple_price_last_year = 0.26 / 1.10; orange_price_last_year = 0.79 / 1.10; apple_price_today = apple_price_last_year * 1.10; orange_price_today = orange_price_last_year * 1.10; total_cost_apples = 12 * apple_price_today; total_cost_oranges = 7 * orange_price_today; total_cost = total_cost_apples + total_cost_oranges; change = 10 - total_cost; change"
+    # test imports
+    print(evaluate_multiline_expression(s))
+    s = "import math; 2 * math.pi * 3 ** 2"
+    print(evaluate_multiline_expression(s))
+    s = "from datetime import date; (date.today() - date(1969, 7, 20)).days"
+    print(evaluate_multiline_expression(s))
+
+
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
     # get_bnnbloomberg_quote("JNK:UN")
@@ -877,6 +908,7 @@ if __name__ == "__main__":
     items = retrieve_bbc_most_read()
     # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
     print_most_read_table(items)
+    # test_eval_multiline()
 
     # items = retrieve_wsj_home_page()
     # print_most_read_table(items)

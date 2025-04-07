@@ -186,6 +186,11 @@ def extract_code_block(contents: str, sep: str) -> CodeBlock:
     return code
 
 
+def execute_python_script(code: str) -> str:
+    r = execute_script(CodeBlock("python", code.splitlines()))
+    return r if r else "WARNING: script executed successfully but there was no output. include a print statement"
+
+
 def execute_script(code: CodeBlock):
     output = None
     err = None

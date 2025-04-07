@@ -24,7 +24,7 @@ from rich.markdown import Markdown
 from rich.pretty import pprint
 
 import ftutils
-from chatutils import execute_script, extract_code_block, input_multi_line, make_fullpath, save_content
+from chatutils import execute_script, execute_python_script, extract_code_block, input_multi_line, make_fullpath, save_content
 
 # setup app credentials https://cloud.google.com/docs/authentication/application-default-credentials#GAC
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/configure-safety-attributes
@@ -141,14 +141,12 @@ def evaluate_expression(input: str) -> str:
         >>> tool_eval("# Comment\n2 + 2")
         '4'
     """
-    # console.print('eval: ' + expression, style='yellow')
-    exp = ""
-    for line in input.splitlines():
-        s = line.strip()
-        if s and not s.startswith("#"):
-            exp = s
-            break
+    lines = input.splitlines()
+    # treat multiline as a script
+    if len(lines) > 1 or lines[0].startswith("import"):
+        return execute_python_script(input)
 
+    exp = lines[0]
     r = ""
     if exp:
         try:

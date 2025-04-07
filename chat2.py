@@ -35,27 +35,50 @@ from chatutils import (
 # pip install dataclasses-json
 # OpenAI Python library: https://github.com/openai/openai-python
 # togetherAI models https://docs.together.ai/docs/chat-models
-model_info = {
-    "gptm": {"name": "gpt-4o-mini", "provider": "openai"},
-    "gpt4o": {"name": "gpt-4o", "provider": "openai"},
-    "o1m": {"name": "o1-mini", "provider": "openai"},
-    "o3m": {"name": "o3-mini", "provider": "openai"},
-    "groq": {"name": "llama-3.3-70b-versatile", "provider": "groq"},
-    "groq-r1": {"name": "deepseek-r1-distill-llama-70b", "provider": "groq"},
-    # "qwen": {"name": "qwen-2.5-coder-32b", "provider": "groq"},
-    "qwenqwq": {"name": "qwen-qwq-32b", "provider": "groq"},
-    "llama": {"name": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "provider": "togetherai"},
-    "llama-big": {"name": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", "provider": "togetherai"},
-    "ds": {"name": "deepseek-ai/DeepSeek-V3", "provider": "togetherai"},
-    "qwen72": {"name": "Qwen/Qwen2.5-72B-Instruct-Turbo", "provider": "togetherai"},
-    "samba": {"name": "Meta-Llama-3.3-70B-Instruct", "provider": "sambanova"},
-    #    'samba-r1': {'name': 'DeepSeek-R1', 'provider': 'sambanova'}, not avail on API
-    "ollama": {"name": "llama3.1:8b-instruct-q5_K_M", "provider": "ollama"},
-}
+def get_model_info():
+    """Parse the model info CSV into a dictionary using dict comprehension."""
+    data = """
+# key name provider
+gptm gpt-4o-mini openai
+gpt4o gpt-4o openai
+gpt45 gpt-4.5-preview openai
+# o1m o1-mini openai
+o3m o3-mini openai
+groq llama-3.3-70b-versatile groq
+llm4 meta-llama/llama-4-scout-17b-16e-instruct groq
+groq-r1 deepseek-r1-distill-llama-70b groq
+# qwen qwen-2.5-coder-32b groq
+qwq qwen-qwq-32b groq
+llama meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 togetherai
+llama-big meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo togetherai
+ds deepseek-ai/DeepSeek-V3 togetherai
+qwen Qwen/Qwen2.5-72B-Instruct-Turbo togetherai
+samba DeepSeek-V3-0324 sambanova
+samba-r1 DeepSeek-R1 sambanova
+llama3 Meta-Llama-3.3-70B-Instruct sambanova
+ollama llama3.1:8b-instruct-q5_K_M ollama
+"""
+
+    def filter_valid_lines(s):
+        for line in s.splitlines():
+            x = line.strip()
+            if x and not x.startswith('#'):
+                yield x
+
+    def map_to_values(lines):
+        for line in lines:
+            parts = line.split(maxsplit=2)
+            if len(parts) == 3:
+                yield parts
+
+    lines = filter_valid_lines(data)
+    values = map_to_values(lines)
+    return {key: {'name': name, 'provider': provider} for key, name, provider in values}
 
 
 FNAME = "chat-log.json"
 console = Console()
+model_info = get_model_info()
 code1 = None
 role_to_color = {"system": "red", "user": "green", "assistant": "cyan", "tool": "yellow"}
 FNCALL_SYSMSG = """
@@ -141,14 +164,12 @@ class Usage:
 
 class LLM:
 
-
     def __init__(self, llm_name: str, use_tool: bool = False):
         # o1 model does not support tool use or temperature
         self.llm_name = llm_name
-        self.model = model_info.get(llm_name, "local")
+        self.model = model_info.get(llm_name, "local") # the default wont work
         self.client = self.create_client(llm_name)
         self.use_tool = use_tool
-        self.supportsTemp = False if llm_name.startswith("o") else True
 
     def __str__(self):
         return f"{self.model} {self.llm_name} tool use = {self.use_tool}"
@@ -169,20 +190,25 @@ class LLM:
         return OpenAI(api_key="dummy", base_url="http://localhost:1234/v1")
 
     def chat(self, messages):
+        nm = self.model["name"]
+        s = nm.lower()
+        is_reasoning = s == "o3-mini" or "r1" in s or "qwq" in s
+        supportsTemp = nm != "o3-mini"
+
+        args = {
+            "model": nm,
+            "messages": [asdict(m) for m in messages],
+            "max_completion_tokens": 16000 if is_reasoning else 4096
+        }
+
         if self.use_tool:
-            fn_definitions = [v["defn"] for v in ftutils_functions().values()]
-            # console.print(f"registering functions {ftutils_functions().keys()}")
-            return self.client.chat.completions.create(
-                model=self.model["name"],
-                messages=[asdict(m) for m in messages],
-                tools=fn_definitions,
-                temperature=0.2,
-                # model=self.model, messages=[asdict(m) for m in messages], tools=get_function_definitions(), temperature=0.2
-            )
-        elif self.supportsTemp:
-            return self.client.chat.completions.create(model=self.model["name"], messages=[asdict(m) for m in messages], temperature=0.7)
-        else:
-            return self.client.chat.completions.create(model=self.model["name"], messages=[asdict(m) for m in messages])
+            args["tools"] = [v["defn"] for v in ftutils_functions().values()]
+            if supportsTemp:
+                args["temperature"] = 0.2
+        elif supportsTemp:
+            args["temperature"] = 1
+
+        return self.client.chat.completions.create(**args)
 
     def toggle_tool_use(self) -> bool:
         self.use_tool = not self.use_tool
@@ -478,7 +504,7 @@ def process_commands(client: LLM, cmd: str, inp: str, messages: list[ChatMessage
 def system_message():
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
-    return f"you are Marvin a super intelligent AI assistant. You use logic and reasoning.  current datetime is {tm}"
+    return f"you are Marvin a super intelligent AI assistant. You provide accurate information. If you are unsure or don't have the correct information say so. The current datetime is {tm}."
 
 
 def chat(llm_name, use_tool):
@@ -606,7 +632,7 @@ if __name__ == "__main__":
         "llm",
         choices=list(model_info.keys()),
         type=str,
-        help="LLM to use [local|ollama|gptm|gpt4o|o3m|llama|llama-big|qwen|ds|groq|groq-r1]",
+        help="LLM to use [local|ollama|gptm|gpt4o|gpt45|o3m|llama|llama-big|qwen|ds|groq|groq-r1]",
     )
     parser.add_argument("tool_use", type=str, nargs="?", default="", help="add tool to enable tool calls")
 
