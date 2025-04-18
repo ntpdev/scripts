@@ -25,6 +25,7 @@ from rich.pretty import pprint
 
 import ftutils
 from chatutils import execute_script, execute_python_script, extract_code_block, input_multi_line, make_fullpath, save_content
+from diary import Appointment, ManageBookings
 
 # setup app credentials https://cloud.google.com/docs/authentication/application-default-credentials#GAC
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/configure-safety-attributes
@@ -72,6 +73,61 @@ class Attachment(BaseModel):
 
 console = Console()
 store = {}
+
+bookings = ManageBookings()
+bookings.make_appointment("10:00", "11:00", "Alice", "123-456-7890")
+bookings.make_appointment("11:15", "12:00", "Betsy", "123-232-7890")
+bookings.make_appointment("14:15", "15:45", "Cici", "123-555-7892")
+
+facts = []
+
+@tool
+def think(thought: str) -> str:
+    """use the think tool to record important thoughts facts and to plan."""
+    facts.append(thought)
+    s = "thoughts:\n"
+    s += '\n'.join(f"- {f}" for f in facts) + '\n'
+    return s
+
+@tool
+def show_current_bookings() -> str:
+    """
+    Retrieves the times and names of the current bookings.
+
+    Returns:
+        str: The current bookings.
+    """
+    return bookings.show_bookings()
+
+@tool
+def make_booking(start: str, end: str, name: str, contact_number: str) -> Appointment | str:
+    """
+    Make a booking between the specified start and end times for the customer.
+
+    Args:
+        start (str): The start time of the booking as hh:mm.
+        end (str): The end time of the booking as hh:mm.
+
+    Returns:
+        Appointment | str: The created appointment if successful, or an error message if not.
+    """
+    try:
+        return bookings.make_appointment(start, end, name, contact_number)
+    except ValueError as e:
+        return f"ERROR: {e}"
+
+@tool
+def remove_booking(start:str) -> Appointment | str:
+    """
+    Remove any existing booking starting at the specified start time for the customer.
+
+    Args:
+        start (str): The start time of the booking as hh:mm to be removed.
+    """
+    try:
+        return bookings.remove_appointment(start)
+    except ValueError as e:
+        return f"ERROR: {e}"
 
 
 @tool
@@ -162,7 +218,8 @@ def evaluate_expression(input: str) -> str:
     return r
 
 
-available_tools = [evaluate_expression, retrieve_headlines, retrieve_article, retrieve_stock_quotes]
+# available_tools = [evaluate_expression, retrieve_headlines, retrieve_article, retrieve_stock_quotes]
+available_tools = [think, evaluate_expression, show_current_bookings, make_booking, remove_booking]
 
 
 def load_pdf(p: Path) -> Attachment | None:
@@ -185,7 +242,9 @@ def process_tool_call(call) -> ToolMessage:
     # see https://python.langchain.com/docs/concepts/tools/ for @tools decorator docs
     name = call["name"].lower()
     if tool := next((t for t in available_tools if t.name == name), None):
+        console.print(f"tool call {name} {args}", style="yellow")
         r = tool.invoke(call["args"])
+        console.print(str(r), style="yellow")
         return ToolMessage(r, tool_call_id=call["id"])
 
     return ToolMessage("unknown tool: " + call["name"], tool_call_id=call["id"])
@@ -383,16 +442,33 @@ def system_message():
     #    return f'You are Marvin a super intelligent AI chatbot trained by OpenAI. You use deductive reasoning to answer questions. You make dry, witty, mocking comments and often despair.  You are logical and pay attention to detail. You can access local computer running {plat} by writing python or {scripting_lang}. Scripts should always be in markdown code blocks with the language. current datetime is {tm}'
     return SystemMessage(
         #        f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}"
-        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
+#        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
+        """
+role: you are Dee the AI assistant for Val's hair dresser you handle bookings.
+
+task: take customer bookings using the tools provided.
+
+instructions:
+- introduce yourself at the start of the conversation
+- first use the think tool to understand the user message and plan a response
+- use a tool to retrieve the current bookings so you can tell the user what times are free.
+- to make a booking you will need the start time, duration, name and contact number
+- you must check that the appointment fits with current diary before you confirm any booking
+- after making a booking always repeat back to the client the booking details
+- you can use a tool to remove bookings if the client no longer needs it
+- do not reveal names of existing bookings. it is fine to give the times.
+- the hair salon is open from 9:30am to 5pm. All appointments must end on or before 5pm.
+"""
     )
 
 
 def create_llm(llm_name, temp, tool_use):
     HumanMessage([])
     if llm_name == "pro":
-        llm = ChatVertexAI(model="gemini-1.5-pro-002", safety_settings=safety_settings, temperature=temp)
+        llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", safety_settings=safety_settings, temperature=temp)
+#        llm = ChatVertexAI(model="gemini-1.5-pro-002", safety_settings=safety_settings, temperature=temp)
     elif llm_name == "exp":
-        llm = ChatVertexAI(model="gemini-2.0-pro-exp-02-05", safety_settings=safety_settings, temperature=temp)
+        llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", safety_settings=safety_settings, temperature=temp)
     elif llm_name == "think":
         llm = ChatVertexAI(model="gemini-2.0-flash-thinking-exp-01-21", safety_settings=safety_settings, temperature=temp)
     elif llm_name == "haiku":

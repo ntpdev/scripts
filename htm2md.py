@@ -1,4 +1,5 @@
-import requests
+# import requests
+import httpx
 from bs4 import BeautifulSoup, NavigableString, Comment
 from playwright.sync_api import sync_playwright
 import re
@@ -17,24 +18,76 @@ class anchor_tag:
     href: str
 
 
+# cookies from a bloomberg request
+ck = """
+exp_pref=UK; country_code=GB; _pxhd=hybJB-QwokZf4leNclckCnRVuIpFClaKV1llOjmL0jtP37YQSo3OvB3LQomq-H5WHuzFBOtLOYP6-94lFNOnYA==:xcFLr9qTPJw8sGEzPYHXuJc/hPFuxaP3C/CQ9l6KTqWEzP/bEwlbm11lGlIPx9iZG7/zyzfnN5LXSk2J/ImKNFYpsCly7dMgTOUK5jxixZY=; session_id=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; _session_id_backup=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; agent_id=7b759df2-41ab-48f2-8d18-e8f4c830e74f; session_key=05e93f9def0810c2a5f8f184dab9e72b2a664249; _reg-csrf-token=vUgp4QCG-ZhI6oKN1fp1d1IRVQcaDZdJojN8; _reg-csrf=s%3A_t_6ZTpMq4aJfacc4id6cG6T.N3kayACM%2BeU1su9PG3W38wIn0F5hjdkbfPezAkk%2Beck; _sp_krux=true; gatehouse_id=39936fa4-25a4-4ca0-b34b-6b0745e9aaaa; geo_info=%7B%22countryCode%22%3A%22GB%22%2C%22country%22%3A%22GB%22%2C%22field_n%22%3A%22hf%22%2C%22trackingRegion%22%3A%22Europe%22%2C%22cacheExpiredTime%22%3A1743438724334%2C%22region%22%3A%22Europe%22%2C%22fieldN%22%3A%22hf%22%7D%7C1743438724334; geo_info={%22country%22:%22GB%22%2C%22region%22:%22Europe%22%2C%22fieldN%22:%22hf%22}|1743438723668; consentUUID=44d6a9b5-52bd-46da-8b60-dacd569ab812_42; consentDate=2025-03-24T16:32:09.533Z; bbgconsentstring=req1fun1pad1; bdfpc=004.2124236125.1742833928898; _ga_GQ1PBLXZCT=GS1.1.1743025085.3.1.1743025481.0.0.0; _ga=GA1.1.2038307183.1742833929; _gcl_au=1.1.465814927.1742833929; usnatUUID=5e7f4c49-db91-48fa-95bc-fbd68e8b7c26; pxcts=890d621c-08cd-11f0-9cbe-2c6d2c51ccd5; _pxvid=840a3f28-08cd-11f0-a082-8df59c8c78b6; _user-data=%7B%22status%22%3A%22anonymous%22%7D; _last-refresh=2025-3-26%2021%3A38; _pxde=e0adf1db95f603de3ae8f5ccb5a02c822502d8210417fd7f4170bce2642f3ea3:eyJ0aW1lc3RhbXAiOjE3NDMwMjUzMjgxNDIsImZfa2IiOjAsImlwY19pZCI6W119; _px2=eyJ1IjoiOTlmOGY2NDAtMGE4YS0xMWYwLWFhZWItYTcwMjM0ZjFmN2U4IiwidiI6Ijg0MGEzZjI4LTA4Y2QtMTFmMC1hMDgyLThkZjU5YzhjNzhiNiIsInQiOjE3NDMwMjU2MjgxNDIsImgiOiIyOWQwNzNmMDU4NThlMjA1ZGUwNTllYTYxYjdmODIxYzQ1NTc1Mzg4ODFmMDNjMjQyMTJkOThhMWMwNzUxMTliIn0=
+"""
+# Configure the request
+bloomberg_uk = "https://www.bloomberg.com/uk"
+headers = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "en-UK,en;q=0.5",
+    "Connection": "keep-alive",
+    "Cookie": ck,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+}
+
+def test_get():
+    try:
+        # Make the HTTP/2 GET request
+        with httpx.Client(http2=True) as client:
+            response = client.get(bloomberg_uk, headers=headers)
+            response.raise_for_status()
+
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(response.text, 'html.parser')
+            save_soup(soup, Path.home() / "Downloads" / "bloom-uk.html")
+            test_parse(soup)
+
+    except httpx.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+    except ImportError as import_err:
+        print(f"Import error: {import_err}")
+    except Exception as err:
+        print(f"An error occurred: {err}")
+
+
 def test():
     # open file c://test/z.htm
     # load into BeautifulSoup
-    # find all h3 tags and print content
+    # find headline divs and then walk DOM to get href and optional subhead
     try:
-        with open('c://temp/z.htm', 'r', encoding='utf-8') as file:
-            content = file.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
-        section = soup.find_all('div', {'data-layout-type': 'most-popular-news'})
-        # find all h3 tags and print content
-        h3_tags = section[0].find_all('h3')
-        for h3 in h3_tags:
-            text = h3.get_text(strip=True) 
-            link = h3.find('a')['href']
-            print(f"{text} - {link}")
+        soup = load_soup(Path.home() / "Downloads" / "bloom-uk.html")
+        test_parse(soup)
     except Exception as e:
         console.print(f"Error reading or parsing the file: {e}", style='red')
+
+def test_parse(soup):
+    section = soup.find('section', {'data-zoneid': 'Above the Fold'})
+    headlines = section.find_all('div', {'data-testid': 'headline'})
+    for div in headlines:
+        text = div.get_text(strip=True)
+        href = get_parent_prop(div, "a", "href")
+        summary = find_sibling_with_component(div, "data-component", "summary")
+        if href:
+            console.print(f"{text} {summary}\n[yellow]{href}[/yellow]")
+
+def get_parent_prop(element, tagname, attr):
+    """Traverse up the DOM tree to find the nearest parent <a> tag and return its href."""
+    elem = element
+    while (elem := elem.parent) is not None:
+        if elem.name == tagname and elem.has_attr(attr):
+            return elem[attr]
+    return None
+
+def find_sibling_with_component(element, prop, component_value):
+    """Find the nearest sibling element with the specified data-component attribute."""
+    sibling = element
+    while (sibling := sibling.find_next_sibling()) is not None:
+        if sibling.has_attr(prop) and sibling[prop] == component_value:
+            return sibling.get_text(strip=True)
+    return None
 
 def get_bnnbloomberg_quote(symbol: str) -> dict:
     """
@@ -145,9 +198,10 @@ def html_to_markdown(url=None, html_content=None, soup=None, href_base=None):
     # Initialize BeautifulSoup
     if url:
         try:
-            response = requests.get(url)
-            response.raise_for_status()  # Raise exception for HTTP errors
-            soup = BeautifulSoup(response.content, 'html.parser')
+            with httpx.Client(http2=True) as client:
+                response = client.get(url, headers=headers)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.content, 'html.parser')
         except Exception as e:
             raise RuntimeError(f"Failed to fetch URL: {str(e)}")
     elif html_content:
@@ -469,7 +523,8 @@ def print_markdown(fname: Path):
 
 if __name__ == "__main__":
     # main2()
-    soup = get_html_playwright('https://www-bloomberg-com.translate.goog/uk?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true')
+    test_get()
+    # soup = get_html_playwright('https://www-bloomberg-com.translate.goog/uk?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true')
     #  #find time tags with a datetime attribute.
     # if headline := soup.find(id="main-heading"):
     #     console.print(f"title: {headline.text}")

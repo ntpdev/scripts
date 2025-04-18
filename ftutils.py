@@ -117,64 +117,38 @@ retrieve_stock_quotes_fn = {
 }
 
 evaluate_expression_fn = {
-            "type": "function",
-            "function": {
-                "name": "evaluate_expression",
-                "description":     """
-    Evaluates a mathematical or Python expression provided as a string.
-
-    This function evaluates a single-line Python expression, which can include mathematical
-    operations, functions and constants from standard Python modules like `math` or
-    `datetime`.
-
-    Args:
-        input (str): A string containing the expression to evaluate. If multiple lines are
-                     provided, the first non-empty, non-comment line is evaluated.
-
-    Returns:
-        str: The result of the evaluation as a string. If the evaluation is successful,
-             the result is returned as a string. If an error occurs, an error message
-             prefixed with 'ERROR:' is returned.
-
-    Examples:
-        >>> tool_eval("2 + 2 * 3")
-        '8'
-        >>> tool_eval("math.sqrt(5)")
-        '2.23606797749979'
-        >>> tool_eval("datetime.now().year")
-        '2025'
-        >>> tool_eval("1 / 0")
-        'ERROR: division by zero'
-        >>> tool_eval("# Comment\n2 + 2")
-        '4'
-    """,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "expression": {
-                            "type": "string",
-                            "description": "The mathematical expression to be evaluated. You can use python class math, datetime, date, time without import",
-                        }
-                    },
-                    "required": ["expression"],
-                },
+    "type": "function",
+    "function": {
+        "name": "evaluate_expression",
+        "description": "Evaluates a mathematical or Python expression provided as a string. Types and constants from standard python libraries like math and datetime are available.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "The expression to be evaluated.",
+                }
             },
-        }
+            "required": ["expression"],
+        },
+    },
+}
 
 
-def evaluate_multiline_expression(expression):
+def evaluate_expression_impl(expression: str) -> Any | None:
     # Split into individual parts and remove whitespace
-    parts = [p.strip() for p in expression.split(';') if p.strip()]
+    parts = [p.strip() for p in re.split(r'[;\n]', expression)]
     if not parts:
         return None  # Empty input
     
-    # Separate assignment statements from final expression
+    parts = ["import math", "import datetime"] + parts
+    # Separate final expression
     *statements, last_part = parts
     
     # Create a namespace dictionary to store variables
     namespace = {}
     
-    # Execute all assignment statements
+    # Execute all statements updating the namespace as necessary
     if statements:
         exec('\n'.join(statements), namespace)
     
@@ -183,25 +157,19 @@ def evaluate_multiline_expression(expression):
 
 
 def evaluate_expression(expression: str) -> str:
-    lines = expression.splitlines()
-    # treat multiline as a script and run
-    if len(lines) > 1:
-        return execute_python_script(expression)
-
-    exp = lines[0]
-    r = ""
-    if exp:
+    result = ""
+    if expression:
         try:
-            console.print("eval: " + exp, style="yellow")           
-            r = evaluate_multiline_expression(exp)
-            console.print("result: " + str(r), style="yellow")
+            console.print("eval: " + expression, style="yellow")           
+            result = evaluate_expression_impl(expression)
+            console.print("result: " + str(result), style="yellow")
         except Exception as e:
-            r = "ERROR: " + str(e)
-            console.print(r, style="red")
+            result = "ERROR: " + str(e)
+            console.print(result, style="red")
     else:
-        r = "ERROR: no expression found"
-        console.print(r, style="red")
-    return str(r)
+        result = "ERROR: no expression found"
+        console.print(result, style="red")
+    return str(result)
 
 
 def retrieve_headlines(source: str) -> ArticleList:
@@ -871,16 +839,20 @@ def retrieve_cached_headlines():
     return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage})
 
 
-def test_eval_multiline():
+def test_eval():
     s = "10 - (7 * .52 + 4 * .47)"
-    print(evaluate_multiline_expression(s))
+    print(evaluate_expression(s))
+    print(evaluate_expression("'strawberry'.count('r')"))
     s = "apple_price_last_year = 0.26 / 1.10; orange_price_last_year = 0.79 / 1.10; apple_price_today = apple_price_last_year * 1.10; orange_price_today = orange_price_last_year * 1.10; total_cost_apples = 12 * apple_price_today; total_cost_oranges = 7 * orange_price_today; total_cost = total_cost_apples + total_cost_oranges; change = 10 - total_cost; change"
+    print(evaluate_expression(s))
+    s = "apple_price_last_year = 0.26 / 1.10\norange_price_last_year = 0.79 / 1.10\napple_price_today = apple_price_last_year * 1.10\norange_price_today = orange_price_last_year * 1.10\ntotal_cost_apples = 12 * apple_price_today\ntotal_cost_oranges = 7 * orange_price_today\ntotal_cost = total_cost_apples + total_cost_oranges\nchange = 10 - total_cost\nround(change,2)"
+    print(evaluate_expression(s))
     # test imports
-    print(evaluate_multiline_expression(s))
-    s = "import math; 2 * math.pi * 3 ** 2"
-    print(evaluate_multiline_expression(s))
-    s = "from datetime import date; (date.today() - date(1969, 7, 20)).days"
-    print(evaluate_multiline_expression(s))
+    s = "import sympy; x = sympy.symbols('x'); expr= x**2 - 2*x - 3; sympy.solve(expr, x)"
+    print(evaluate_expression(s))
+    print(evaluate_expression("(datetime.date.today() - datetime.date(1969, 7, 20)).days"))
+    # test error handling
+    print(evaluate_expression("x = 3; y = 2; y / (x - 3)"))
 
 
 if __name__ == "__main__":
@@ -908,7 +880,7 @@ if __name__ == "__main__":
     items = retrieve_bbc_most_read()
     # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
     print_most_read_table(items)
-    # test_eval_multiline()
+    test_eval()
 
     # items = retrieve_wsj_home_page()
     # print_most_read_table(items)

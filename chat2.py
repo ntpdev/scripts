@@ -39,13 +39,12 @@ def get_model_info():
     """Parse the model info CSV into a dictionary using dict comprehension."""
     data = """
 # key name provider
-gptm gpt-4o-mini openai
-gpt4o gpt-4o openai
+gptm gpt-4.1-mini openai
+gpt4 gpt-4.1 openai
 gpt45 gpt-4.5-preview openai
-# o1m o1-mini openai
-o3m o3-mini openai
+o4m o4-mini openai
 groq llama-3.3-70b-versatile groq
-llm4 meta-llama/llama-4-scout-17b-16e-instruct groq
+#llm4 meta-llama/llama-4-scout-17b-16e-instruct groq
 groq-r1 deepseek-r1-distill-llama-70b groq
 # qwen qwen-2.5-coder-32b groq
 qwq qwen-qwq-32b groq
@@ -55,6 +54,7 @@ ds deepseek-ai/DeepSeek-V3 togetherai
 qwen Qwen/Qwen2.5-72B-Instruct-Turbo togetherai
 samba DeepSeek-V3-0324 sambanova
 samba-r1 DeepSeek-R1 sambanova
+llama4 Llama-4-Maverick-17B-128E-Instruct sambanova
 llama3 Meta-Llama-3.3-70B-Instruct sambanova
 ollama llama3.1:8b-instruct-q5_K_M ollama
 """
@@ -80,7 +80,7 @@ FNAME = "chat-log.json"
 console = Console()
 model_info = get_model_info()
 code1 = None
-role_to_color = {"system": "red", "user": "green", "assistant": "cyan", "tool": "yellow"}
+role_to_color = {"system": "red", "developer": "red", "user": "green", "assistant": "cyan", "tool": "yellow"}
 FNCALL_SYSMSG = """
 
 You are Marvin, an AI chatbot trained by OpenAI. You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. Here are the available tools: 
@@ -296,7 +296,9 @@ def load_template(s: str) -> ChatMessage:
 {input}
 
 **instructions:**
-you answer should contextualize and disambiguate the question
+1. first contextualize and disambiguate the question. if necessary ask questions to further clarify.
+2. write out your thoughts in a **thinking:** section
+3. write a detailed answer with supporting evidence and facts in an **answer:** section
 """
     return ChatMessage("user", s.replace("{input}", xs[1]))
 
@@ -632,7 +634,7 @@ if __name__ == "__main__":
         "llm",
         choices=list(model_info.keys()),
         type=str,
-        help="LLM to use [local|ollama|gptm|gpt4o|gpt45|o3m|llama|llama-big|qwen|ds|groq|groq-r1]",
+        help="LLM to use [local|ollama|gptm|gpt4|gpt45|o4m|llama|llama-big|qwen|ds|groq|groq-r1]",
     )
     parser.add_argument("tool_use", type=str, nargs="?", default="", help="add tool to enable tool calls")
 
