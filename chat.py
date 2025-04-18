@@ -5,18 +5,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import chatutils as cu
 from openai import OpenAI
 from pydantic import BaseModel, Field, SerializeAsAny, field_validator
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
 
+import chatutils as cu
+
 # examples using OpenAI responses API
 console = Console()
 client = OpenAI()
 
 # types for message construction
+
 
 class InputItem(BaseModel):
     type: str
@@ -82,12 +84,15 @@ class FunctionCallOutput(BaseModel):
     call_id: str
     output: str
 
+
 class ReasoningItem(BaseModel):
     id: str
     summary: list
     type: str
 
+
 # helper functions for message construction
+
 
 def user_message(*items: InputItem) -> Message:
     return Message(role="user", content=list(items))
@@ -97,11 +102,14 @@ def assistant_message(response) -> Message:
     r, s, t = extract_text_content(response)
     return Message(role=r, content=[InputText(type=t, text=s)])
 
+
 def function_call(tool_call) -> FunctionCall:
     return FunctionCall(type=tool_call.type, id=tool_call.id, call_id=tool_call.call_id, name=tool_call.name, arguments=tool_call.arguments)
 
+
 def function_call_output(tool_call, result) -> FunctionCallOutput:
     return FunctionCallOutput(call_id=tool_call.call_id, output=str(result))
+
 
 def reasoning_item(item) -> ReasoningItem:
     return ReasoningItem(id=item.id, summary=item.summary, type=item.type)
@@ -111,7 +119,9 @@ class Answer(BaseModel):
     number: int = Field(description="question number")
     choice: str = Field(description="the single word choice")
 
+
 # structure output models
+
 
 class AnswerSheet(BaseModel):
     answers: list[Answer] = Field(description="the list of answers")
@@ -233,7 +243,7 @@ class LLM:
             response = client.responses.create(**args)
             self.usage.update(response.usage)
             max_tool_calls -= 1
-        
+
         if max_tool_calls == 0:
             console.print("tool call limit exceeded", style="red")
 
@@ -254,7 +264,15 @@ execute_script_fn = {
     "type": "function",
     "name": "execute_script",
     "description": "Use this tool to execute PowerShell commands on the local computer. PowerShell version 7.4",
-    "parameters": {"type": "object", "required": ["language", "script_lines"], "properties": {"language":{"type": "string", "enum": ["PowerShell", "Python"] , "description": "the name of the scripting language either PowerShell or Python"} , "script_lines": {"type": "array", "description": "The list of lines", "items":{ "type": "string", "description":"a line"} }}, "additionalProperties": False},
+    "parameters": {
+        "type": "object",
+        "required": ["language", "script_lines"],
+        "properties": {
+            "language": {"type": "string", "enum": ["PowerShell", "Python"], "description": "the name of the scripting language either PowerShell or Python"},
+            "script_lines": {"type": "array", "description": "The list of lines", "items": {"type": "string", "description": "a line"}},
+        },
+        "additionalProperties": False,
+    },
     "strict": True,
 }
 
@@ -612,9 +630,11 @@ def test_file_inputs():
     response = llm.create(history, msg)
     print_response(response)
 
+
 def execute_script(language: str, script_lines: list[str]) -> Any:
     code = cu.CodeBlock(language.lower(), script_lines)
     return cu.execute_script(code)
+
 
 def evaluate_expression_impl(expression: str) -> Any | None:
     # Split into individual parts won't remove whitespace in order to support multiline scripts
@@ -680,10 +700,9 @@ def test_function_calling():
     response = llm.create(history, msg)
     print_response(response)
 
+
 def test_function_calling_python():
-    llm = LLM("gpt-4.1",
-               f"Use the eval tool to evaluate expressions. Use the execute_script tool to run scripts on the local computer. the current datetime is {datetime.now().isoformat()}",
-                 [eval_fn, execute_script_fn], True)
+    llm = LLM("gpt-4.1", f"Use the eval tool to evaluate expressions. Use the execute_script tool to run scripts on the local computer. the current datetime is {datetime.now().isoformat()}", [eval_fn, execute_script_fn], True)
     history = []
     msg = user_message(InputText(text="is 30907 prime. if not what are its prime factors"))
     print_message(msg)
@@ -698,9 +717,7 @@ def test_function_calling_python():
 
 
 def test_function_calling_powershell():
-    llm = LLM("o4-mini",
-               f"Use the eval tool to evaluate expressions. Use the execute_script tool to run scripts on the local computer. the current datetime is {datetime.now().isoformat()}",
-                 [eval_fn, execute_script_fn], True)
+    llm = LLM("o4-mini", f"Use the eval tool to evaluate expressions. Use the execute_script tool to run scripts on the local computer. the current datetime is {datetime.now().isoformat()}", [eval_fn, execute_script_fn], True)
     # llm = LLM("gpt-4.1-mini", "use the eval tool as needed", [eval_fn], True)
     history = []
 
