@@ -132,7 +132,7 @@ def save_and_execute_powershell(code: CodeBlock):
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=15,
         )
 
         if len(result.stdout) > 0:
