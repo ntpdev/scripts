@@ -19,7 +19,7 @@ dependencies = [
     "langchain-google-vertexai>=2.0.14",
     "langchain-openai>=0.3.7",
     "numpy>=2.2.3",
-    "openai>1.71",
+    "openai>=1.75.0",
     "pandas>=2.2.3",
     "plotly[express]>=6.0.0",
     "pydantic>2.11.2",

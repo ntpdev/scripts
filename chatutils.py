@@ -4,7 +4,6 @@ import os
 import platform
 from pathlib import Path
 import sys
-from typing import Optional
 from rich.console import Console
 from rich.markup import escape
 import subprocess
@@ -63,7 +62,7 @@ def get_python() -> Path:
         return Path(sys.executable)
 
 
-def find_last_file(dir: Path) -> tuple[Optional[Path], int]:
+def find_last_file(dir: Path) -> tuple[Path | None, int]:
     matching_files = [(x, int(x.stem[1:])) for x in dir.glob("z*.md") if x.stem[1:].isdigit()]
 
     if not matching_files:

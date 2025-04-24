@@ -8,6 +8,7 @@ import platform
 # import sympy # used by eval
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import requests
 import yaml
@@ -108,11 +109,13 @@ print(sqrt(x ** 2 + y ** 2))
 @dataclass
 class ChatMessage:
     role: str
-    content: str
+    content: str | None
 
     def __post_init__(self) -> None:
         if not self.role:
             raise ValueError("Role cannot be empty")
+        if not self.role in ["assistant", "developer", "system", "tool", "user"]:
+            raise ValueError(f"Invalid role {self.role}")
         # if not self.content:
         #     raise ValueError("Content cannot be empty")
 
@@ -140,6 +143,7 @@ class ChatToolMessageCall(ChatMessage):
         super().__init__("assistant", None)
         self.tool_calls = chat_completion.to_dict()["tool_calls"]
 
+MessageType = ChatMessage | ChatToolMessageCall | ChatToolMessageResponse
 
 @dataclass
 class Usage:
@@ -192,8 +196,8 @@ class LLM:
     def chat(self, messages):
         nm = self.model["name"]
         s = nm.lower()
-        is_reasoning = s == "o3-mini" or "r1" in s or "qwq" in s
-        supportsTemp = nm != "o3-mini"
+        is_reasoning = s in ["o4-mini", "DeepSeek-R1", "qwen-qwq-32b"]
+        supportsTemp = nm != "o4-mini"
 
         args = {
             "model": nm,
@@ -204,11 +208,10 @@ class LLM:
         if self.use_tool:
             args["tools"] = [v["defn"] for v in ftutils_functions().values()]
             if supportsTemp:
-                args["temperature"] = 0.2
-        elif supportsTemp:
-            args["temperature"] = 1
+                args["temperature"] = 0.6
 
         return self.client.chat.completions.create(**args)
+
 
     def toggle_tool_use(self) -> bool:
         self.use_tool = not self.use_tool
@@ -233,16 +236,21 @@ def is_toolcall(s: str) -> str:
     return None
 
 
-def prt(msg: ChatMessage):
+def prt(msg: ChatMessage, model: str = None):
     c = role_to_color[msg.role]
-    console.print(f"{msg.role}:\n", style=c)
+    if model:
+        console.print(f"{msg.role} ({model}):\n", style=c)
+    else:
+        console.print(f"{msg.role}:\n", style=c)
     md = Markdown(translate_latex(msg.content))
     console.print(md, style=c, width=80)
 
 
-def save(xs, filename):
-    with open(filename, "w") as f:
-        f.write(ChatMessage.schema().dumps(xs, many=True))
+def save(messages: list, filename: Path):
+    """Save a list of messages to a JSON file, preserving all fields."""
+    with filename.open("w", encoding="utf-8") as f:
+        # Convert each message to dict using its own to_dict() method
+        json.dump([msg.to_dict() for msg in messages], f)
 
 
 def load_msg(s: str) -> ChatMessage:
@@ -308,18 +316,16 @@ def load_template(s: str) -> ChatMessage:
 
 
 def load_log(s: str) -> list[ChatMessage]:
-    xs = s.split()
-    fname = make_fullpath(xs[1])
-
+    fname = make_fullpath(s)
     try:
-        with open(fname) as f:
+        with fname.open(encoding="utf-8") as f:
             data = json.load(f)
             all_msgs = ChatMessage.schema().load(data, many=True)
-            console.print(f"loaded from log {len(xs)} messages {len(all_msgs)}", style="red")
+            console.print(f"loaded from log {fname} messages {len(all_msgs)}", style="red")
             #            save_content(all_msgs[-1])
-            xs = all_msgs if len(all_msgs) < 20 else all_msgs[:3] + all_msgs[-20:]
-            prt_summary(xs)
-            return xs
+            msgs = all_msgs if len(all_msgs) < 20 else all_msgs[:3] + all_msgs[-20:]
+            prt_summary(msgs)
+            return msgs
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
     #       raise FileNotFoundError(f"Chat message file not found: {filename}")
@@ -378,7 +384,7 @@ def load(filename: str) -> list[ChatMessage]:
         return ChatMessage.schema().parse_raw(f.read())
 
 
-def process_tool_call(tool_call):
+def process_tool_call(tool_call) -> ChatToolMessageResponse:
     fnname = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
     console.print(f"tool call {fnname} {args}", style="yellow")
@@ -409,13 +415,11 @@ def check_and_process_tool_call(client, messages, response):
     # https://platform.openai.com/docs/guides/function-calling
     choice = response.choices[0]
     n = 5
-    while choice.finish_reason == "tool_calls" and n > 0:
+    while choice.finish_reason == "tool_calls" and n:
         n -= 1
         # append choice.message to message history
         messages.append(ChatToolMessageCall(choice.message))
         for tc in choice.message.tool_calls:
-            tcm = ChatToolMessageResponse(tc.function.name, tc.id, tc.function.arguments)
-            prt(tcm)
             tool_response = process_tool_call(tc)
             messages.append(tool_response)
         # reply to llm with tool responses
@@ -423,7 +427,7 @@ def check_and_process_tool_call(client, messages, response):
         choice = response.choices[0]
 
     if n == 0:
-        console.print("tool call limit exceeded", style="red")
+        console.print("consecutive tool call limit exceeded", style="red")
     return response
 
 
@@ -537,12 +541,15 @@ def chat(llm_name, use_tool):
             response = client.chat(messages)
             response = check_and_process_tool_call(client, messages, response)
             response = check_and_process_code_block(client, messages, response)
+            reason = response.choices[0].finish_reason
+            if reason != "stop":
+                console.print(f"chat completion finish_reason {reason}", style="red")
             # store original message from gpt
             m = response.choices[0].message
             if m.content:
                 msg = ChatMessage(m.role, m.content)
                 messages.append(msg)
-                prt(msg)
+                prt(msg, response.model)
 
             ru = response.usage
             tokens.update(ru.prompt_tokens, ru.completion_tokens)

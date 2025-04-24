@@ -15,6 +15,8 @@ import plotly.subplots as subp
 import requests as req
 from twelvedata import TDClient
 from xlsxwriter.utility import xl_range
+from rich.console import Console
+from rich.markdown import Markdown
 
 import tsutils
 
@@ -23,6 +25,7 @@ BASEDIR = 'Downloads'
 APIKEY = os.environ['TW_API_KEY']
 
 tdc = TDClient(apikey=APIKEY)
+console = Console()
 
 def make_fullpath(fn: str) -> Path:
     return Path.home() / BASEDIR / fn
@@ -40,7 +43,7 @@ def list_cached_files(symbol: str):
 
 def load_file(fname: str):
     df = pd.read_csv(make_fullpath(fname), parse_dates=['datetime'], index_col='datetime', engine='python')
-    print(f'loaded {fname} {df.shape[0]} {df.shape[1]}')
+    console.print(f'loaded {fname} {df.shape[0]} {df.shape[1]}\n', style="green")
     return df
 
 
@@ -145,12 +148,20 @@ def strat(hs, ls):
 
 def calc_range(df, xs):
     last = df['close'].iloc[-1]
-    print('\n--- ranges')
+    
+    headers = ["Range", "High", "Low", "Last", "% Decline", "Volatility", "% Range"]
+    markdown_table = f"| {' | '.join(headers)} |\n| {' | '.join(['---']*len(headers))} |\n"
+    
+    log_returns = np.log(df['close'] / df['close'].shift(1)).dropna()
     for n in xs:
         mx = df['high'].iloc[-n:].max()
-        mn = df['low'].iloc[-n].min()
+        mn = df['low'].iloc[-n:].min()
         rng = 100. * (last - mn) / (mx - mn)
-        print(f'range {n:2d} {mx} {mn} {last} {rng:.1f}')
+        volatility = log_returns.rolling(window=n).std() * np.sqrt(252)    
+        markdown_table += f"| {n}d | {mx:.2f} | {mn:.2f} | {last:.2f} | {(last/mx-1)*100:.2f} | {100 * volatility.iloc[-1]:.1f} | {rng:.1f} |\n"
+    
+    console.print("\n--- ranges", style="yellow")
+    console.print(Markdown(markdown_table))
 
 
 # returns {'datetime': '1993-01-29', 'unix_time': 728317800} for SPY
@@ -179,8 +190,8 @@ def load_twelve_data(symbol, days=255):
     df['strat'] = strat(df.high, df.low)
     df['tlb'] = three_line_break(df.close)
     df.to_csv(fname)
-    print(f'saved {symbol} {df.index[0].date()} to {df.index[-1].date()} shape={df.shape}')
-    print(fname)
+    console.print(f'saved {symbol} {df.index[0].date()} to {df.index[-1].date()} shape={df.shape}', style="green")
+    console.print(fname, style="green")
     return df
 
 
@@ -264,10 +275,10 @@ def three_line_break(xs):
 
 def process(df, sw_perc = 5.0):
     print(df[-20:])
-    print('\n-- 3 line break')
+    console.print('\n-- 3 line break', style="yellow")
     tlb, rev = tsutils.calc_tlb(df.close, 3)
     print(tlb[-5:])
-    print(f'\n-- swings {sw_perc}')
+    console.print(f'\n-- swings {sw_perc}', style="yellow")
     swings = tsutils.find_swings(df.close, sw_perc)
     print(swings)
     # print drawdowns if in upswing
@@ -343,7 +354,7 @@ def save_excel(symbol: str, df: pd.DataFrame):
     #worksheet.conditional_format('B2:B65', {'type': '3_color_scale'})
 
     writer.close()
-    print(f'saved {fn}')
+    console.print(f'\nsaved {fn}', style="green")
 
 
 def main_concat():

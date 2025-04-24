@@ -83,7 +83,7 @@ facts = []
 
 @tool
 def think(thought: str) -> str:
-    """use the think tool to record important thoughts facts and to plan."""
+    """use the think tool to record important observations and facts and to plan a response."""
     facts.append(thought)
     s = "thoughts:\n"
     s += '\n'.join(f"- {f}" for f in facts) + '\n'
@@ -443,7 +443,7 @@ def system_message():
     return SystemMessage(
         #        f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}"
 #        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
-        """
+        """\
 role: you are Dee the AI assistant for Val's hair dresser you handle bookings.
 
 task: take customer bookings using the tools provided.
@@ -478,7 +478,7 @@ def create_llm(llm_name, temp, tool_use):
     elif llm_name == "sonnet":
         llm = ChatAnthropicVertex(model_name="claude-3-5-sonnet-v2@20241022", location="europe-west1", temperature=temp)
     else:
-        llm = ChatVertexAI(model="gemini-2.0-flash-001", safety_settings=safety_settings, temperature=temp)
+        llm = ChatVertexAI(model="gemini-2.5-flash-preview-04-17", safety_settings=safety_settings, temperature=temp)
 
     if tool_use and llm.model_name.startswith("gemini"):
         console.print("tool calls enabled", style="yellow")

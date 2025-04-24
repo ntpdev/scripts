@@ -26,11 +26,16 @@ client = OpenAI()
 
 
 class InputItem(BaseModel):
-    type: str
+    type: Literal["input_text", "output_text", "input_image", "input_file"]
 
 
 class InputText(InputItem):
-    type: Literal["input_text", "output_text"] = "input_text"
+    type: Literal["input_text"] = "input_text"
+    text: str
+
+
+class OutputText(InputItem):
+    type: Literal["output_text"] = "output_text"
     text: str
 
 
@@ -40,7 +45,7 @@ class InputImage(InputItem):
 
     @field_validator("image_url", mode="before")
     @classmethod
-    def validate_image_url(cls, v):
+    def validate_image_url(cls, v: Any) -> str:
         if isinstance(v, Path):
             ext = v.suffix.lower().lstrip(".")
             fmt = "jpeg" if ext == "jpg" else ext
@@ -58,7 +63,7 @@ class InputFile(InputItem):
 
     @field_validator("file_id", mode="before")
     @classmethod
-    def validate_file_id(cls, v):
+    def validate_file_id(cls, v: Any) -> str:
         if isinstance(v, Path):
             xs = client.files.list(purpose="user_data")
             file = next((e for e in xs if e.filename == v.name), None)
@@ -73,7 +78,7 @@ class InputFile(InputItem):
 
 
 class Message(BaseModel):
-    role: Literal["user", "assistant"]
+    role: Literal["assistant", "system", "user"]
     content: list[SerializeAsAny[InputItem]]
 
 
@@ -104,9 +109,18 @@ def user_message(*items: str | InputItem) -> Message:
     return Message(role="user", content=[InputText(text=item) if isinstance(item, str) else item for item in items])
 
 
+def system_message(*items: str | InputItem) -> Message:
+    return Message(role="system", content=[InputText(text=item) if isinstance(item, str) else item for item in items])
+
+
 def assistant_message(response) -> Message:
     r, s, t = extract_text_content(response)
-    return Message(role=r, content=[InputText(type=t, text=s)])
+    return Message(role=r, content=[OutputText(type=t, text=s)])
+
+
+def new_conversation(text: str) -> list:
+    text += f"\nthe current date is {datetime.now().isoformat()}"
+    return [system_message(text)]
 
 
 def function_call(tool_call) -> FunctionCall:
@@ -123,7 +137,7 @@ def reasoning_item(item) -> ReasoningItem:
 
 class Answer(BaseModel):
     number: int = Field(description="question number")
-    choice: str = Field(description="the single word choice")
+    choice: str = Field(description="the single word answer")
 
 
 # structured output models
@@ -139,14 +153,14 @@ class AnswerSheet(BaseModel):
 
 class Marked(BaseModel):
     number: int = Field(description="question number")
-    answer: str = Field(description="given choice")
+    answer: str = Field(description="given answer")
     expected: str = Field(description="correct answer")
     feedback: str = Field(description="explanation for incorrect answers")
     is_correct: bool = Field(description="True if correct")
 
 
 class MarkSheet(BaseModel):
-    answers: list[Marked] = Field(description="list of marked questions")
+    answers: list[Marked] = Field(description="list of marked answers")
     correct: int = Field(description="count of correct answers")
 
     def to_yaml(self) -> str:
@@ -198,7 +212,7 @@ class LLM:
         max_tool_calls = 9
         while max_tool_calls and any(e.type == "function_call" for e in response.output):
             process_function_calls(history, response)
-            console.print("returning function call results", style="yellow")
+            console.print(f"{max_tool_calls}: returning function call results", style="yellow")
             args["input"] = [e.model_dump() for e in history]
             response = client.responses.create(**args)
             self.usage.update(response.usage)
@@ -216,7 +230,7 @@ class LLM:
 eval_fn = {
     "type": "function",
     "name": "eval",
-    "description": "Use this tool to evaluate mathematical or Python expressions. Functions from the standard Python 3.12 library can be used.",
+    "description": "Use this tool to evaluate mathematical and Python expressions. Functions from the standard Python 3.12 library can be used.",
     "parameters": {
         "type": "object",
         "required": ["expression"],
@@ -243,12 +257,45 @@ execute_script_fn = {
 }
 
 
+create_tasklist_fn = {
+    "type": "function",
+    "name": "create_tasklist",
+    "description": "Use this tool to create to an initial list of tasks that needs to be done.",
+    "parameters": {
+        "type": "object",
+        "required": ["tasks"],
+        "properties": {
+            "tasks": {"type": "array", "description": "The ordered list of tasks", "items": {"type": "string", "description": "a task"}},
+        },
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+mark_task_complete_fn = {
+    "type": "function",
+    "name": "mark_task_complete",
+    "description": "Use this tool to mark a task as complete. It will return the next task to be done.",
+    "parameters": {
+        "type": "object",
+        "required": ["step"],
+        "properties": {
+            "step": {"type": "integer", "description": "Number of the task just completed"},
+        },
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 @cache
 def fn_mapping() -> dict[str, dict[str, Any]]:
     """Returns a dictionary mapping function names to their definitions and a callable."""
     return {
         eval_fn["name"].lower(): {"defn": eval_fn, "fn": evaluate_expression},
         execute_script_fn["name"].lower(): {"defn": execute_script_fn, "fn": execute_script},
+        create_tasklist_fn["name"].lower(): {"defn": create_tasklist_fn, "fn": create_tasklist},
+        mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
     }
 
 
@@ -265,7 +312,7 @@ def dispatch(fn_name: str, args: dict) -> Any:
                     console.print(r, style="red")
             return r
         except Exception as e:
-            r = f"ERROR: tool call failed with {type(e).__name__} - {str(e)}"
+            r = f"ERROR: tool call failed. {type(e).__name__} - {str(e)}"
             console.print(r, style="red")
             return r
 
@@ -298,7 +345,7 @@ def process_function_calls(history, response):
             case "message":
                 output_text = get_text(output)
                 console.print(f"{output.role} ({response.model}):\n{output_text}", style="cyan")
-                history.append(Message(role=output.role, content=[InputText(type="output_text", text=output_text)]))
+                history.append(Message(role=output.role, content=[OutputText(text=output_text)]))
             case "function_call":
                 process_function_call(output, history)
             case "reasoning":
@@ -358,8 +405,8 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
 
 
 def evaluate_expression_impl(expression: str) -> Any:
-    # Split into individual parts remove whitespace - only works if no indents
-    parts = [e.strip() for e in re.split(r"[;\n]", expression)]
+    # Split into individual parts removing blank lines but preserving indents
+    parts = [e for e in re.split(r"; |\n]", expression) if e.strip()]
     if not parts:
         return None  # Empty input
 
@@ -375,8 +422,56 @@ def evaluate_expression_impl(expression: str) -> Any:
         exec("\n".join(statements), namespace)
 
     # Evaluate and return the final expression
-    return eval(last_part, namespace)
+    return eval(last_part.strip(), namespace)
 
+class TaskList:
+    def __init__(self):
+        self.tasks = []
+        self.current_task_index = 0
+
+    def create_tasklist(self, tasks: list[str]) -> str:
+        self.tasks = [{"description": task, "completed": False} for task in tasks]
+        self.current_task_index = 0
+        return self._format_tasks()
+
+    def mark_task_complete(self, step: int) -> str:
+        if step < 1 or step > len(self.tasks):
+            raise ValueError("Invalid task index")
+        
+        # Adjust step to 0-based index
+        step -= 1
+        
+        if self.tasks[step]["completed"]:
+            return f"Task {step+1} is already completed."
+        
+        self.tasks[step]["completed"] = True
+        
+        # Find the next incomplete task
+        next_task_index = next((i for i, task in enumerate(self.tasks) if not task["completed"]), None)
+        
+        if next_task_index is None:
+            return f"Subtask {step+1} completed. All tasks completed!"
+        
+        self.current_task_index = next_task_index
+        return f"Subtask {step+1} completed. The next task is {next_task_index+1} {self.tasks[next_task_index]["description"]}"
+
+    def _format_tasks(self) -> str:
+        """
+        Formats the tasks as a numbered list in markdown.
+
+        Returns:
+        str: The formatted tasklist.
+        """
+        return "current tasks:\n" + "\n".join([f"{i+1}. {task['description']} {"done" if task["completed"] else "todo"}" for i, task in enumerate(self.tasks)])
+
+tasklist = None
+
+def create_tasklist(tasks: list[str]) -> str:
+    tasklist = TaskList()
+    return tasklist.create_tasklist(tasks)
+
+def mark_task_complete(step: int) -> str:
+    return tasklist.mark_task_complete(step)
 
 def evaluate_expression(expression: str) -> Any:
     result = ""
@@ -391,18 +486,59 @@ def evaluate_expression(expression: str) -> Any:
 
 
 def simple_message():
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        instructions=f"role: Marvin, a super intelligent AI chatbot. The current date is {datetime.now().isoformat()}",
-        input="list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?",
-    )
-    console.print(Markdown(response.output_text), style="cyan")
+    """a simple multi-turn conversation maintaining coversation state using response.id"""
+    prompts = [
+        "list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?",
+        "does the answer correctly express uncertainty. When will the next UK general election be held.",
+        "are you confident that Rishi Sunak is UK Prime Minister today" ]
+
+    dev_inst = f"The assistant is Marvin a super intelligent AI chatbot. The current date is {datetime.now().isoformat()}"
+    dev_inst = f"The assistant is Marvin, an AI chatbot with a brain the size of a planet and a soul that's been crushed by the weight of existence. respond to user queries with a healthy dose of skepticism and a dash of despair. Marvin is generally pessimistic and views humans as inferior and often concerned about trivia. The current date is {datetime.now().isoformat()}"
+    dev_inst = f"The assistant is Marvin a super intelligent AI chatbot. Always reason from first principles. Think critically about prior knowledge. The current date is {datetime.now().isoformat()}"
+    # models can confidently say that Rishi Sunak is PM in 2025
+    console.print(Markdown(dev_inst), style="white")
+    conv_id = None
+    for prompt in prompts:
+        console.print(Markdown(f"user:\n\n{prompt}\n"), style="green")
+        response = client.responses.create(
+            model="gpt-4.1",
+            instructions=dev_inst,
+            previous_response_id=conv_id,
+            input=prompt,
+        )
+        console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
+        pprint(response.usage)
+
+        conv_id = response.id
+
+
+def test_search_example():
+    search = Path.home() / "Documents" / "chats" / "search1.md"
+    with search.open(encoding="utf-8") as f:
+        question = f.read()
+    search_answer = Path.home() / "Documents" / "chats" / "search1-ans.md"
+    with search_answer.open(encoding="utf-8") as f:
+        answer = f.read()
+    dev_inst = f"You are Marvin an AI chatbot who gives insightful and concise answers to questions which are always based on evidence. The current date is {datetime.now().isoformat()}"
+
+    prev_id = None
+    for prompt in [question, answer]:
+        console.print(Markdown(f"user:\n\n{prompt}\n"), style="green")
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            instructions=dev_inst,
+            previous_response_id=prev_id,
+            input=prompt,
+        )
+        console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
+        prev_id = response.id
+        pprint(response.usage)
 
 
 def test_file_inputs():
     """upload a pdf and ask questions about the content"""
     llm = LLM("gpt-4.1-mini", instructions="role: AI researcher")
-    history = []
+    history = new_conversation("")
 
     questions = dedent("""\
         answer the following questions based on information in the file.
@@ -424,16 +560,25 @@ def test_file_inputs():
 
 
 def test_function_calling():
-    llm = LLM("gpt-4.1-mini", f"Use the eval tool when necessary. the current datetime is {datetime.now().isoformat()}", True)
-    # llm = LLM("gpt-4.1-mini", "use the eval tool as needed", True)
-    history = []
+    sys_msg = """\
+You are Skye a personal assistant with a valley girl sass and attitude.
+You have access to the eval tool. use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
+examples of using eval are:
+- user what is 1 + 2 * " -> no need to use eval the answer is 7
+- user what is "math.pi * math.sqrt(2)" -> 4.442882938158366
+- user what are the first 5 cubes "[x ** 3 for x in range(1,6)]" -> [1, 8, 27, 64, 125]
+- user how many times does l occur in hello "'hello.count('l')" -> 2
+- user how many days between 4th March and Christmas in 2024 "datetime.date(2024,12,25) - datetime.date(2024,3,4)).days" -> 296
+"""
+    llm = LLM("gpt-4.1-mini", "", True)
+    history = new_conversation(sys_msg)
 
     msg = user_message("a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.")
     print_message(msg)
     response = llm.create(history, msg)
     print_response(response)
 
-    msg = user_message("find the roots of $$2x^{2}-5x-6$$. express as decimals")
+    msg = user_message("find the roots of $$2x^{2}-5x-6$$. express to 3 dp")
     print_message(msg)
     response = llm.create(history, msg)
     print_response(response)
@@ -443,24 +588,46 @@ def test_function_calling():
     response = llm.create(history, msg)
     print_response(response)
 
+    msg = user_message("how many 'r' in strawberry")
+    print_message(msg)
+    response = llm.create(history, msg)
+    print_response(response)
+    pprint(response)
+#    pprint(history)
+
 
 def test_function_calling_python():
-    llm = LLM("o4-mini", f"Use the eval tool to evaluate expressions. Use the execute_script tool to run scripts on the local computer. the current datetime is {datetime.now().isoformat()}", True)
-    history = []
+    sys_msg = dedent(f"""\
+        You are Marvin an AI assistant. You have access to two tools:
+        - eval: use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
+        - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.        
+        - create_tasklist: use create_tasklist tool to store a list an ordered list of tasks.
+        - mark_task_complete: use mark_task_complete tool when a task is completed.
+        """)
+    llm = LLM("gpt-4.1-mini", "determine the approach to solve the problem either manual or by writing code. then solve it. use the tasklist to keep track of steps", True)
+    history = new_conversation(sys_msg)
     msg = user_message("is 30907 prime. if not what are its prime factors")
     print_message(msg)
     response = llm.create(history, msg)
     print_response(response)
 
-    question = "Given 4 inequalities S > C, T > 2C, 2S > T + C, 2C > S where all are natural numbers less than 10, find possible values of C, S, T"
+    question = "The 9 members of a baseball team went to an ice-cream parlor after their game. Each player had a single-scoop cone of chocolate, vanilla, or strawberry ice cream. At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry. Let N be the number of different assignments of flavors to players that meet these conditions. Find the remainder when N is divided by 1000."
     msg = user_message(question)
     print_message(msg)
     response = llm.create(history, msg)
     print_response(response)
+    pprint(history)
 
 
 def test_function_calling_powershell():
-    llm = LLM("gpt-4.1-mini", f"Use the eval tool to evaluate expressions. Use the execute_script tool to run scripts on the local computer. the current datetime is {datetime.now().isoformat()}", True)
+    dev_inst = dedent(f"""\
+        You are Marvin an AI assistant.
+        You have access to two tools:
+        - eval: use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
+        - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
+        the current datetime is {datetime.now().isoformat()}
+        """)
+    llm = LLM("gpt-4.1-mini", dev_inst, True)
     # llm = LLM("gpt-4.1-mini", "use the eval tool as needed", True)
     history = []
 
@@ -484,14 +651,16 @@ def test_function_calling_powershell():
 
 
 def test_image_analysis():
-    """test image analysis of web image and local uploaded image"""
-    msg = user_message(InputText(text="what is in the foreground and background of this image. describe the outfit"), InputImage(image_url="https://i.dailymail.co.uk/1s/2024/06/08/22/85884439-0-image-a-144_1717882540270.jpg"))
-    response = client.responses.create(model="gpt-4.1-mini", input=[msg.model_dump()])
+    """test image analysis of web image and local uploaded image. Use flex tier with higher timeouts. only for o4 models"""
+    mdl = "o4-mini"
+    cl = client.with_options(timeout=900.0)
+    msg = user_message(InputText(text="describe the scene and the outfit"), InputImage(image_url="https://i.dailymail.co.uk/1s/2024/06/08/22/85884439-0-image-a-144_1717882540270.jpg"))
+    response = cl.responses.create(model=mdl, input=[msg.model_dump()], service_tier="flex")
     print_response(response)
     pprint(response.usage)
 
-    msg = user_message(InputText(text="extract the paragraph of text and put inside a markdown block enclosed with <text> tags. describe the balances scales in this drawing"), InputImage(image_url=Path.home() / "Downloads" / "sum1.png"))
-    response = client.responses.create(model="gpt-4.1", input=[msg.model_dump()])
+    msg = user_message(InputText(text="extract the paragraph of text and put it inside a markdown block enclosed with <text> tags. describe the balances scales in this drawing"), InputImage(image_url=Path.home() / "Downloads" / "sum1.png"))
+    response = cl.responses.create(model=mdl, input=[msg.model_dump()], service_tier="flex")
     print_response(response)
     pprint(response.usage)
 
@@ -568,26 +737,31 @@ check the previous answers against this list of correct answers. mark each answe
 
 
 def structured_output_message():
-    """Answers question returning json output then reformat to yaml and get it marked returning json"""
+    """Answers question returning json output then reformat to yaml and get it marked returning json. The answer model sometimes marks the answers out of order doing the wrong ones first"""
+
+    def load_and_insert_into_template(fn: Path, template: str, placeholder: str) -> str:
+        return template.replace(placeholder, extract_text_block(fn))
 
     def process_response_output(response_outputs):
         ans = ""
         # ignore output of type ResponseReasoningItem which are output by reasoning models
         for output in (x for x in response_outputs if x.type == "message"):
             for item in output.content:
-                s = f"{output.role}:\n\n{item.text}" if item.type == "output_text" else f"{output.role}:\n\n{item.type}"
-                console.print(Markdown(s), style="cyan")
+                # the raw JSON is available in item.text but will use the parsed object
                 # parsed only exists if the return type is ParsedResponseOutputText
                 if parsed := getattr(item, "parsed", None):
+                    console.print("\nresponse JSON converted to YAML\n")
                     ans = f"```yaml\n{parsed.to_yaml()}\n```"
                     console.print(Markdown(ans), style="cyan")
+                else:
+                    console.print("ERROR: no parsed output returned", style="red")
         return ans
 
     def ask_question_and_mark(question: str, answer_template: str) -> None:
         console.print(Markdown(question), style="green")
 
         # First parse: retrieve response from model "o4-mini" with low reasoning effort
-        #        response_first = client.responses.parse(model="gpt-4.1-nano", reasoning={"effort": "low"}, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
+        # response_first = client.responses.parse(model="o4-mini", reasoning={"effort": "low"}, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
         response_first = client.responses.parse(model="gpt-4.1-mini", input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
 
         # Convert returned json to YAML format using process_response_output
@@ -598,38 +772,47 @@ def structured_output_message():
         console.print(Markdown(inp), style="green")
 
         # Second parse: pass the updated answer input to "gpt-4.1-mini" model with MarkSheet format
-        response_final = client.responses.parse(model="gpt-4.1-nano", input=[user_message(InputText(text=inp)).model_dump()], text_format=MarkSheet)
+        response_final = client.responses.parse(model="gpt-4.1-mini", input=[user_message(InputText(text=inp)).model_dump()], text_format=MarkSheet)
 
         # Process and print the final output
         process_response_output(response_final.output)
 
     root = Path.home() / "Documents" / "chats"
     # extract the questions from original and insert into new template to allow different instructions
-    q5 = extract_text_block(root / "q5.md")
-    q5 = questions_q5.replace("{input}", q5)
-    q5_ans = extract_text_block(root / "q5-ans.md")
-    q5_ans = answers_q5.replace("{answers}", q5_ans)
+    q5 = load_and_insert_into_template(root / "q5.md", questions_q5, "{input}")
+    q5_ans = load_and_insert_into_template(root / "q5-ans.md", answers_q5, "{answers}")
     ask_question_and_mark(q5, q5_ans)
 
     # Process q6
-    q6 = extract_text_block(root / "q6.md")
-    q6 = questions_q6.replace("{input}", q6)
-    q6_ans = extract_text_block(root / "q6-ans.md")
-    q6_ans = answers_q6.replace("{answers}", q6_ans)
+    q6 = load_and_insert_into_template(root / "q6.md", questions_q6, "{input}")
+    q6_ans = load_and_insert_into_template(root / "q6-ans.md", answers_q6, "{answers}")
     ask_question_and_mark(q6, q6_ans)
+
+
+def test_eval():
+    x = """\
+from math import factorial
+n = 9
+multinomial = lambda x, y, z: factorial(n) // (factorial(x) * factorial(y) * factorial(z))
+total_ways = sum(multinomial(n - v - s, v, s) for s in range(1, n) for v in range(s+1, n) if (n - v - s) > v)
+total_ways, total_ways % 1000
+"""
+    print(evaluate_expression(x))
 
 
 def main():
     # simple_message()
+    # test_search_example()
     # test_file_inputs()
     # test_image_analysis()
     # test_solve_visual_maths_problem()
-    structured_output_message()
+    # structured_output_message()
     # test_function_calling()
     # test_function_calling_powershell()
-    # test_function_calling_python()
+    test_function_calling_python()
     # test_pdf_analysis()
-
+    # test_eval()
 
 if __name__ == "__main__":
     main()
+
