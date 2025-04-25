@@ -7,8 +7,9 @@ import platform
 
 # import sympy # used by eval
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Literal, Type
 
 import requests
 import yaml
@@ -17,10 +18,12 @@ from firecrawl import FirecrawlApp
 
 # from datetime import datetime, date, time
 from openai import OpenAI
+from openai.types.chat import ChatCompletion, ChatCompletionMessageToolCall
 from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
+from rich import inspect
 from ftutils import ftutils_functions  # retrieve_headlines, retrieve_article, retrieve_stock_quotes, get_function_map
 
 from chatutils import (
@@ -104,46 +107,163 @@ print(sqrt(x ** 2 + y ** 2))
 ```
 """
 
+@dataclass_json  
+@dataclass(kw_only=True)
+class ContentItem:
+    type: Literal["text"] = "text"
+    text: str
 
-@dataclass_json
+@dataclass_json  
 @dataclass
-class ChatMessage:
-    role: str
-    content: str | None
-
-    def __post_init__(self) -> None:
-        if not self.role:
-            raise ValueError("Role cannot be empty")
-        if not self.role in ["assistant", "developer", "system", "tool", "user"]:
-            raise ValueError(f"Invalid role {self.role}")
-        # if not self.content:
-        #     raise ValueError("Content cannot be empty")
-
-
-@dataclass_json
-@dataclass
-# add validation to check that role and content are not empty
-class ChatToolMessageResponse(ChatMessage):
+class FunctionCall:
     name: str
+    arguments: str
+
+@dataclass_json  
+@dataclass
+class ToolCall:
+    id: str
+    type: Literal["function"]
+    function: FunctionCall
+
+
+class Message:
+    """Base class with serialization logic"""
+    _role_registry: dict[str, Type['Message']] = {}
+    
+    def __init_subclass__(cls, **kwargs):
+        """Register subclasses by their role"""
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, 'role'):
+            role = getattr(cls, 'role')
+            if isinstance(role, str):
+                cls._role_registry[role] = cls
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> 'Message':
+        """Create appropriate message subclass from dict"""
+        role = data.get('role')
+        msg_cls = cls._role_registry.get(role)
+        if not msg_cls:
+            raise ValueError(f"Unknown message role: {role}")
+        # Deserialize nested content dicts into ContentItem instances
+        if 'content' in data and isinstance(data['content'], list):
+            data['content'] = [ContentItem(**ci) for ci in data['content']]
+        # Deserialize nested tool_calls dicts into ToolCall instances (with FunctionCall)
+        if 'tool_calls' in data and isinstance(data['tool_calls'], list):
+            converted_calls: list[ToolCall] = []
+            for tc in data['tool_calls']:
+                func_data = tc.get('function', {})
+                func_obj = FunctionCall(**func_data)
+                converted_calls.append(ToolCall(id=tc['id'], type=tc['type'], function=func_obj))
+            data['tool_calls'] = converted_calls
+        return msg_cls(**data)
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert message to serializable dict"""
+        return asdict(self)
+
+    def get_content(self) -> str:
+        if self.content is None:
+            return ""
+        return "".join(e.text for e in self.content) if isinstance(self.content, list) else self.content
+
+@dataclass_json  
+@dataclass(kw_only=True)
+class SystemMessage(Message):
+    role: Literal["system"] = "system"
+    content: str | list[ContentItem]
+
+@dataclass_json
+@dataclass(kw_only=True)
+class UserMessage(Message):
+    role: Literal["user"] = "user"
+    content: str | list[ContentItem]
+
+@dataclass_json
+@dataclass(kw_only=True)
+class AssistantMessage(Message):
+    role: Literal["assistant"] = "assistant"
+    content: str | list[ContentItem] | None = None
+    tool_calls: list[ToolCall] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+@dataclass_json
+@dataclass(kw_only=True)
+class ToolMessage(Message):
+    role: Literal["tool"] = "tool"
+    content: str
     tool_call_id: str
 
-    def __init__(self, name: str, tool_call_id: str, content: str):
-        super().__init__("tool", content)
-        self.name = name
-        self.tool_call_id = tool_call_id
+
+@dataclass_json  
+@dataclass 
+class MessageHistory:
+    """Stores conversation history with polymorphic message types"""
+    
+    messages: list[Message] = field(default_factory=list)
+    
+    def __iter__(self):
+        return iter(self.messages)
+    
+    def __str__(self) -> str:
+        """Return the number of messages in the history."""
+        return f"MessageHistory: len={len(self.messages)}"
+
+    def append(self, message: Message) -> None:
+        self.messages.append(message)
+    
+    def clear(self) -> None:
+        self.messages.clear()
+    
+    def save(self, fname: Path) -> None:
+        json_str = self.to_json(indent=2)
+        with fname.open('w', encoding="utf-8") as f:
+            f.write(json_str)
+    
+    @classmethod
+    def load(cls, fname: Path) -> 'MessageHistory':
+        with fname.open(encoding="utf-8") as f:
+            data = json.load(f)
+            
+            # Convert each message dict into the appropriate Message subclass
+            messages = []
+            for msg_data in data.get('messages', []):
+                try:
+                    messages.append(Message.from_dict(msg_data))
+                except Exception as e:
+                    console.print(f"Error loading message: {e}", style="red")
+                    continue
+            
+            return cls(messages=messages)
 
 
-@dataclass_json
-@dataclass
-class ChatToolMessageCall(ChatMessage):
-    tool_calls: list
+def system_message(text: str) -> SystemMessage:
+    return SystemMessage(content=text)
 
-    def __init__(self, chat_completion):
-        """takes openAI ChatCompletionMessageToolCall and saves tool_calls"""
-        super().__init__("assistant", None)
-        self.tool_calls = chat_completion.to_dict()["tool_calls"]
+def user_message(text: str) -> UserMessage:
+    return UserMessage(content=text)
 
-MessageType = ChatMessage | ChatToolMessageCall | ChatToolMessageResponse
+def assistant_message(text: str) -> AssistantMessage:
+    return AssistantMessage(content=text)
+
+def assistant_message_tool(tool_calls: list[Any]) -> AssistantMessage:
+    xs = [tool_call(e) for e in tool_calls] if isinstance(tool_calls[0], ChatCompletionMessageToolCall) else tool_calls
+    return AssistantMessage(content=None, tool_calls=xs)
+
+def tool_message(tool_call: ToolCall, result: str) -> ToolMessage:
+    return ToolMessage(
+        content=result, 
+        tool_call_id=tool_call.id)
+
+def tool_call(tc: ChatCompletionMessageToolCall) -> ToolCall:
+    return ToolCall(
+        id=tc.id,
+        type=tc.type,
+        function=FunctionCall(name=tc.function.name, arguments=tc.function.arguments))
+
 
 @dataclass
 class Usage:
@@ -193,7 +313,7 @@ class LLM:
         # lmstudio port
         return OpenAI(api_key="dummy", base_url="http://localhost:1234/v1")
 
-    def chat(self, messages):
+    def chat(self, messages: MessageHistory) -> ChatCompletion:
         nm = self.model["name"]
         s = nm.lower()
         is_reasoning = s in ["o4-mini", "DeepSeek-R1", "qwen-qwq-32b"]
@@ -236,13 +356,13 @@ def is_toolcall(s: str) -> str:
     return None
 
 
-def prt(msg: ChatMessage, model: str = None):
+def prt(msg: Message, model: str = None):
     c = role_to_color[msg.role]
     if model:
         console.print(f"{msg.role} ({model}):\n", style=c)
     else:
         console.print(f"{msg.role}:\n", style=c)
-    md = Markdown(translate_latex(msg.content))
+    md = Markdown(translate_latex(msg.get_content()))
     console.print(md, style=c, width=80)
 
 
@@ -253,14 +373,14 @@ def save(messages: list, filename: Path):
         json.dump([msg.to_dict() for msg in messages], f)
 
 
-def load_msg(s: str) -> ChatMessage:
+def load_msg(s: str) -> UserMessage:
     # this function used to role = "assistant" if len(xs) > 2 else "user"
     fname = make_fullpath(s)
-    role = "user"
+    #role = "user"
 
     try:
-        with open(fname, encoding="utf-8") as f:
-            return ChatMessage(role, f.read())
+        with fname.open(encoding="utf-8") as f:
+            return user_message(text=f.read())
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
     #       raise FileNotFoundError(f"Chat message file not found: {filename}")
@@ -284,18 +404,18 @@ def load_textfile(s: str) -> str:
     return None
 
 
-def load_template(s: str) -> ChatMessage:
+def load_template(s: str) -> UserMessage:
     xs = s.split(maxsplit=1)
     fname = make_fullpath(xs[0])
     rprint(xs)
 
     try:
-        with open(fname, encoding="utf-8") as f:
+        with fname.open(encoding="utf-8") as f:
             templ = f.read()
             if len(xs) > 1:
                 templ = templ.replace("{input}", xs[1])
 
-            return ChatMessage("user", templ)
+            return user_message(text=templ)
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
     s = """
@@ -308,24 +428,23 @@ def load_template(s: str) -> ChatMessage:
 2. write out your thoughts in a **thinking:** section
 3. write a detailed answer with supporting evidence and facts in an **answer:** section
 """
-    return ChatMessage("user", s.replace("{input}", xs[1]))
+    return user_message(text=s.replace("{input}", xs[1]))
 
 
 #       raise FileNotFoundError(f"Chat message file not found: {filename}")
 # return None
 
 
-def load_log(s: str) -> list[ChatMessage]:
+def load_log(s: str) -> MessageHistory:
     fname = make_fullpath(s)
     try:
-        with fname.open(encoding="utf-8") as f:
-            data = json.load(f)
-            all_msgs = ChatMessage.schema().load(data, many=True)
-            console.print(f"loaded from log {fname} messages {len(all_msgs)}", style="red")
-            #            save_content(all_msgs[-1])
-            msgs = all_msgs if len(all_msgs) < 20 else all_msgs[:3] + all_msgs[-20:]
-            prt_summary(msgs)
-            return msgs
+        hist = MessageHistory.load(fname)
+        console.print(f"loaded from log {fname} messages {hist}", style="yellow")
+        # limit length to 10
+        if len(hist.messages) > 10:
+            hist.messages = hist.messages[:3] + hist.messages[-7:]
+        prt_summary(hist)
+        return hist
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
     #       raise FileNotFoundError(f"Chat message file not found: {filename}")
@@ -340,7 +459,7 @@ def make_clean_filename(text: str) -> str:
     return "_".join(words[:5])
 
 
-def load_http(url: str) -> ChatMessage:
+def load_http(url: str) -> UserMessage:
     try:
         crawler = FirecrawlApp(api_key=os.environ["FC_API_KEY"])
         result = crawler.scrape_url(url, params={"formats": ["markdown"]})
@@ -355,7 +474,7 @@ def load_http(url: str) -> ChatMessage:
             with open(make_fullpath(fname), "w", encoding="utf-8") as f:
                 f.write(f"[*source* {result['metadata']['title']}]({url})\n\n")
                 f.write(text)
-            return ChatMessage("user", text)
+            return user_message(tex=text)
 
     except Exception as e:  # requests.exceptions.RequestException as e:
         print(f"Error: An error occurred while fetching the webpage: {e}")
@@ -363,13 +482,14 @@ def load_http(url: str) -> ChatMessage:
     return None
 
 
-def prt_summary(msgs: list[ChatMessage]):
-    cs = [(len(msg.content)) for msg in msgs]
-    ws = [(len(msg.content.split())) for msg in msgs]
+def prt_summary(history: MessageHistory):
+    xs = [msg.get_content() for msg in history]
+    count_chars = sum((len(x)) for x in xs)
+    count_words = sum((len(x.split())) for x in xs)
 
-    console.print(f"loaded from log {len(msgs)} words {sum(ws)} chars {sum(cs)}", style="red")
-    for i, m in enumerate(msgs):
-        c = m.content.replace("\n", "\\n")  # msgs:
+    console.print(f"loaded from log {history} words {count_words} chars {count_chars}", style="red")
+    for i, m in enumerate(history):
+        c = m.get_content().replace("\n", "\\n")  # msgs:
         s = f"{i:2} {m.role:<10} {c if len(c) < 70 else c[:70] + ' ...'}"
         console.print(s, style=role_to_color[m.role])
 
@@ -379,12 +499,12 @@ def tool_response(s: str) -> str:
     return '<tool_response>\n{"name": "eval", "content": "xxx"}\n</tool_response>\n'.replace("xxx", xs)
 
 
-def load(filename: str) -> list[ChatMessage]:
-    with open(filename) as f:
-        return ChatMessage.schema().parse_raw(f.read())
+# def load(filename: str) -> list[ChatMessage]:
+#     with open(filename) as f:
+#         return ChatMessage.schema().parse_raw(f.read())
 
 
-def process_tool_call(tool_call) -> ChatToolMessageResponse:
+def process_tool_call(tool_call: ChatCompletionMessageToolCall) -> ToolMessage:
     fnname = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
     console.print(f"tool call {fnname} {args}", style="yellow")
@@ -396,34 +516,34 @@ def process_tool_call(tool_call) -> ChatToolMessageResponse:
             if isinstance(r, str):
                 markdown = Markdown(r, style="yellow", code_theme="monokai")
                 console.print(markdown, width=80)
-                return ChatToolMessageResponse(fnname, tool_call.id, r)
+                return tool_message(tool_call, r)
             console.print(f"result = {r}", style="yellow")
         except Exception as e:
             r = f"ERROR: {e}"
             console.print(r, style="red")
-            return ChatToolMessageResponse(fnname, tool_call.id, r)
+            return tool_message(tool_call, r)
 
-        return ChatToolMessageResponse(fnname, tool_call.id, r.model_dump_json())
+        return tool_message(tool_call, r.model_dump_json())
 
     err_msg = f"ERROR: unknown funtion name " + fnname
     console.print(err_msg, style="red")
-    return ChatToolMessageResponse(fnname, tool_call.id, err_msg)
+    return tool_message(tool_call, err_msg)
 
 
-def check_and_process_tool_call(client, messages, response):
+def check_and_process_tool_call(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
     """check for a tool call and process. If there is no tool call then the original response is returned"""
     # https://platform.openai.com/docs/guides/function-calling
     choice = response.choices[0]
-    n = 5
+    n = 9
     while choice.finish_reason == "tool_calls" and n:
         n -= 1
         # append choice.message to message history
-        messages.append(ChatToolMessageCall(choice.message))
+        history.append(assistant_message_tool(choice.message.tool_calls))
         for tc in choice.message.tool_calls:
             tool_response = process_tool_call(tc)
-            messages.append(tool_response)
+            history.append(tool_response)
         # reply to llm with tool responses
-        response = client.chat(messages)
+        response = client.chat(history)
         choice = response.choices[0]
 
     if n == 0:
@@ -431,83 +551,85 @@ def check_and_process_tool_call(client, messages, response):
     return response
 
 
-def check_and_process_code_block(client, messages, response):
+def check_and_process_code_block(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
     """check for a code block, execute it and pass output back to LLM. This can happen several times if there are errors. If there is no code block then the original response is returned"""
     code = extract_code_block_from_response(response)
-    n = 0
-    while code and len(code.language) > 0 and n < 5:
+    n = 3
+    while code and len(code.language) > 0 and n:
+        n -= 1
         # store original message from llm
         m = response.choices[0].message
-        msg = ChatMessage(m.role, m.content)
-        messages.append(msg)
+        msg = assistant_message(text=m.content)
+        history.append(msg)
         prt(msg)
         output = execute_script(code)
-        n += 1
         code = None
         if output:
-            msg2 = ChatMessage("user", "## output from running script\n" + output + "\n")
-            messages.append(msg2)
+            msg2 = user_message(text="## output from running script\n" + output + "\n")
+            history.append(msg2)
             prt(msg2)
-            response = client.chat(messages)
+            response = client.chat(history)
             code = extract_code_block_from_response(response)
             ru = response.usage
             tokens.update(ru.prompt_tokens, ru.completion_tokens)
             pprint(tokens)
 
+    if n == 0:
+        console.print("consecutive code block limit exceeded", style="red")
     return response
 
 
-def extract_code_block_from_response(response) -> CodeBlock:
+def extract_code_block_from_response(response: ChatCompletion) -> CodeBlock:
     return extract_code_block(response.choices[0].message.content, "```")
 
 
-def process_commands(client: LLM, cmd: str, inp: str, messages: list[ChatMessage]) -> bool:
+def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -> bool:
     global code1
     next_action = False
     if cmd == "load":
         msg = load_msg(inp)
         if msg:
-            messages.append(msg)
+            history.append(msg)
             prt(msg)
             next_action = msg.role == "user"
     elif cmd == "tmpl":
         msg = load_template(inp)
         if msg:
-            messages.append(msg)
+            history.append(msg)
             prt(msg)
             next_action = True
     if cmd == "web":
         msg = load_http(inp)
         if msg:
-            messages.append(msg)
+            history.append(msg)
             next_action = True
     if cmd == "code":
         code1 = load_textfile(inp)
     elif cmd == "resp":
-        msg = ChatMessage("user", tool_response(inp))
+        msg = user_message(text=tool_response(inp))
     elif cmd == "reset":
-        messages.clear()
-        messages.append(ChatMessage("system", system_message()))
+        history.clear()
+        history.append(system_message(sys_msg()))
     elif cmd == "drop":
         # remove last response for LLM and user msg that triggered
-        if len(messages) > 2:
-            messages.pop()
-            messages.pop()
+        if len(history) > 2:
+            history.pop()
+            history.pop()
     elif cmd == "log":
-        messages.clear()
+        history.clear()
         xs = load_log(inp)
         for x in xs:
-            messages.append(x)
-        next_action = messages[-1].role == "user"
+            history.append(x)
+        next_action = history.messages[-1].role == "user"
     elif cmd == "save":
-        save_content(messages[-1].content)
+        save_content(history.messages[-1].get_content())
     elif cmd == "tool":
         state = client.toggle_tool_use()
         console.print(f"tool use changed to {state}", style="yellow")
     return next_action
 
 
-def system_message():
+def sys_msg():
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
     return f"you are Marvin a super intelligent AI assistant. You provide accurate information. If you are unsure or don't have the correct information say so. The current datetime is {tm}."
@@ -518,9 +640,11 @@ def chat(llm_name, use_tool):
     global code1
     client = LLM(llm_name, use_tool)
     #    systemMessage = ChatMessage('system', FNCALL_SYSMSG)
-    system_msg = ChatMessage("system", system_message())
-    rprint(system_msg)
-    messages = [] if llm_name.startswith("o") else [system_msg]
+    history = MessageHistory()
+    if not llm_name.startswith("o"):
+        system_msg = system_message(sys_msg())
+        rprint(system_msg)
+        history.append(system_msg)
     print(f"chat with {client}. Enter x to exit.")
     inp = ""
     while inp != "x":
@@ -528,38 +652,38 @@ def chat(llm_name, use_tool):
         if len(inp) > 3:
             if inp.startswith("%"):
                 cmds = inp.split(maxsplit=1)
-                if not process_commands(client, cmds[0][1:], cmds[1] if len(cmds) > 1 else None, messages):
+                if not process_commands(client, cmds[0][1:], cmds[1] if len(cmds) > 1 else None, history):
                     continue
             else:
                 if code1:
-                    msg = ChatMessage(f"user", f"{inp}\n{code1}")
+                    msg = user_message(text=f"{inp}\n{code1}")
                     code1 = None
                 else:
-                    msg = ChatMessage("user", inp)
-                messages.append(msg)
+                    msg = user_message(text=inp)
+                history.append(msg)
                 prt(msg)
-            response = client.chat(messages)
-            response = check_and_process_tool_call(client, messages, response)
-            response = check_and_process_code_block(client, messages, response)
+            response = client.chat(history)
+            response = check_and_process_tool_call(client, history, response)
+            response = check_and_process_code_block(client, history, response)
             reason = response.choices[0].finish_reason
             if reason != "stop":
                 console.print(f"chat completion finish_reason {reason}", style="red")
             # store original message from gpt
             m = response.choices[0].message
             if m.content:
-                msg = ChatMessage(m.role, m.content)
-                messages.append(msg)
+                msg = assistant_message(text=m.content)
+                history.append(msg)
                 prt(msg, response.model)
 
             ru = response.usage
             tokens.update(ru.prompt_tokens, ru.completion_tokens)
-            pprint(ru)
-            pprint(tokens)
+            # pprint(ru)
+            # pprint(tokens)
             print(f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}")
 
-    if len(messages) > 2:
-        save(messages, make_fullpath(FNAME))
-        yaml.dump(messages, open(make_fullpath("chat-log.yaml"), "w"))
+    if len(history.messages) > 2:
+        history.save(make_fullpath(FNAME))
+        yaml.dump(history, open(make_fullpath("chat-log.yaml"), "w"))
 
 
 def chat_ollama():
@@ -619,6 +743,30 @@ def chat_ollama2():
             return output
     return output
 
+def test_message_history():
+    history = MessageHistory()
+    history.append(system_message(f"Hello {datetime.datetime.now().isoformat()}"))
+    history.append(user_message("Hello"))
+    history.append(assistant_message("Hi there!"))
+    tc = ToolCall(id="123", type="function", function=FunctionCall(name="eval", arguments="2+3"))
+    history.append(assistant_message_tool(tool_calls=[tc]))
+    history.append(tool_message(tc, "5"))
+
+    pprint(history.messages)
+    # Save and load
+    p = Path("chat.json")
+    history.save(p)
+    loaded_history = MessageHistory.load(p)
+    pprint(str(loaded_history))
+    for m in loaded_history:
+        pprint(m)
+    prt_summary(loaded_history)
+    # Messages retain their types after loading
+    assert isinstance(loaded_history.messages[0], SystemMessage)
+    assert isinstance(loaded_history.messages[1], UserMessage)
+    assert isinstance(loaded_history.messages[2], AssistantMessage)
+    assert isinstance(loaded_history.messages[3], AssistantMessage)
+    assert isinstance(loaded_history.messages[4], ToolMessage)
 
 def x():
     print(system_message())
@@ -636,6 +784,8 @@ text after
 
 
 if __name__ == "__main__":
+    # test_message_history()
+    # exit(0)
     parser = argparse.ArgumentParser(description="Chat with LLMs")
     parser.add_argument(
         "llm",

@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import inspect
 from datetime import datetime
 from functools import cache
 from pathlib import Path
@@ -8,10 +9,12 @@ from textwrap import dedent
 from typing import Any, Literal
 
 from openai import OpenAI
+from openai.types.responses.response import Response
 from pydantic import BaseModel, Field, SerializeAsAny, field_validator
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
+from rich import inspect
 
 import chatutils as cu
 
@@ -102,6 +105,19 @@ class ReasoningItem(BaseModel):
     type: str
 
 
+class MessageHistory(BaseModel):
+    messages: list[Message] = Field(default_factory=list)
+
+    def append(self, msg: Message):
+        if self.messages is None:
+            self.messages = [msg]
+        else:
+            self.messages.append(msg)
+    
+    def dump(self):
+        return [m.model_dump() for m in self.messages]
+
+
 # helper functions for message construction
 
 
@@ -113,7 +129,7 @@ def system_message(*items: str | InputItem) -> Message:
     return Message(role="system", content=[InputText(text=item) if isinstance(item, str) else item for item in items])
 
 
-def assistant_message(response) -> Message:
+def assistant_message(response: Response) -> Message:
     r, s, t = extract_text_content(response)
     return Message(role=r, content=[OutputText(type=t, text=s)])
 
@@ -191,11 +207,12 @@ class LLM:
         self.use_tools = use_tools
         self.usage = Usage()
 
-    def create(self, history, msg):
+    def create(self, history: MessageHistory, msg: Message) -> Response:
         """create a message based on existing history. update history with assistant message"""
         if msg:
             history.append(msg)
-        args = {"model": self.model, "input": [e.model_dump() for e in history]}
+
+        args = {"model": self.model, "input": history.dump()}
         if self.instructions:
             args["instructions"] = self.instructions
         is_reasoning = self.model.startswith("o")
@@ -213,7 +230,7 @@ class LLM:
         while max_tool_calls and any(e.type == "function_call" for e in response.output):
             process_function_calls(history, response)
             console.print(f"{max_tool_calls}: returning function call results", style="yellow")
-            args["input"] = [e.model_dump() for e in history]
+            args["input"] = history.dump()
             response = client.responses.create(**args)
             self.usage.update(response.usage)
             max_tool_calls -= 1
@@ -224,6 +241,14 @@ class LLM:
         history.append(assistant_message(response))
         pprint(self.usage)
         return response
+
+class LLMConversation:
+    llm: LLM
+
+    def __init__(self, llm: LLM):
+        self.llm = llm
+    
+
 
 
 # uses the Responses API function defintions
@@ -287,6 +312,77 @@ mark_task_complete_fn = {
     "strict": True,
 }
 
+def function_to_json(func) -> dict:
+    """
+    Converts a Python function into a JSON-serializable dictionary
+    that describes the function's signature, including its name,
+    description, and parameters with their descriptions.
+
+    Args:
+        func: The function to be converted.
+
+    Returns:
+        A dictionary representing the function's signature in JSON format.
+    """
+    type_map = {
+        str: "string",
+        int: "integer",
+        float: "number",
+        bool: "boolean",
+        list: "array",
+        dict: "object",
+        type(None): "null",
+    }
+
+    try:
+        signature = inspect.signature(func)
+    except ValueError as e:
+        raise ValueError(
+            f"Failed to get signature for function {func.__name__}: {str(e)}"
+        )
+
+    # Parameter descriptions - can be extended or replaced with docstring parsing
+    param_descriptions = {
+        'expression': 'TODO'
+    }
+
+    parameters = {}
+    required = []
+    
+    for param in signature.parameters.values():
+        try:
+            param_type = type_map.get(param.annotation, "string")
+            
+            # Get description if available
+            description = param_descriptions.get(param.name, "")
+            
+            parameters[param.name] = {
+                "type": param_type,
+                "description": description
+            }
+            
+            # Add to required list if no default value
+            if param.default == inspect.Parameter.empty:
+                required.append(param.name)
+                
+        except KeyError as e:
+            raise KeyError(
+                f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}"
+            )
+
+    return {
+       'type': 'function',
+       'name': func.__name__,
+       'description': func.__doc__ or "",
+       'parameters': {
+           'type': 'object',
+           'required': required,
+           'properties': parameters,
+           'additionalProperties': False  # Assuming this is desired for all cases
+       },
+       'strict': True  # Assuming this is desired for all cases
+   }
+
 
 @cache
 def fn_mapping() -> dict[str, dict[str, Any]]:
@@ -321,7 +417,7 @@ def dispatch(fn_name: str, args: dict) -> Any:
     return r
 
 
-def process_function_call(tool_call, history: list):
+def process_function_call(tool_call, history: MessageHistory):
     """process the tool call and update the history"""
     console.print(f"{tool_call.type}: {tool_call.name} with {tool_call.arguments}", style="yellow")
     history.append(function_call(tool_call))
@@ -333,7 +429,7 @@ def process_function_call(tool_call, history: list):
     history.append(function_call_output(tool_call, result))
 
 
-def process_function_calls(history, response):
+def process_function_calls(history: MessageHistory, response):
     def get_text(output):
         output_text = ""
         for c in (e for e in output.content if e.type == "output_text"):
@@ -379,7 +475,7 @@ def print_message(msg):
     console.print(f"user:\n{''.join(e.text for e in msg.content if e.type == 'input_text')}", style="green")
 
 
-def extract_text_content(response) -> tuple[str, str, str]:
+def extract_text_content(response: Response) -> tuple[str, str, str]:
     """extract tuple of role, text, type from messages of type message / output_text"""
     output_text = ""
     role = ""
@@ -393,7 +489,7 @@ def extract_text_content(response) -> tuple[str, str, str]:
     return role, output_text, content_type
 
 
-def print_response(response) -> str:
+def print_response(response: Response) -> str:
     r, s, t = extract_text_content(response)
     console.print(Markdown(f"{r} ({response.model}):\n\n{s}\n"), style="cyan")
     return t
@@ -406,7 +502,7 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
 
 def evaluate_expression_impl(expression: str) -> Any:
     # Split into individual parts removing blank lines but preserving indents
-    parts = [e for e in re.split(r"; |\n]", expression) if e.strip()]
+    parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
     if not parts:
         return None  # Empty input
 
@@ -421,7 +517,7 @@ def evaluate_expression_impl(expression: str) -> Any:
     if statements:
         exec("\n".join(statements), namespace)
 
-    # Evaluate and return the final expression
+    # Evaluate result of final expression
     return eval(last_part.strip(), namespace)
 
 class TaskList:
@@ -467,6 +563,7 @@ class TaskList:
 tasklist = None
 
 def create_tasklist(tasks: list[str]) -> str:
+    global tasklist
     tasklist = TaskList()
     return tasklist.create_tasklist(tasks)
 
@@ -538,7 +635,7 @@ def test_search_example():
 def test_file_inputs():
     """upload a pdf and ask questions about the content"""
     llm = LLM("gpt-4.1-mini", instructions="role: AI researcher")
-    history = new_conversation("")
+    history = MessageHistory()
 
     questions = dedent("""\
         answer the following questions based on information in the file.
@@ -552,6 +649,7 @@ def test_file_inputs():
     print_message(msg)
     response = llm.create(history, msg)
     print_response(response)
+    breakpoint()
 
     msg = user_message("Summarise the thesis put forward. How relevant is it in 2024?")
     print_message(msg)
@@ -564,14 +662,15 @@ def test_function_calling():
 You are Skye a personal assistant with a valley girl sass and attitude.
 You have access to the eval tool. use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
 examples of using eval are:
-- user what is 1 + 2 * " -> no need to use eval the answer is 7
 - user what is "math.pi * math.sqrt(2)" -> 4.442882938158366
 - user what are the first 5 cubes "[x ** 3 for x in range(1,6)]" -> [1, 8, 27, 64, 125]
 - user how many times does l occur in hello "'hello.count('l')" -> 2
 - user how many days between 4th March and Christmas in 2024 "datetime.date(2024,12,25) - datetime.date(2024,3,4)).days" -> 296
+- user what is 1 + 2 * " -> no need to use eval the answer is 7
 """
     llm = LLM("gpt-4.1-mini", "", True)
-    history = new_conversation(sys_msg)
+    history = MessageHistory()
+    history.append(system_message(sys_msg))
 
     msg = user_message("a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.")
     print_message(msg)
@@ -592,8 +691,7 @@ examples of using eval are:
     print_message(msg)
     response = llm.create(history, msg)
     print_response(response)
-    pprint(response)
-#    pprint(history)
+    pprint(history)
 
 
 def test_function_calling_python():
@@ -605,7 +703,8 @@ def test_function_calling_python():
         - mark_task_complete: use mark_task_complete tool when a task is completed.
         """)
     llm = LLM("gpt-4.1-mini", "determine the approach to solve the problem either manual or by writing code. then solve it. use the tasklist to keep track of steps", True)
-    history = new_conversation(sys_msg)
+    history = MessageHistory()
+    history.append(system_message(sys_msg))
     msg = user_message("is 30907 prime. if not what are its prime factors")
     print_message(msg)
     response = llm.create(history, msg)
@@ -629,7 +728,7 @@ def test_function_calling_powershell():
         """)
     llm = LLM("gpt-4.1-mini", dev_inst, True)
     # llm = LLM("gpt-4.1-mini", "use the eval tool as needed", True)
-    history = []
+    history = MessageHistory()
 
     question = dedent("""\
         ## task
@@ -809,9 +908,8 @@ def main():
     # structured_output_message()
     # test_function_calling()
     # test_function_calling_powershell()
-    test_function_calling_python()
-    # test_pdf_analysis()
-    # test_eval()
+    # test_function_calling_python()
+    test_eval()
 
 if __name__ == "__main__":
     main()

@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
-from chatutils import execute_python_script
+# from chatutils import execute_python_script
 from rich.pretty import pprint
 from rich.table import Table
 
@@ -23,7 +23,7 @@ NYT_URL = "https://www.nytimes.com/"
 WSJ_URL = "https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true"
 BLOOMBERG_URL = "https://www.bloomberg.com/uk"
 # cookies from a bloomberg request
-ck = """
+BLOOMBERG_COOKIES = """
 exp_pref=UK; country_code=GB; _pxhd=hybJB-QwokZf4leNclckCnRVuIpFClaKV1llOjmL0jtP37YQSo3OvB3LQomq-H5WHuzFBOtLOYP6-94lFNOnYA==:xcFLr9qTPJw8sGEzPYHXuJc/hPFuxaP3C/CQ9l6KTqWEzP/bEwlbm11lGlIPx9iZG7/zyzfnN5LXSk2J/ImKNFYpsCly7dMgTOUK5jxixZY=; session_id=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; _session_id_backup=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; agent_id=7b759df2-41ab-48f2-8d18-e8f4c830e74f; session_key=05e93f9def0810c2a5f8f184dab9e72b2a664249; _reg-csrf-token=vUgp4QCG-ZhI6oKN1fp1d1IRVQcaDZdJojN8; _reg-csrf=s%3A_t_6ZTpMq4aJfacc4id6cG6T.N3kayACM%2BeU1su9PG3W38wIn0F5hjdkbfPezAkk%2Beck; _sp_krux=true; gatehouse_id=39936fa4-25a4-4ca0-b34b-6b0745e9aaaa; geo_info=%7B%22countryCode%22%3A%22GB%22%2C%22country%22%3A%22GB%22%2C%22field_n%22%3A%22hf%22%2C%22trackingRegion%22%3A%22Europe%22%2C%22cacheExpiredTime%22%3A1743438724334%2C%22region%22%3A%22Europe%22%2C%22fieldN%22%3A%22hf%22%7D%7C1743438724334; geo_info={%22country%22:%22GB%22%2C%22region%22:%22Europe%22%2C%22fieldN%22:%22hf%22}|1743438723668; consentUUID=44d6a9b5-52bd-46da-8b60-dacd569ab812_42; consentDate=2025-03-24T16:32:09.533Z; bbgconsentstring=req1fun1pad1; bdfpc=004.2124236125.1742833928898; _ga_GQ1PBLXZCT=GS1.1.1743025085.3.1.1743025481.0.0.0; _ga=GA1.1.2038307183.1742833929; _gcl_au=1.1.465814927.1742833929; usnatUUID=5e7f4c49-db91-48fa-95bc-fbd68e8b7c26; pxcts=890d621c-08cd-11f0-9cbe-2c6d2c51ccd5; _pxvid=840a3f28-08cd-11f0-a082-8df59c8c78b6; _user-data=%7B%22status%22%3A%22anonymous%22%7D; _last-refresh=2025-3-26%2021%3A38; _pxde=e0adf1db95f603de3ae8f5ccb5a02c822502d8210417fd7f4170bce2642f3ea3:eyJ0aW1lc3RhbXAiOjE3NDMwMjUzMjgxNDIsImZfa2IiOjAsImlwY19pZCI6W119; _px2=eyJ1IjoiOTlmOGY2NDAtMGE4YS0xMWYwLWFhZWItYTcwMjM0ZjFmN2U4IiwidiI6Ijg0MGEzZjI4LTA4Y2QtMTFmMC1hMDgyLThkZjU5YzhjNzhiNiIsInQiOjE3NDMwMjU2MjgxNDIsImgiOiIyOWQwNzNmMDU4NThlMjA1ZGUwNTllYTYxYjdmODIxYzQ1NTc1Mzg4ODFmMDNjMjQyMTJkOThhMWMwNzUxMTliIn0=
 """
 
@@ -261,6 +261,10 @@ def save_soup(soup: BeautifulSoup, fname: Path):
     with fname.open("w", encoding="utf-8") as f:
         f.write(soup.prettify())
 
+def load_soup(fname: Path) -> BeautifulSoup:
+    with fname.open(encoding="utf-8") as f:
+        return BeautifulSoup(f.read(), 'html.parser')
+
 
 def save_markdown_article(title: str, text: str) -> Path | None:
     if not title:
@@ -340,7 +344,7 @@ def process_bnn_stock_page(page) -> dict | None:
 
 
 def retrieve_bloomberg_home_page() -> list[ArticleList]:
-    """use httpx to get uk homepage and parse headlines"""
+    """use httpx to get uk homepage and parse headlines. need a valid cookie string"""
 
     def find_parent_prop(element, tagname, attr):
         """Traverse up the DOM tree to find the nearest parent <a> tag and return its href."""
@@ -364,7 +368,7 @@ def retrieve_bloomberg_home_page() -> list[ArticleList]:
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "en-UK,en;q=0.5",
             "Connection": "keep-alive",
-            "Cookie": ck,
+            "Cookie": BLOOMBERG_COOKIES,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
         }
         response = client.get(BLOOMBERG_URL, headers=headers)
@@ -380,7 +384,7 @@ def retrieve_bloomberg_home_page() -> list[ArticleList]:
         href = find_parent_prop(div, "a", "href")
         summary = find_sibling_with_component(div, "data-component", "summary")
         if href:
-            xs.append(ArticleLink(headline=div.get_text(strip=True), summary = summary, url="https://www.bloomberg.com" + href))
+            xs.append(ArticleLink(headline=div.get_text(strip=True), summary = summary, url="https://www.bloomberg.com" + href.split('?')[0]))
     return xs
 
 
@@ -463,6 +467,26 @@ def retrieve_wsj_article(url: str) -> str:
             d.decompose()
 
     md = html_to_markdown(soup=soup.find("section"), href_base="https://www.wsj.com/")
+    md = add_citation(md, cite)
+    save_markdown_article(cite.title, md)
+    return md
+
+
+def retrieve_bloomberg_article(url: str) -> str:
+    content, cite = retrieve_archive(url)
+    soup = BeautifulSoup(content, "html.parser").find("article")
+    breakpoint()
+
+    # remove some divs before extracting text
+    if divs := soup.find_all('div', style=lambda x: x and 'align-items' in x):
+#    if divs := soup.find_all("div"):
+        # xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get("style")]
+        xs = list(divs)
+        console.print(f"removing divs with style {len(xs)}", style="red")
+        for d in xs:
+            d.decompose()
+
+    md = html_to_markdown(soup=soup, href_base="https://www.bloomberg.com/")
     md = add_citation(md, cite)
     save_markdown_article(cite.title, md)
     return md
@@ -857,6 +881,7 @@ def test_eval():
 
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
+    retrieve_bloomberg_article("https://www.bloomberg.com/news/features/2025-04-24/price-alwaleed-s-elon-musk-ties-are-boosting-his-comeback-bid")
     # get_bnnbloomberg_quote("JNK:UN")
     # exit(0)
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
