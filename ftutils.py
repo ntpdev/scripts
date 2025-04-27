@@ -130,7 +130,9 @@ evaluate_expression_fn = {
                 }
             },
             "required": ["expression"],
+            "additionalProperties": False
         },
+        "strict": True
     },
 }
 

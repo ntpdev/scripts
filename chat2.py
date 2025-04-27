@@ -20,6 +20,7 @@ from firecrawl import FirecrawlApp
 from openai import OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessageToolCall
 from rich import print as rprint
+from rich import inspect
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
@@ -36,53 +37,54 @@ from chatutils import (
     translate_latex,
 )
 
-# pip install dataclasses-json
 # OpenAI Python library: https://github.com/openai/openai-python
 # togetherAI models https://docs.together.ai/docs/chat-models
-def get_model_info():
-    """Parse the model info CSV into a dictionary using dict comprehension."""
-    data = """
-# key name provider
-gptm gpt-4.1-mini openai
-gpt4 gpt-4.1 openai
-gpt45 gpt-4.5-preview openai
-o4m o4-mini openai
-groq llama-3.3-70b-versatile groq
-#llm4 meta-llama/llama-4-scout-17b-16e-instruct groq
-groq-r1 deepseek-r1-distill-llama-70b groq
-# qwen qwen-2.5-coder-32b groq
-qwq qwen-qwq-32b groq
-llama meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 togetherai
-llama-big meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo togetherai
-ds deepseek-ai/DeepSeek-V3 togetherai
-qwen Qwen/Qwen2.5-72B-Instruct-Turbo togetherai
-samba DeepSeek-V3-0324 sambanova
-samba-r1 DeepSeek-R1 sambanova
-llama4 Llama-4-Maverick-17B-128E-Instruct sambanova
-llama3 Meta-Llama-3.3-70B-Instruct sambanova
-ollama llama3.1:8b-instruct-q5_K_M ollama
-"""
 
-    def filter_valid_lines(s):
-        for line in s.splitlines():
-            x = line.strip()
-            if x and not x.startswith('#'):
-                yield x
+@dataclass
+class Provider:
+    id: str
+    env_var: str | None
+    url: str
 
-    def map_to_values(lines):
-        for line in lines:
-            parts = line.split(maxsplit=2)
-            if len(parts) == 3:
-                yield parts
+    def get_key(self) -> str:
+        return os.getenv(self.env_var) if self.env_var else "dummy"
 
-    lines = filter_valid_lines(data)
-    values = map_to_values(lines)
-    return {key: {'name': name, 'provider': provider} for key, name, provider in values}
+@dataclass
+class ModelInfo:
+    id: str
+    name: str
+    provider: Provider | None
+
+def get_model_info(file_path: str) -> dict[str, ModelInfo]:
+    """Load the list of models and providers from yaml"""
+    path = make_fullpath(file_path)
+    with path.open('r', encoding='utf-8') as f:
+        data = yaml.safe_load(f)
+    
+    # First build the providers dictionary
+    providers = {
+        provider_id: Provider(
+            id=provider_id,
+            env_var=v['env_var'],
+            url=v['url'] )
+        for provider_id, v in data['providers'].items()
+    }
+    
+    # Then build the models dictionary with references to provider
+    models = {
+        model_id: ModelInfo(
+            id=model_id,
+            name=v['name'],
+            provider=providers.get(v['provider']) )
+        for model_id, v in data['models'].items()
+    }
+    
+    return models
 
 
-FNAME = "chat-log.json"
+LOG_FILE = "chat-log.json"
 console = Console()
-model_info = get_model_info()
+model_info = get_model_info("model-info.yaml")
 code1 = None
 role_to_color = {"system": "red", "developer": "red", "user": "green", "assistant": "cyan", "tool": "yellow"}
 FNCALL_SYSMSG = """
@@ -126,7 +128,7 @@ class ToolCall:
     type: Literal["function"]
     function: FunctionCall
 
-
+ 
 class Message:
     """Base class with serialization logic"""
     _role_registry: dict[str, Type['Message']] = {}
@@ -220,24 +222,22 @@ class MessageHistory:
     
     def save(self, fname: Path) -> None:
         json_str = self.to_json(indent=2)
-        with fname.open('w', encoding="utf-8") as f:
-            f.write(json_str)
+        fname.write_text(json_str, encoding="utf-8")
     
     @classmethod
-    def load(cls, fname: Path) -> 'MessageHistory':
-        with fname.open(encoding="utf-8") as f:
-            data = json.load(f)
-            
-            # Convert each message dict into the appropriate Message subclass
-            messages = []
-            for msg_data in data.get('messages', []):
-                try:
-                    messages.append(Message.from_dict(msg_data))
-                except Exception as e:
-                    console.print(f"Error loading message: {e}", style="red")
-                    continue
-            
-            return cls(messages=messages)
+    def load(cls, fname: Path) -> 'MessageHistory':       
+        data = json.loads(fname.read_text(encoding="utf-8"))
+        
+        # Convert each message dict into the appropriate Message subclass
+        messages = []
+        for msg_data in data.get('messages', []):
+            try:
+                messages.append(Message.from_dict(msg_data))
+            except Exception as e:
+                console.print(f"Error loading message: {e}", style="red")
+                continue
+        
+        return cls(messages=messages)
 
 
 def system_message(text: str) -> SystemMessage:
@@ -247,9 +247,9 @@ def user_message(text: str) -> UserMessage:
     return UserMessage(content=text)
 
 def assistant_message(text: str) -> AssistantMessage:
-    return AssistantMessage(content=text)
+    return AssistantMessage(content=text, tool_calls=None)
 
-def assistant_message_tool(tool_calls: list[Any]) -> AssistantMessage:
+def assistant_tool_message(tool_calls: list[Any]) -> AssistantMessage:
     xs = [tool_call(e) for e in tool_calls] if isinstance(tool_calls[0], ChatCompletionMessageToolCall) else tool_calls
     return AssistantMessage(content=None, tool_calls=xs)
 
@@ -287,41 +287,38 @@ class Usage:
 
 
 class LLM:
+    llm_name: str
+    model: ModelInfo
+    client: OpenAI
+    use_tool: bool
 
     def __init__(self, llm_name: str, use_tool: bool = False):
-        # o1 model does not support tool use or temperature
         self.llm_name = llm_name
-        self.model = model_info.get(llm_name, "local") # the default wont work
-        self.client = self.create_client(llm_name)
+        self.model = model_info[llm_name]
+        self.client = self.create_client()
         self.use_tool = use_tool
 
     def __str__(self):
-        return f"{self.model} {self.llm_name} tool use = {self.use_tool}"
+        return f"{self.model.name} on {self.model.provider.id} {self.llm_name} tool use = {self.use_tool}"
 
-    def create_client(self, llm_name):
-        provider = model_info[llm_name]["provider"]
-        if provider == "openai":
-            return OpenAI()
-        if provider == "togetherai":
-            return OpenAI(api_key=os.environ["TOGETHERAI_API_KEY"], base_url="https://api.together.xyz/v1")
-        if provider == "groq":
-            return OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
-        if provider == "sambanova":
-            return OpenAI(api_key=os.environ["SAMBANOVA_API_KEY"], base_url="https://api.sambanova.ai/v1")
-        if provider == "ollama":
-            return OpenAI(api_key="dummy", base_url="http://localhost:11434/v1")
-        # lmstudio port
-        return OpenAI(api_key="dummy", base_url="http://localhost:1234/v1")
+    def create_client(self):
+        provider = self.model.provider
+        return OpenAI() if provider.id == "openai" else OpenAI(api_key=provider.get_key(), base_url=provider.url)
+        # lmstudio port base_url="http://localhost:1234/v1"
 
     def chat(self, messages: MessageHistory) -> ChatCompletion:
-        nm = self.model["name"]
-        s = nm.lower()
-        is_reasoning = s in ["o4-mini", "DeepSeek-R1", "qwen-qwq-32b"]
+        def clean_asdict(obj):
+            # certain providers groq do not like tool_calls = None in assistant messages so remove None values
+            data = asdict(obj)
+            return {k: v for k, v in data.items() if v is not None}
+
+        nm = self.model.name
+        is_reasoning = nm.lower() in ["o4-mini", "deepseek-r1", "qwen-qwq-32b"]
         supportsTemp = nm != "o4-mini"
 
         args = {
             "model": nm,
-            "messages": [asdict(m) for m in messages],
+            "messages": [clean_asdict(m) for m in messages],
             "max_completion_tokens": 16000 if is_reasoning else 4096
         }
 
@@ -379,26 +376,27 @@ def load_msg(s: str) -> UserMessage:
     #role = "user"
 
     try:
-        with fname.open(encoding="utf-8") as f:
-            return user_message(text=f.read())
+        return user_message(text=fname.read_text(encoding="utf-8"))
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
-    #       raise FileNotFoundError(f"Chat message file not found: {filename}")
     return None
 
 
 def load_textfile(s: str) -> str:
     """loads a text file. if it is a code file wraps in markdown code block."""
+    LANGUAGE_MAP = {
+        ".py": "python",
+        ".htm": "html",
+        ".html": "html",
+        ".java": "java",
+    }
     fname = make_fullpath(s)
-    console.print(f"loading file {fname}")
     try:
-        with open(fname, encoding="utf-8") as f:
-            content = f.read()
-            console.print(f"loaded file {fname} length {len(content)}", style="yellow")
-            if fname.suffix in (".py", ".htm", ".html", ".java"):
-                language = fname.suffix[1:] if fname.suffix != ".htm" else "html"
-                return f"\n## {fname.name}\n\n```{language}\n{content}\n```\n"
-            return content
+        content = fname.read_text(encoding="utf-8")
+        console.print(f"loaded file {fname} length {len(content)}", style="yellow")
+        if fname.suffix in LANGUAGE_MAP:
+            return f"\n## {fname.name}\n\n```{LANGUAGE_MAP[fname.suffix]}\n{content}\n```\n"
+        return content
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
     return None
@@ -410,15 +408,14 @@ def load_template(s: str) -> UserMessage:
     rprint(xs)
 
     try:
-        with fname.open(encoding="utf-8") as f:
-            templ = f.read()
-            if len(xs) > 1:
-                templ = templ.replace("{input}", xs[1])
+        templ = fname.read_text(encoding="utf-8")
+        if len(xs) > 1:
+            templ = templ.replace("{input}", xs[1])
 
-            return user_message(text=templ)
+        return user_message(text=templ)
     except FileNotFoundError:
         console.print(f"{fname} FileNotFoundError", style="red")
-    s = """
+    s = """\
 **question:**
 
 {input}
@@ -429,10 +426,6 @@ def load_template(s: str) -> UserMessage:
 3. write a detailed answer with supporting evidence and facts in an **answer:** section
 """
     return user_message(text=s.replace("{input}", xs[1]))
-
-
-#       raise FileNotFoundError(f"Chat message file not found: {filename}")
-# return None
 
 
 def load_log(s: str) -> MessageHistory:
@@ -538,7 +531,7 @@ def check_and_process_tool_call(client: LLM, history: MessageHistory, response: 
     while choice.finish_reason == "tool_calls" and n:
         n -= 1
         # append choice.message to message history
-        history.append(assistant_message_tool(choice.message.tool_calls))
+        history.append(assistant_tool_message(choice.message.tool_calls))
         for tc in choice.message.tool_calls:
             tool_response = process_tool_call(tc)
             history.append(tool_response)
@@ -551,32 +544,44 @@ def check_and_process_tool_call(client: LLM, history: MessageHistory, response: 
     return response
 
 
-def check_and_process_code_block(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
-    """check for a code block, execute it and pass output back to LLM. This can happen several times if there are errors. If there is no code block then the original response is returned"""
-    code = extract_code_block_from_response(response)
-    n = 3
-    while code and len(code.language) > 0 and n:
-        n -= 1
-        # store original message from llm
-        m = response.choices[0].message
-        msg = assistant_message(text=m.content)
-        history.append(msg)
-        prt(msg)
-        output = execute_script(code)
-        code = None
-        if output:
-            msg2 = user_message(text="## output from running script\n" + output + "\n")
-            history.append(msg2)
-            prt(msg2)
-            response = client.chat(history)
-            code = extract_code_block_from_response(response)
-            ru = response.usage
-            tokens.update(ru.prompt_tokens, ru.completion_tokens)
-            pprint(tokens)
+def check_and_process_code_block(client: LLM, history: MessageHistory) -> bool:
+    """check for a code block, execute it and add as user msg"""
+    if msg := next(e for e in reversed(history.messages) if e.role == "assistant"):
+        code = extract_code_block(msg.get_content(), "```")
+        if code and code.language:
+            if output := execute_script(code):
+                msg2 = user_message(text="## output from running script\n" + output + "\n")
+                history.append(msg2)
+                prt(msg2)
+                return True
+    return False
 
-    if n == 0:
-        console.print("consecutive code block limit exceeded", style="red")
-    return response
+    # code = extract_code_block_from_response(response)
+    # n = 3
+    # while code and len(code.language) > 0 and n:
+    #     n -= 1
+    #     # store original message from llm
+    #     m = response.choices[0].message
+    #     msg = assistant_message(text=m.content)
+    #     history.append(msg)
+    #     prt(msg)
+    #     output = execute_script(code)
+    #     code = None
+    #     if output:
+    #         msg2 = user_message(text="## output from running script\n" + output + "\n")
+    #         history.append(msg2)
+    #         prt(msg2)
+    #         response = client.chat(history)
+    #         # this only works if the response is a chat completion. if it is a tool then it will fail as a hack will ignore tool_calls
+    #         if response.choices[0].finish_reason == "stop":
+    #             code = extract_code_block_from_response(response)
+    #         ru = response.usage
+    #         tokens.update(ru.prompt_tokens, ru.completion_tokens)
+    #         pprint(tokens)
+
+    # if n == 0:
+    #     console.print("consecutive code block limit exceeded", style="red")
+    # return response
 
 
 def extract_code_block_from_response(response: ChatCompletion) -> CodeBlock:
@@ -584,6 +589,7 @@ def extract_code_block_from_response(response: ChatCompletion) -> CodeBlock:
 
 
 def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -> bool:
+    """ret True if next action is to call model otherwise will wait for user input"""
     global code1
     next_action = False
     if cmd == "load":
@@ -626,6 +632,12 @@ def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -
     elif cmd == "tool":
         state = client.toggle_tool_use()
         console.print(f"tool use changed to {state}", style="yellow")
+    elif cmd == "exec":
+        # history does not
+        # # find last assistant message extract code block
+        # run 1 exec and create user message with output
+        next_action = check_and_process_code_block(client, history)
+
     return next_action
 
 
@@ -664,14 +676,13 @@ def chat(llm_name, use_tool):
                 prt(msg)
             response = client.chat(history)
             response = check_and_process_tool_call(client, history, response)
-            response = check_and_process_code_block(client, history, response)
             reason = response.choices[0].finish_reason
             if reason != "stop":
                 console.print(f"chat completion finish_reason {reason}", style="red")
             # store original message from gpt
-            m = response.choices[0].message
-            if m.content:
-                msg = assistant_message(text=m.content)
+            txt = "".join(c.message.content for c in response.choices if c.message.content)
+            if txt:
+                msg = assistant_message(text=txt)
                 history.append(msg)
                 prt(msg, response.model)
 
@@ -682,7 +693,7 @@ def chat(llm_name, use_tool):
             print(f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}")
 
     if len(history.messages) > 2:
-        history.save(make_fullpath(FNAME))
+        history.save(make_fullpath(LOG_FILE))
         yaml.dump(history, open(make_fullpath("chat-log.yaml"), "w"))
 
 
@@ -749,7 +760,7 @@ def test_message_history():
     history.append(user_message("Hello"))
     history.append(assistant_message("Hi there!"))
     tc = ToolCall(id="123", type="function", function=FunctionCall(name="eval", arguments="2+3"))
-    history.append(assistant_message_tool(tool_calls=[tc]))
+    history.append(assistant_tool_message(tool_calls=[tc]))
     history.append(tool_message(tc, "5"))
 
     pprint(history.messages)
@@ -781,7 +792,6 @@ text after
     c = extract_code_block(s, "```")
     console.print(yaml.dump(c), style="green")
     # execute_script(CodeBlock('powershell', s.split('\n')))
-
 
 if __name__ == "__main__":
     # test_message_history()

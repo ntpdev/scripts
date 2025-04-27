@@ -242,14 +242,6 @@ class LLM:
         pprint(self.usage)
         return response
 
-class LLMConversation:
-    llm: LLM
-
-    def __init__(self, llm: LLM):
-        self.llm = llm
-    
-
-
 
 # uses the Responses API function defintions
 eval_fn = {
@@ -887,6 +879,38 @@ def structured_output_message():
     q6_ans = load_and_insert_into_template(root / "q6-ans.md", answers_q6, "{answers}")
     ask_question_and_mark(q6, q6_ans)
 
+def test_chat_loop():
+    """a simple multi-turn conversation maintaining coversation state using response.id"""
+    def input_multi_line() -> str:
+        if (inp := input().strip()) != "{":
+            return inp
+        lines = []
+        while (line := input()) != "}":
+            lines.append(line)
+        return "\n".join(lines)
+
+    usage = Usage()
+    dev_inst = f"The assistant is Marvin a helpful AI chatbot. The current date is {datetime.now().isoformat()}"
+    # models can confidently say that Rishi Sunak is PM in 2025
+    console.print(Markdown(dev_inst), style="white")
+    conv_id = None
+    inp = ""
+    while True:
+        inp = input_multi_line()
+        if inp == "x":
+            break
+        console.print(Markdown(f"user:\n\n{inp}\n"), style="green")
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            instructions=dev_inst,
+            previous_response_id=conv_id,
+            input=inp,
+        )
+        console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
+        usage.update(response.usage)
+        conv_id = response.id
+
+    pprint(usage)
 
 def test_eval():
     x = """\
@@ -909,7 +933,8 @@ def main():
     # test_function_calling()
     # test_function_calling_powershell()
     # test_function_calling_python()
-    test_eval()
+    test_chat_loop()
+    # test_eval()
 
 if __name__ == "__main__":
     main()

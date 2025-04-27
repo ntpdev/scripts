@@ -230,7 +230,7 @@ def input_multi_line() -> str:
     if (inp := input().strip()) != "{":
         return inp
     lines = []
-    while (line := input().strip()) != "}":
+    while (line := input()) != "}":
         lines.append(line)
 
     return "\n".join(lines)
