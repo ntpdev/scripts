@@ -544,8 +544,8 @@ def check_and_process_tool_call(client: LLM, history: MessageHistory, response: 
     return response
 
 
-def check_and_process_code_block(client: LLM, history: MessageHistory) -> bool:
-    """check for a code block, execute it and add as user msg"""
+def check_and_process_code_block(history: MessageHistory) -> bool:
+    """check for a code block, execute it and add output as user msg"""
     if msg := next(e for e in reversed(history.messages) if e.role == "assistant"):
         code = extract_code_block(msg.get_content(), "```")
         if code and code.language:
@@ -555,37 +555,6 @@ def check_and_process_code_block(client: LLM, history: MessageHistory) -> bool:
                 prt(msg2)
                 return True
     return False
-
-    # code = extract_code_block_from_response(response)
-    # n = 3
-    # while code and len(code.language) > 0 and n:
-    #     n -= 1
-    #     # store original message from llm
-    #     m = response.choices[0].message
-    #     msg = assistant_message(text=m.content)
-    #     history.append(msg)
-    #     prt(msg)
-    #     output = execute_script(code)
-    #     code = None
-    #     if output:
-    #         msg2 = user_message(text="## output from running script\n" + output + "\n")
-    #         history.append(msg2)
-    #         prt(msg2)
-    #         response = client.chat(history)
-    #         # this only works if the response is a chat completion. if it is a tool then it will fail as a hack will ignore tool_calls
-    #         if response.choices[0].finish_reason == "stop":
-    #             code = extract_code_block_from_response(response)
-    #         ru = response.usage
-    #         tokens.update(ru.prompt_tokens, ru.completion_tokens)
-    #         pprint(tokens)
-
-    # if n == 0:
-    #     console.print("consecutive code block limit exceeded", style="red")
-    # return response
-
-
-def extract_code_block_from_response(response: ChatCompletion) -> CodeBlock:
-    return extract_code_block(response.choices[0].message.content, "```")
 
 
 def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -> bool:
@@ -633,9 +602,6 @@ def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -
         state = client.toggle_tool_use()
         console.print(f"tool use changed to {state}", style="yellow")
     elif cmd == "exec":
-        # history does not
-        # # find last assistant message extract code block
-        # run 1 exec and create user message with output
         next_action = check_and_process_code_block(client, history)
 
     return next_action
