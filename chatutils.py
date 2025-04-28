@@ -238,10 +238,10 @@ def input_multi_line() -> str:
 
 class TestChat(unittest.TestCase):
     def test_save_and_execute_python(self):
-        s = """
-import math
-print(f'{math.pi * 7 ** 2:.2f}')
-"""
+        s = """\
+            import math
+            print(f'{math.pi * 7 ** 2:.2f}')
+            """
 
         c = CodeBlock("python", s.split("\n"))
         out, err = save_and_execute_python(c)
@@ -249,10 +249,10 @@ print(f'{math.pi * 7 ** 2:.2f}')
         self.assertEqual(len(err), 0)
 
     def test_save_and_execute_python_err(self):
-        s = """
-x,y = 7, 0
-print(f'{x / y}')
-"""
+        s = """\
+            x,y = 7, 0
+            print(f'{x / y}')
+            """
 
         c = CodeBlock("python", s.split("\n"))
         out, err = save_and_execute_python(c)
@@ -260,11 +260,11 @@ print(f'{x / y}')
         self.assertTrue("ZeroDivisionError" in err)
 
     def test_save_and_execute_powershell(self):
-        s = """
-Get-ChildItem -Path ~\\Documents\\*.txt |
-  Sort-Object -Property Length -Descending |
-  Select-Object -First 5
-"""
+        s = """\
+            Get-ChildItem -Path ~\\Documents\\*.txt |
+            Sort-Object -Property Length -Descending |
+            Select-Object -First 5
+            """
         if platform.system() != "Linux":
             c = CodeBlock("powershell", s.split("\n"))
             out, err = save_and_execute_powershell(c)
@@ -272,9 +272,7 @@ Get-ChildItem -Path ~\\Documents\\*.txt |
             self.assertEqual(len(err), 0)
 
     def test_save_and_execute_bash(self):
-        s = """
-ls ~/Documents/*.txt
-"""
+        s = "ls ~/Documents/*.txt"
         if platform.system() == "Linux":
             c = CodeBlock("bash", s.split("\n"))
             out, err = save_and_execute_bash(c)

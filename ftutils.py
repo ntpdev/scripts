@@ -137,25 +137,25 @@ evaluate_expression_fn = {
 }
 
 
-def evaluate_expression_impl(expression: str) -> Any | None:
-    # Split into individual parts and remove whitespace
-    parts = [p.strip() for p in re.split(r'[;\n]', expression)]
+def evaluate_expression_impl(expression: str) -> Any:
+    # Split into individual parts removing blank lines but preserving indents
+    parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
     if not parts:
         return None  # Empty input
-    
+
     parts = ["import math", "import datetime"] + parts
     # Separate final expression
     *statements, last_part = parts
-    
+
     # Create a namespace dictionary to store variables
     namespace = {}
-    
+
     # Execute all statements updating the namespace as necessary
     if statements:
-        exec('\n'.join(statements), namespace)
-    
-    # Evaluate and return the final expression
-    return eval(last_part, namespace)
+        exec("\n".join(statements), namespace)
+
+    # Evaluate result of final expression
+    return eval(last_part.strip(), namespace)
 
 
 def evaluate_expression(expression: str) -> str:
@@ -166,7 +166,7 @@ def evaluate_expression(expression: str) -> str:
             result = evaluate_expression_impl(expression)
             console.print("result: " + str(result), style="yellow")
         except Exception as e:
-            result = "ERROR: " + str(e)
+            result = f"ERROR: {e.__class__.__name__}: {e}"
             console.print(result, style="red")
     else:
         result = "ERROR: no expression found"

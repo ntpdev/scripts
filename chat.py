@@ -891,8 +891,7 @@ def test_chat_loop():
 
     usage = Usage()
     dev_inst = f"The assistant is Marvin a helpful AI chatbot. The current date is {datetime.now().isoformat()}"
-    # models can confidently say that Rishi Sunak is PM in 2025
-    console.print(Markdown(dev_inst), style="white")
+    console.print(Markdown(dev_inst), style="yellow")
     conv_id = None
     inp = ""
     while True:
@@ -912,16 +911,6 @@ def test_chat_loop():
 
     pprint(usage)
 
-def test_eval():
-    x = """\
-from math import factorial
-n = 9
-multinomial = lambda x, y, z: factorial(n) // (factorial(x) * factorial(y) * factorial(z))
-total_ways = sum(multinomial(n - v - s, v, s) for s in range(1, n) for v in range(s+1, n) if (n - v - s) > v)
-total_ways, total_ways % 1000
-"""
-    print(evaluate_expression(x))
-
 
 def main():
     # simple_message()
@@ -934,8 +923,7 @@ def main():
     # test_function_calling_powershell()
     # test_function_calling_python()
     test_chat_loop()
-    # test_eval()
+
 
 if __name__ == "__main__":
     main()
-
