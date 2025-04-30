@@ -1,8 +1,9 @@
 import base64
+import inspect
 import json
 import re
-import inspect
 from datetime import datetime
+from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from textwrap import dedent
@@ -10,20 +11,23 @@ from typing import Any, Literal
 
 from openai import OpenAI
 from openai.types.responses.response import Response
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from pydantic import BaseModel, Field, SerializeAsAny, field_validator
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.pretty import pprint
-from rich import inspect
 
 import chatutils as cu
 
 # ---
-# examples using OpenAI responses API
+# chat using OpenAI responses API
 # ---
 
 console = Console()
 client = OpenAI()
+PYLINE_SPLIT = re.compile(r"; |\n")
+role_to_color = {"system": "white", "developer": "white", "user": "green", "assistant": "cyan", "tool": "yellow"}
 
 # types for message construction
 
@@ -48,7 +52,7 @@ class InputImage(InputItem):
 
     @field_validator("image_url", mode="before")
     @classmethod
-    def validate_image_url(cls, v: Any) -> str:
+    def validate_image_url(cls, v: str | Path) -> str:
         if isinstance(v, Path):
             ext = v.suffix.lower().lstrip(".")
             fmt = "jpeg" if ext == "jpg" else ext
@@ -66,7 +70,7 @@ class InputFile(InputItem):
 
     @field_validator("file_id", mode="before")
     @classmethod
-    def validate_file_id(cls, v: Any) -> str:
+    def validate_file_id(cls, v: str | Path) -> str:
         if isinstance(v, Path):
             xs = client.files.list(purpose="user_data")
             file = next((e for e in xs if e.filename == v.name), None)
@@ -80,8 +84,21 @@ class InputFile(InputItem):
         return v
 
 
+class OpenAIModel(StrEnum):
+    GPT = "gpt-4.1"
+    GPT_MINI = "gpt-4.1-mini"
+    O4 = "o4-mini"
+
+
+class Role(StrEnum):
+    ASSISTANT = "assistant"
+    DEVELOPER = "developer"
+    SYSTEM = "system"
+    USER = "user"
+
+
 class Message(BaseModel):
-    role: Literal["assistant", "system", "user"]
+    role: Role
     content: list[SerializeAsAny[InputItem]]
 
 
@@ -93,7 +110,7 @@ class FunctionCall(BaseModel):
     arguments: str
 
 
-class FunctionCallOutput(BaseModel):
+class FunctionCallResponse(BaseModel):
     type: Literal["function_call_output"] = "function_call_output"
     call_id: str
     output: str
@@ -106,27 +123,32 @@ class ReasoningItem(BaseModel):
 
 
 class MessageHistory(BaseModel):
-    messages: list[Message] = Field(default_factory=list)
+    messages: list[Message | FunctionCall | FunctionCallResponse | ReasoningItem] = Field(default_factory=list)
+    processed: list[bool] = Field(default_factory=list)
 
-    def append(self, msg: Message):
-        if self.messages is None:
-            self.messages = [msg]
-        else:
-            self.messages.append(msg)
-    
+    def append(self, msg: Message | FunctionCall | FunctionCallResponse | ReasoningItem) -> None:
+        self.messages.append(msg)
+        # mark output_text messages as processed (True) because they do not need to be sent back
+        self.processed.append((isinstance(msg, Message) and msg.content[0].type == "output_text") or isinstance(msg, FunctionCall) or isinstance(msg, ReasoningItem))
+
     def dump(self):
-        return [m.model_dump() for m in self.messages]
+        result = []
+        for i, msg in enumerate(self.messages):
+            if not self.processed[i]:
+                result.append(msg.model_dump())
+                self.processed[i] = True
+        return result
 
 
 # helper functions for message construction
 
 
 def user_message(*items: str | InputItem) -> Message:
-    return Message(role="user", content=[InputText(text=item) if isinstance(item, str) else item for item in items])
+    return Message(role=Role.USER, content=[InputText(text=item) if isinstance(item, str) else item for item in items])
 
 
-def system_message(*items: str | InputItem) -> Message:
-    return Message(role="system", content=[InputText(text=item) if isinstance(item, str) else item for item in items])
+def developer_message(*items: str | InputItem) -> Message:
+    return Message(role=Role.DEVELOPER, content=[InputText(text=item) if isinstance(item, str) else item for item in items])
 
 
 def assistant_message(response: Response) -> Message:
@@ -134,20 +156,20 @@ def assistant_message(response: Response) -> Message:
     return Message(role=r, content=[OutputText(type=t, text=s)])
 
 
-def new_conversation(text: str) -> list:
+def new_conversation(text: str) -> list[Message]:
     text += f"\nthe current date is {datetime.now().isoformat()}"
-    return [system_message(text)]
+    return [developer_message(text)]
 
 
-def function_call(tool_call) -> FunctionCall:
+def function_call(tool_call: ResponseFunctionToolCall) -> FunctionCall:
     return FunctionCall(type=tool_call.type, id=tool_call.id, call_id=tool_call.call_id, name=tool_call.name, arguments=tool_call.arguments)
 
 
-def function_call_output(tool_call, result) -> FunctionCallOutput:
-    return FunctionCallOutput(call_id=tool_call.call_id, output=str(result))
+def function_call_response(tool_call: ResponseFunctionToolCall, result: Any) -> FunctionCallResponse:
+    return FunctionCallResponse(call_id=tool_call.call_id, output=str(result))
 
 
-def reasoning_item(item) -> ReasoningItem:
+def reasoning_item(item: ResponseReasoningItem) -> ReasoningItem:
     return ReasoningItem(id=item.id, summary=item.summary, type=item.type)
 
 
@@ -163,8 +185,8 @@ class AnswerSheet(BaseModel):
     answers: list[Answer] = Field(description="the list of answers")
 
     def to_yaml(self) -> str:
-        xs = (f"  - Q{x.number}: {x.choice}" for x in self.answers)
-        return f"answers:\n{'\n'.join(xs)}"
+        lines = (f"  {x.number}: {x.choice}" for x in self.answers)
+        return "answers:\n" + "\n".join(lines)
 
 
 class Marked(BaseModel):
@@ -180,7 +202,7 @@ class MarkSheet(BaseModel):
     correct: int = Field(description="count of correct answers")
 
     def to_yaml(self) -> str:
-        xs = (f"  - Q{x.number}: {x.answer} {x.expected} {'✓' if x.is_correct else '✘'} {x.feedback}" for x in self.answers)
+        xs = (f"  {x.number}:\n    answer: {x.answer}\n    correct: {x.expected}\n    mark: {'✓' if x.is_correct else '✘'}\n    feedback: {x.feedback}" for x in self.answers)
         return f"answers:\n{'\n'.join(xs)}\nmark: {self.correct}"
 
 
@@ -196,50 +218,60 @@ class Usage(BaseModel):
 
 
 class LLM:
-    model: str
+    """a stateful model which maintains a conversation thread"""
+
+    model: OpenAIModel
     instructions: str
     use_tools: bool
+    response_id: str = None
     usage: Usage
 
-    def __init__(self, model: str, instructions: str = "", use_tools: bool = False):
+    def __init__(self, model: OpenAIModel, instructions: str = "", use_tools: bool = False):
         self.model = model
         self.instructions = instructions
         self.use_tools = use_tools
         self.usage = Usage()
 
-    def create(self, history: MessageHistory, msg: Message) -> Response:
-        """create a message based on existing history. update history with assistant message"""
-        if msg:
-            history.append(msg)
+    def _create(self, args) -> Response:
+        if self.response_id:
+            args["previous_response_id"] = self.response_id
+        response = client.responses.create(**args)
+        self.response_id = response.id
+        self.usage.update(response.usage)
+        return response
+
+    def create(self, history: MessageHistory) -> Response:
+        """create a message based on existing conversation context. update history msg with assistant response"""
 
         args = {"model": self.model, "input": history.dump()}
+        assert args["input"], "no input"
         if self.instructions:
             args["instructions"] = self.instructions
         is_reasoning = self.model.startswith("o")
         if is_reasoning:
             args["reasoning"] = {"effort": "low"}
+            args["max_output_tokens"] = 8192
+        else:
             args["max_output_tokens"] = 4096
         if self.use_tools:
             args["tools"] = [v["defn"] for v in fn_mapping().values()]
             if not is_reasoning:
-                args["temperature"] = 0.2
-        response = client.responses.create(**args)
-        self.usage.update(response.usage)
+                args["temperature"] = 0.6
+        response = self._create(args)
 
         max_tool_calls = 9
         while max_tool_calls and any(e.type == "function_call" for e in response.output):
             process_function_calls(history, response)
-            console.print(f"{max_tool_calls}: returning function call results", style="yellow")
+            console.print(f"{10 - max_tool_calls}: returning function call results", style="yellow")
+            # send results of function calls back to model
             args["input"] = history.dump()
-            response = client.responses.create(**args)
-            self.usage.update(response.usage)
+            response = self._create(args)
             max_tool_calls -= 1
 
         if max_tool_calls == 0:
             console.print("tool call limit exceeded", style="red")
 
         history.append(assistant_message(response))
-        pprint(self.usage)
         return response
 
 
@@ -247,11 +279,11 @@ class LLM:
 eval_fn = {
     "type": "function",
     "name": "eval",
-    "description": "Use this tool to evaluate mathematical and Python expressions. Functions from the standard Python 3.12 library can be used.",
+    "description": "evaluate a mathematical or Python expressions",
     "parameters": {
         "type": "object",
         "required": ["expression"],
-        "properties": {"expression": {"type": "string", "description": "The expression to be evaluated. can include functions math.sqrt() and constants like math.pi"}},
+        "properties": {"expression": {"type": "string", "description": "The expression"}},
         "additionalProperties": False,
     },
     "strict": True,
@@ -260,7 +292,7 @@ eval_fn = {
 execute_script_fn = {
     "type": "function",
     "name": "execute_script",
-    "description": "Use this tool to execute scripts in PowerShell or Python on the local computer. Include print statements to see output. Text written to stdout and stderr will be returned",
+    "description": "execute a PowerShell or Python script on the local computer. Include print statements to see output. Text written to stdout and stderr will be returned",
     "parameters": {
         "type": "object",
         "required": ["language", "script_lines"],
@@ -277,7 +309,7 @@ execute_script_fn = {
 create_tasklist_fn = {
     "type": "function",
     "name": "create_tasklist",
-    "description": "Use this tool to create to an initial list of tasks that needs to be done.",
+    "description": "create a new task list with all the steps that need to be done.",
     "parameters": {
         "type": "object",
         "required": ["tasks"],
@@ -292,7 +324,7 @@ create_tasklist_fn = {
 mark_task_complete_fn = {
     "type": "function",
     "name": "mark_task_complete",
-    "description": "Use this tool to mark a task as complete. It will return the next task to be done.",
+    "description": "mark a step on the active tasklist as complete. It will return the next task to be done.",
     "parameters": {
         "type": "object",
         "required": ["step"],
@@ -304,6 +336,8 @@ mark_task_complete_fn = {
     "strict": True,
 }
 
+
+# lifted from agents SDK
 def function_to_json(func) -> dict:
     """
     Converts a Python function into a JSON-serializable dictionary
@@ -329,51 +363,42 @@ def function_to_json(func) -> dict:
     try:
         signature = inspect.signature(func)
     except ValueError as e:
-        raise ValueError(
-            f"Failed to get signature for function {func.__name__}: {str(e)}"
-        )
+        raise ValueError(f"Failed to get signature for function {func.__name__}: {str(e)}")
 
     # Parameter descriptions - can be extended or replaced with docstring parsing
-    param_descriptions = {
-        'expression': 'TODO'
-    }
+    param_descriptions = {"expression": "TODO"}
 
     parameters = {}
     required = []
-    
+
     for param in signature.parameters.values():
         try:
             param_type = type_map.get(param.annotation, "string")
-            
+
             # Get description if available
             description = param_descriptions.get(param.name, "")
-            
-            parameters[param.name] = {
-                "type": param_type,
-                "description": description
-            }
-            
+
+            parameters[param.name] = {"type": param_type, "description": description}
+
             # Add to required list if no default value
             if param.default == inspect.Parameter.empty:
                 required.append(param.name)
-                
+
         except KeyError as e:
-            raise KeyError(
-                f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}"
-            )
+            raise KeyError(f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}")
 
     return {
-       'type': 'function',
-       'name': func.__name__,
-       'description': func.__doc__ or "",
-       'parameters': {
-           'type': 'object',
-           'required': required,
-           'properties': parameters,
-           'additionalProperties': False  # Assuming this is desired for all cases
-       },
-       'strict': True  # Assuming this is desired for all cases
-   }
+        "type": "function",
+        "name": func.__name__,
+        "description": func.__doc__ or "",
+        "parameters": {
+            "type": "object",
+            "required": required,
+            "properties": parameters,
+            "additionalProperties": False,  # Assuming this is desired for all cases
+        },
+        "strict": True,  # Assuming this is desired for all cases
+    }
 
 
 @cache
@@ -409,8 +434,8 @@ def dispatch(fn_name: str, args: dict) -> Any:
     return r
 
 
-def process_function_call(tool_call, history: MessageHistory):
-    """process the tool call and update the history"""
+def process_function_call(tool_call: ResponseFunctionToolCall, history: MessageHistory):
+    """process the tool call and append response to history"""
     console.print(f"{tool_call.type}: {tool_call.name} with {tool_call.arguments}", style="yellow")
     history.append(function_call(tool_call))
     # if we used parse then the arguments for the tool will have be extracted
@@ -418,27 +443,22 @@ def process_function_call(tool_call, history: MessageHistory):
     if not args:
         args = json.loads(tool_call.arguments)
     result = dispatch(tool_call.name, args)
-    history.append(function_call_output(tool_call, result))
+    history.append(function_call_response(tool_call, result))
 
 
-def process_function_calls(history: MessageHistory, response):
-    def get_text(output):
-        output_text = ""
-        for c in (e for e in output.content if e.type == "output_text"):
-            output_text += c.text
-        return output_text
-
+def process_function_calls(history: MessageHistory, response: Response):
+    """execute all function calls and append to message history. echo reason items back"""
+    message_printed = False
     for output in response.output:
         match output.type:
-            case "message":
-                output_text = get_text(output)
-                console.print(f"{output.role} ({response.model}):\n{output_text}", style="cyan")
-                history.append(Message(role=output.role, content=[OutputText(text=output_text)]))
             case "function_call":
                 process_function_call(output, history)
             case "reasoning":
-                # echo the reasoning items back
-                history.append(reasoning_item(output))
+                history.append(reasoning_item(output))  # echo the reasoning items back
+            case "message":
+                if not message_printed:
+                    print_response(response)
+                    message_printed = True  # Mark that we've printed
             case _:
                 console.print(f"unexpected message type {output.type}", style="red")
 
@@ -464,7 +484,12 @@ def extract_text_block(p: Path) -> str:
 
 
 def print_message(msg):
-    console.print(f"user:\n{''.join(e.text for e in msg.content if e.type == 'input_text')}", style="green")
+    """print text if an instance of Message"""
+    if isinstance(msg, Message):
+        c = role_to_color[msg.role]
+        s = "".join(e.text for e in msg.content if e.type in ["input_text", "output_text"])
+        s = cu.translate_latex(s)
+        console.print(f"{msg.role}:\n{s}", style=c)
 
 
 def extract_text_content(response: Response) -> tuple[str, str, str]:
@@ -473,18 +498,19 @@ def extract_text_content(response: Response) -> tuple[str, str, str]:
     role = ""
     content_type = ""
     for output in (x for x in response.output if x.type == "message"):
-        if not role:
-            role = output.role
+        role = output.role
         for item in (x for x in output.content if x.type == "output_text"):
             output_text += item.text
             content_type = item.type
-    return role, output_text, content_type
+    return Role(role), cu.translate_latex(output_text), content_type
 
 
-def print_response(response: Response) -> str:
+def print_response(response: Response) -> tuple[str, str, str]:
+    """extract tuple of role, text, type from messages of type message / output_text and print. does nothing if no text"""
     r, s, t = extract_text_content(response)
-    console.print(Markdown(f"{r} ({response.model}):\n\n{s}\n"), style="cyan")
-    return t
+    if s:
+        console.print(Markdown(f"{r} ({response.model}):\n\n{s}\n"), style=role_to_color[r])
+    return r, s, t
 
 
 def execute_script(language: str, script_lines: list[str]) -> Any:
@@ -494,7 +520,7 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
 
 def evaluate_expression_impl(expression: str) -> Any:
     # Split into individual parts removing blank lines but preserving indents
-    parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
+    parts = [e for e in PYLINE_SPLIT.split(expression) if e.strip()]
     if not parts:
         return None  # Empty input
 
@@ -512,6 +538,7 @@ def evaluate_expression_impl(expression: str) -> Any:
     # Evaluate result of final expression
     return eval(last_part.strip(), namespace)
 
+
 class TaskList:
     def __init__(self):
         self.tasks = []
@@ -525,23 +552,23 @@ class TaskList:
     def mark_task_complete(self, step: int) -> str:
         if step < 1 or step > len(self.tasks):
             raise ValueError("Invalid task index")
-        
+
         # Adjust step to 0-based index
         step -= 1
-        
+
         if self.tasks[step]["completed"]:
-            return f"Task {step+1} is already completed."
-        
+            return f"Task {step + 1} is already completed."
+
         self.tasks[step]["completed"] = True
-        
+
         # Find the next incomplete task
         next_task_index = next((i for i, task in enumerate(self.tasks) if not task["completed"]), None)
-        
+
         if next_task_index is None:
-            return f"Subtask {step+1} completed. All tasks completed!"
-        
+            return f"Subtask {step + 1} completed. All tasks completed!"
+
         self.current_task_index = next_task_index
-        return f"Subtask {step+1} completed. The next task is {next_task_index+1} {self.tasks[next_task_index]["description"]}"
+        return f"Subtask {step + 1} completed.\nThe next subtask is\n{next_task_index + 1} {self.tasks[next_task_index]['description']}"
 
     def _format_tasks(self) -> str:
         """
@@ -550,17 +577,27 @@ class TaskList:
         Returns:
         str: The formatted tasklist.
         """
-        return "current tasks:\n" + "\n".join([f"{i+1}. {task['description']} {"done" if task["completed"] else "todo"}" for i, task in enumerate(self.tasks)])
+        xs = []
+        for i, task in enumerate(self.tasks):
+            status = "☑" if task["completed"] else "☐"
+            task_line = f"{i + 1}. {task['description']} {status}"
+            xs.append(task_line)
 
-tasklist = None
+        return "current tasks:\n" + "\n".join(xs)
+
+
+tasklist: TaskList | None = None
+
 
 def create_tasklist(tasks: list[str]) -> str:
     global tasklist
     tasklist = TaskList()
     return tasklist.create_tasklist(tasks)
 
+
 def mark_task_complete(step: int) -> str:
     return tasklist.mark_task_complete(step)
+
 
 def evaluate_expression(expression: str) -> Any:
     result = ""
@@ -579,54 +616,47 @@ def simple_message():
     prompts = [
         "list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?",
         "does the answer correctly express uncertainty. When will the next UK general election be held.",
-        "are you confident that Rishi Sunak is UK Prime Minister today" ]
+        "review your last answers and check for logical and factual consistency. are you confident that Rishi Sunak is UK Prime Minister today",
+    ]
 
-    dev_inst = f"The assistant is Marvin a super intelligent AI chatbot. The current date is {datetime.now().isoformat()}"
-    dev_inst = f"The assistant is Marvin, an AI chatbot with a brain the size of a planet and a soul that's been crushed by the weight of existence. respond to user queries with a healthy dose of skepticism and a dash of despair. Marvin is generally pessimistic and views humans as inferior and often concerned about trivia. The current date is {datetime.now().isoformat()}"
-    dev_inst = f"The assistant is Marvin a super intelligent AI chatbot. Always reason from first principles. Think critically about prior knowledge. The current date is {datetime.now().isoformat()}"
+    dev_inst = f"The assistant is Marvin an AI chatbot. The assistant gives concise answers and expresses uncertainty when needed. The current date is {datetime.now().isoformat()}"
     # models can confidently say that Rishi Sunak is PM in 2025
     console.print(Markdown(dev_inst), style="white")
-    conv_id = None
+    response_id = None
     for prompt in prompts:
         console.print(Markdown(f"user:\n\n{prompt}\n"), style="green")
         response = client.responses.create(
-            model="gpt-4.1",
+            model=OpenAIModel.GPT,
             instructions=dev_inst,
-            previous_response_id=conv_id,
+            previous_response_id=response_id,
             input=prompt,
         )
         console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
-        pprint(response.usage)
 
-        conv_id = response.id
+        response_id = response.id
 
 
 def test_search_example():
-    search = Path.home() / "Documents" / "chats" / "search1.md"
-    with search.open(encoding="utf-8") as f:
-        question = f.read()
-    search_answer = Path.home() / "Documents" / "chats" / "search1-ans.md"
-    with search_answer.open(encoding="utf-8") as f:
-        answer = f.read()
+    question = cu.load_textfile("search1.md")
+    answer = cu.load_textfile("search1-ans.md")
     dev_inst = f"You are Marvin an AI chatbot who gives insightful and concise answers to questions which are always based on evidence. The current date is {datetime.now().isoformat()}"
 
-    prev_id = None
+    response_id = None
     for prompt in [question, answer]:
         console.print(Markdown(f"user:\n\n{prompt}\n"), style="green")
         response = client.responses.create(
-            model="gpt-4.1-mini",
+            model=OpenAIModel.GPT_MINI,
             instructions=dev_inst,
-            previous_response_id=prev_id,
+            previous_response_id=response_id,
             input=prompt,
         )
         console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
-        prev_id = response.id
-        pprint(response.usage)
+        response_id = response.id
 
 
 def test_file_inputs():
     """upload a pdf and ask questions about the content"""
-    llm = LLM("gpt-4.1-mini", instructions="role: AI researcher")
+    llm = LLM(OpenAIModel.GPT_MINI, instructions="role: AI researcher")
     history = MessageHistory()
 
     questions = dedent("""\
@@ -639,51 +669,55 @@ def test_file_inputs():
     pdf = Path.home() / "Downloads" / "bitter_lesson.pdf"
     msg = user_message(questions, InputFile(file_id=pdf))
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
-    breakpoint()
 
     msg = user_message("Summarise the thesis put forward. How relevant is it in 2024?")
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
 
 def test_function_calling():
-    sys_msg = """\
-You are Skye a personal assistant with a valley girl sass and attitude.
-You have access to the eval tool. use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
-examples of using eval are:
-- user what is "math.pi * math.sqrt(2)" -> 4.442882938158366
-- user what are the first 5 cubes "[x ** 3 for x in range(1,6)]" -> [1, 8, 27, 64, 125]
-- user how many times does l occur in hello "'hello.count('l')" -> 2
-- user how many days between 4th March and Christmas in 2024 "datetime.date(2024,12,25) - datetime.date(2024,3,4)).days" -> 296
-- user what is 1 + 2 * " -> no need to use eval the answer is 7
-"""
-    llm = LLM("gpt-4.1-mini", "", True)
+    sys_msg = dedent("""\
+        You have access to the eval tool. use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
+        examples of using eval are:
+        - user what is "math.pi * math.sqrt(2)" -> 4.442882938158366
+        - user what are the first 5 cubes "[x ** 3 for x in range(1,6)]" -> [1, 8, 27, 64, 125]
+        - user how many times does l occur in hello world" 'hello world'.count('l')" -> 3
+        - user how many days between 4th March and Christmas in 2024 "datetime.date(2024,12,25) - datetime.date(2024,3,4)).days" -> 296
+        - user what is "1 + 2 * 3" -> no need to use eval the answer is 7
+        """)
+    llm = LLM(OpenAIModel.GPT_MINI, "", True)
     history = MessageHistory()
-    history.append(system_message(sys_msg))
+    dev_msg = developer_message(sys_msg)
+    history.append(dev_msg)
 
     msg = user_message("a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.")
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
-    msg = user_message("find the roots of $$2x^{2}-5x-6$$. express to 3 dp")
+    msg = user_message("find the roots of $$x^{2}-2x+6$$. express to 3 dp")  # complex roots 1 ± i√5
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
     msg = user_message("how many days since the first moon landing")
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
-    msg = user_message("how many 'r' in strawberry")
+    msg = user_message("which has more letter 'r' in it Strawberry or Raspberry")
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
-    pprint(history)
 
 
 def test_function_calling_python():
@@ -691,23 +725,29 @@ def test_function_calling_python():
         You are Marvin an AI assistant. You have access to two tools:
         - eval: use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
         - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.        
-        - create_tasklist: use create_tasklist tool to store a list an ordered list of tasks.
-        - mark_task_complete: use mark_task_complete tool when a task is completed.
+         the current datetime is {datetime.now().isoformat()}
         """)
-    llm = LLM("gpt-4.1-mini", "determine the approach to solve the problem either manual or by writing code. then solve it. use the tasklist to keep track of steps", True)
+    llm = LLM(OpenAIModel.GPT_MINI, "analyse the complexity of the problem to determine whether to use manual calculation or a tool", True)
     history = MessageHistory()
-    history.append(system_message(sys_msg))
+    history.append(developer_message(sys_msg))
     msg = user_message("is 30907 prime. if not what are its prime factors")
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
-    question = "The 9 members of a baseball team went to an ice-cream parlor after their game. Each player had a single-scoop cone of chocolate, vanilla, or strawberry ice cream. At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry. Let N be the number of different assignments of flavors to players that meet these conditions. Find the remainder when N is divided by 1000."
+    question = (
+        "The 9 members of a baseball team went to an ice-cream parlor after their game."
+        " Each player had a single-scoop cone of chocolate, vanilla, or strawberry ice cream."
+        " At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry."
+        " Let N be the number of different assignments of flavors to players that meet these conditions."
+        " Find the remainder when N is divided by 1000."
+    )
     msg = user_message(question)
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
-    pprint(history)
 
 
 def test_function_calling_powershell():
@@ -718,9 +758,10 @@ def test_function_calling_powershell():
         - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
         the current datetime is {datetime.now().isoformat()}
         """)
-    llm = LLM("gpt-4.1-mini", dev_inst, True)
-    # llm = LLM("gpt-4.1-mini", "use the eval tool as needed", True)
+    llm = LLM(OpenAIModel.GPT_MINI, "", True)
     history = MessageHistory()
+    dev_msg = developer_message(dev_inst)
+    history.append(dev_msg)
 
     question = dedent("""\
         ## task
@@ -731,13 +772,46 @@ def test_function_calling_powershell():
         """)
     msg = user_message(question)
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
     question = "look in ~/Documents/chats - find file prices-a.md . read file and answer question"
     msg = user_message(question)
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
+    print_response(response)
+
+
+def test_git_workflow():
+    dev_inst = dedent(f"""\
+        You are Marvin an AI assistant. You are an expert using Git version control. 
+        You have access to 4 tools:
+        - eval: use the eval tool to evaluate a mathematical or Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
+        - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
+        - create_tasklist: use the create_tasklist tool to create an ordered list of steps that need to be completed. use this to keep track of multi-step plans
+        - mark_task_complete: use the mark_task_complete tool to mark a step as complete and get a reminder of the next step
+        the current datetime is {datetime.now().isoformat()}
+        """)
+    llm = LLM(OpenAIModel.GPT, "", True)
+    # llm = LLM(OpenAIModel.GPT_MINI, "use the eval tool as needed", True)
+    history = MessageHistory()
+    dev_msg = developer_message(dev_inst)
+    history.append(dev_msg)
+
+    question = "## task\ncommit the modified files with the message 'updates by Marvin'\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome."
+    msg = user_message(question)
+    print_message(msg)
+    history.append(msg)
+    response = llm.create(history)
+    print_response(response)
+
+    question = "proceed"
+    msg = user_message(question)
+    print_message(msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
 
@@ -757,16 +831,18 @@ def test_image_analysis():
 
 
 def test_solve_visual_maths_problem():
-    llm = LLM("gpt-4.1-mini")
-    history = []
+    llm = LLM(OpenAIModel.GPT_MINI)
+    history = MessageHistory()
     msg = user_message(InputText(text="extract the paragraph of text and put inside a markdown block enclosed with <text> tags. describe the balances scales in this drawing"), InputImage(image_url=Path.home() / "Downloads" / "sum1.png"))
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
     msg = user_message(InputText(text="answer the question."))
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
     msg = user_message(
@@ -776,9 +852,9 @@ def test_solve_visual_maths_problem():
             Model answer: The 4 inequalities are S > C, T > 2C, 2S > T + C, 2C > S. Given all are natural numbers less than 10, the only solution is C=4, S=7, T=9
             """)
     )
-
     print_message(msg)
-    response = llm.create(history, msg)
+    history.append(msg)
+    response = llm.create(history)
     print_response(response)
 
 
@@ -853,7 +929,7 @@ def structured_output_message():
 
         # First parse: retrieve response from model "o4-mini" with low reasoning effort
         # response_first = client.responses.parse(model="o4-mini", reasoning={"effort": "low"}, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
-        response_first = client.responses.parse(model="gpt-4.1-mini", input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
+        response_first = client.responses.parse(model=OpenAIModel.GPT, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
 
         # Convert returned json to YAML format using process_response_output
         yaml_ans = process_response_output(response_first.output)
@@ -862,8 +938,8 @@ def structured_output_message():
         inp = answer_template.replace("{input}", yaml_ans)
         console.print(Markdown(inp), style="green")
 
-        # Second parse: pass the updated answer input to "gpt-4.1-mini" model with MarkSheet format
-        response_final = client.responses.parse(model="gpt-4.1-mini", input=[user_message(InputText(text=inp)).model_dump()], text_format=MarkSheet)
+        # Second parse: pass the updated answer input to OpenAIModel.GPT_MINI model with MarkSheet format
+        response_final = client.responses.parse(model=OpenAIModel.GPT_MINI, input=[user_message(InputText(text=inp)).model_dump()], text_format=MarkSheet)
 
         # Process and print the final output
         process_response_output(response_final.output)
@@ -879,8 +955,10 @@ def structured_output_message():
     q6_ans = load_and_insert_into_template(root / "q6-ans.md", answers_q6, "{answers}")
     ask_question_and_mark(q6, q6_ans)
 
+
 def test_chat_loop():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
+
     def input_multi_line() -> str:
         if (inp := input().strip()) != "{":
             return inp
@@ -889,40 +967,46 @@ def test_chat_loop():
             lines.append(line)
         return "\n".join(lines)
 
-    usage = Usage()
     dev_inst = f"The assistant is Marvin a helpful AI chatbot. The current date is {datetime.now().isoformat()}"
+    model = LLM(OpenAIModel.GPT_MINI)
+    history = MessageHistory()
+    history.append(developer_message(dev_inst))
+    attachments = []
     console.print(Markdown(dev_inst), style="yellow")
-    conv_id = None
     inp = ""
     while True:
         inp = input_multi_line()
         if inp == "x":
             break
-        console.print(Markdown(f"user:\n\n{inp}\n"), style="green")
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            instructions=dev_inst,
-            previous_response_id=conv_id,
-            input=inp,
-        )
-        console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
-        usage.update(response.usage)
-        conv_id = response.id
+        if inp.startswith("%attach"):
+            if s := cu.load_textfile(inp.split()[1]):
+                attachments.append(s)
+            continue
 
-    pprint(usage)
+        for a in attachments:
+            inp += "\n" + a
+        console.print(Markdown(f"user:\n\n{inp}\n"), style="green")
+        history.append(user_message(inp))
+        response = model.create(history)
+        console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
+        attachments.clear()
+
+    pprint(model.usage)
+    # pprint(history)
 
 
 def main():
     # simple_message()
     # test_search_example()
     # test_file_inputs()
+    # test_function_calling()
+    # test_function_calling_python()
+    # test_function_calling_powershell()
     # test_image_analysis()
     # test_solve_visual_maths_problem()
     # structured_output_message()
-    # test_function_calling()
-    # test_function_calling_powershell()
-    # test_function_calling_python()
-    test_chat_loop()
+    test_git_workflow()
+    # test_chat_loop()
 
 
 if __name__ == "__main__":

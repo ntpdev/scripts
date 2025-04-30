@@ -27,6 +27,7 @@ from rich.pretty import pprint
 from chatutils import (
     execute_script,
     extract_code_block,
+    load_textfile,
     input_multi_line,
     make_fullpath,
     save_content,
@@ -381,29 +382,6 @@ def load_msg(s: str) -> UserMessage:
     return None
 
 
-def load_textfile(s: str) -> str:
-    """loads a text file. if it is a code or data file wrap in markdown code block."""
-    lmap = {
-        ".py": "python",
-        ".htm": "html",
-        ".html": "html",
-        ".java": "java",
-        ".yaml": "yaml",
-        ".json": "json",
-        ".xml": "xml",
-    }
-    fname = make_fullpath(s)
-    try:
-        content = fname.read_text(encoding="utf-8")
-        console.print(f"loaded file {fname} length {len(content)}", style="yellow")
-        if fname.suffix in lmap:
-            return f"\n## {fname.name}\n\n```{lmap[fname.suffix]}\n{content}\n```\n"
-        return content
-    except FileNotFoundError as e:
-        console.print(f"{e.__class__.__name__}: {e}", style="red")
-    return None
-
-
 def load_template(s: str) -> UserMessage:
     xs = s.split(maxsplit=1)
     fname = make_fullpath(xs[0])
@@ -555,21 +533,21 @@ def process_tool_call(tool_call: ChatCompletionMessageToolCall) -> ToolMessage:
 def check_and_process_tool_call(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
     """check for a tool call and process. If there is no tool call then the original response is returned"""
     # https://platform.openai.com/docs/guides/function-calling
-    choice = response.choices[0]
-    n = 9
-    while choice.finish_reason == "tool_calls" and n:
-        n -= 1
-        # append choice.message to message history
-        history.append(assistant_tool_message(choice.message.tool_calls))
-        for tc in choice.message.tool_calls:
-            tool_response = process_tool_call(tc)
-            history.append(tool_response)
-        # reply to llm with tool responses
-        response = client.chat(history)
-        choice = response.choices[0]
+    for choice in response.choices:
+        n = 9
+        while choice.finish_reason == "tool_calls" and n:
+            n -= 1
+            # append choice.message to message history
+            history.append(assistant_tool_message(choice.message.tool_calls))
+            for tc in choice.message.tool_calls:
+                tool_response = process_tool_call(tc)
+                history.append(tool_response)
+            # reply to llm with tool responses
+            response = client.chat(history)
+            choice = response.choices[0]
 
-    if n == 0:
-        console.print("consecutive tool call limit exceeded", style="red")
+        if n == 0:
+            console.print("consecutive tool call limit exceeded", style="red")
     return response
 
 

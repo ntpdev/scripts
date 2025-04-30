@@ -119,14 +119,14 @@ retrieve_stock_quotes_fn = {
 evaluate_expression_fn = {
     "type": "function",
     "function": {
-        "name": "evaluate_expression",
-        "description": "Evaluates a mathematical or Python expression provided as a string. Types and constants from standard python libraries like math and datetime are available.",
+        "name": "eval",
+        "description": "Evaluates a mathematical or Python expression",
         "parameters": {
             "type": "object",
             "properties": {
                 "expression": {
                     "type": "string",
-                    "description": "The expression to be evaluated.",
+                    "description": "the expression",
                 }
             },
             "required": ["expression"],
@@ -138,7 +138,7 @@ evaluate_expression_fn = {
 
 
 def evaluate_expression_impl(expression: str) -> Any:
-    # Split into individual parts removing blank lines but preserving indents
+    # Split into individual lines removing blank lines but preserving indents
     parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
     if not parts:
         return None  # Empty input
