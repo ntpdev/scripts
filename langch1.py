@@ -5,10 +5,11 @@ import base64
 import platform
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Any
 
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
@@ -144,7 +145,7 @@ def retrieve_headlines(source: Literal["bbc", "bloomberg", "ft", "nyt", "wsj"]) 
 
 
 @tool
-def retrieve_article(url: str):
+def retrieve_article(url: str) -> str:
     """Downloads the text content of a news article from the URL.
 
     Args:
@@ -157,7 +158,7 @@ def retrieve_article(url: str):
 
 
 @tool
-def retrieve_stock_quotes(symbols: list[str]):
+def retrieve_stock_quotes(symbols: list[str]) -> list[str]:
     """Retrieves historical stock quotes for the given symbols.
     Args:
         symbols: A list of stock ticker symbols (e.g., ['AAPL', 'MSFT', 'GOOG']).
@@ -218,8 +219,8 @@ def evaluate_expression(input: str) -> str:
     return r
 
 
-# available_tools = [evaluate_expression, retrieve_headlines, retrieve_article, retrieve_stock_quotes]
-available_tools = [think, evaluate_expression, show_current_bookings, make_booking, remove_booking]
+available_tools = [evaluate_expression, retrieve_headlines, retrieve_article, retrieve_stock_quotes]
+# available_tools = [think, evaluate_expression, show_current_bookings, make_booking, remove_booking]
 
 
 def load_pdf(p: Path) -> Attachment | None:
@@ -237,7 +238,7 @@ def load_pdf(p: Path) -> Attachment | None:
     return None
 
 
-def process_tool_call(call) -> ToolMessage:
+def process_tool_call(call: dict[str, Any]) -> ToolMessage:
     """process tool call and return result in a ToolMessage"""
     # see https://python.langchain.com/docs/concepts/tools/ for @tools decorator docs
     name = call["name"].lower()
@@ -250,7 +251,7 @@ def process_tool_call(call) -> ToolMessage:
     return ToolMessage("unknown tool: " + call["name"], tool_call_id=call["id"])
 
 
-def check_and_process_tool_calls(llm, msg, session_id):
+def check_and_process_tool_calls(llm: BaseChatModel, msg: BaseMessage, session_id: str) -> None:
     """process any tool calls. llm should be the raw llm not a prompt chain. message history is manually updated."""
     current_msg = msg
     history = get_session_history(session_id)
@@ -263,7 +264,7 @@ def check_and_process_tool_calls(llm, msg, session_id):
         print_message(current_msg)
 
 
-def check_and_process_code_block(llm, aimsg, session_id, max_executions):
+def check_and_process_code_block(llm: BaseChatModel, aimsg: AIMessage, session_id: str, max_executions: int) -> None:
     """check for a code block, execute it and pass output back to LLM. This can happen several times if the LLM replies with another code block. If there is no code block then the original response is returned"""
     code = extract_code_block(aimsg.content, "```")
     n = 0
@@ -279,7 +280,7 @@ def check_and_process_code_block(llm, aimsg, session_id, max_executions):
             code = extract_code_block(aimsg.content, "```")
 
 
-def print_message(m):
+def print_message(m: BaseMessage) -> None:
     c = "cyan"
     role = "assistant"
     if isinstance(m, SystemMessage):
@@ -307,7 +308,7 @@ def print_message(m):
         console.print(m.tool_calls[0], style="yellow")
 
 
-def print_history(history: BaseChatMessageHistory | str):
+def print_history(history: BaseChatMessageHistory | str) -> None:
     """history is either BaseChatMessageHistory or str which is the session_id"""
     h = get_session_history(history) if isinstance(history, str) else history
     console.print("\n=== History ===", style="yellow")
@@ -369,7 +370,7 @@ answers:
 """
 
 
-def test_structured_output(llm):
+def test_structured_output(llm: BaseChatModel) -> None:
     # use 2 chains both produce structured output
     # feed output from first into second
     # no chat history used
@@ -393,7 +394,7 @@ def test_structured_output(llm):
     console.print(f"llm counted = {marks.correct} actual = {total}", style="yellow")
 
 
-def test_single_message(llm):
+def test_single_message(llm: BaseChatModel) -> None:
     session_id = "z1"
     prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder(variable_name="history"), ("human", "**instructions:** the assistant should write out thoughts before formulating the response. **question:** {input}")])
     #    prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder(variable_name="history"), ('human', '{input}')])
@@ -406,7 +407,7 @@ def test_single_message(llm):
     # rprint(get_session_history('z1'))
 
 
-def test_pdf_attachment(llm):
+def test_pdf_attachment(llm: BaseChatModel) -> None:
     session_id = "z1"
     att = load_pdf(Path("~/Downloads/Thayaparan_24254472_ProgressReport.pdf").expanduser())
     prompt = ChatPromptTemplate.from_messages([
@@ -419,7 +420,7 @@ def test_pdf_attachment(llm):
     print_history(session_id)
 
 
-def create_llm_with_history(llm, attachment=None):
+def create_llm_with_history(llm: BaseChatModel, attachment: Attachment | None = None) -> RunnableWithMessageHistory:
     s = """
 **question:**
 
@@ -436,12 +437,12 @@ def create_llm_with_history(llm, attachment=None):
     return RunnableWithMessageHistory(chain, get_session_history, input_messages_key="input", history_messages_key="history")
 
 
-def system_message():
+def system_message() -> SystemMessage:
     tm = datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu 24.04") if platform.system() == "Linux" else ("powershell", "Windows 11")
     #    return f'You are Marvin a super intelligent AI chatbot trained by OpenAI. You use deductive reasoning to answer questions. You make dry, witty, mocking comments and often despair.  You are logical and pay attention to detail. You can access local computer running {plat} by writing python or {scripting_lang}. Scripts should always be in markdown code blocks with the language. current datetime is {tm}'
+    return SystemMessage(f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}")
     return SystemMessage(
-        #        f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}"
 #        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
         """\
 role: you are Dee the AI assistant for Val's hair dresser you handle bookings.
@@ -462,7 +463,7 @@ instructions:
     )
 
 
-def create_llm(llm_name, temp, tool_use):
+def create_llm(llm_name: str, temp: float, tool_use: bool) -> BaseChatModel:
     HumanMessage([])
     if llm_name == "pro":
         llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", safety_settings=safety_settings, temperature=temp)
@@ -483,16 +484,17 @@ def create_llm(llm_name, temp, tool_use):
     if tool_use and llm.model_name.startswith("gemini"):
         console.print("tool calls enabled", style="yellow")
         llm = llm.bind_tools(available_tools)
+   
     return llm
 
 
-def save_content_from_history(session_id, i):
+def save_content_from_history(session_id: str, i: int) -> None:
     h = get_session_history(session_id)
     xs = [m.content for m in h.messages]
     save_content(xs[i])
 
 
-def chat(llm_name, tool_use=False):
+def chat(llm_name: str, tool_use: bool = False) -> None:
     llm = create_llm(llm_name, 0.2 if tool_use else 0.7, tool_use)
     console.print("chat with model: " + llm.model_name, style="yellow")
     chain = create_llm_with_history(llm)

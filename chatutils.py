@@ -4,11 +4,13 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from rich.console import Console
 from rich.markup import escape
 
 console = Console()
+THINK_PATTERN = re.compile('(.*?)<think>(.*?)</think>(.*)', re.DOTALL)
 latex_to_unicode = {
     "approx": "≈",
     "dashv": "⊣",
@@ -220,6 +222,7 @@ def translate_latex(s: str) -> str:
     return s
 
 
+
 def input_multi_line() -> str:
     if (inp := input().strip()) != "{":
         return translate_latex(inp)
@@ -228,6 +231,13 @@ def input_multi_line() -> str:
         lines.append(line)
     return translate_latex("\n".join(lines))
 
+
+def translate_thinking(s: str) -> str:
+    match = THINK_PATTERN.search(s)
+    if match:
+        before, thought, after = match.groups()
+        return f"{before}## thinking\n{thought}\n## answer\n{after}"
+    return s
 
 def load_textfile(s: str) -> str | None:
     """loads a text file. if it is a code or data file wrap in markdown code block."""

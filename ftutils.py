@@ -203,6 +203,8 @@ def retrieve_article(url: str) -> str:
         return retrieve_ft_article(url)
     if "www.wsj.com" in url:
         return retrieve_wsj_article(url)
+    if "www.bloomberg.com" in url:
+        return retrieve_bloomberg_article(url)
     return retrieve_bbc_article(url)
 
 
@@ -545,9 +547,14 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
     if button := page.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
         button.click()
 
-    # accept compliance
-    if div := page.wait_for_selector("div#complianceOverlay", timeout=1000):
-        div.wait_for_selector("button", timeout=100).click()
+    if close := page.wait_for_selector('[data-testid="close-modal"]', state='visible', timeout=3000):
+        close.click()
+
+    page.wait_for_timeout(1000)
+    # close sign-in with google iframe
+    google_iframe_locator = page.frame_locator('iframe[src*="google"]')
+    if close_button := google_iframe_locator.locator('[aria-label="Close"]'):
+        close_button.click()
 
     if element := page.locator('span[data-testid="todays-date"]'):
         date_string = element.inner_text()
@@ -883,13 +890,13 @@ def test_eval():
 
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
-    retrieve_bloomberg_article("https://www.bloomberg.com/news/features/2025-04-24/price-alwaleed-s-elon-musk-ties-are-boosting-his-comeback-bid")
+    # retrieve_bloomberg_article("https://www.bloomberg.com/news/features/2025-04-24/price-alwaleed-s-elon-musk-ties-are-boosting-his-comeback-bid")
     # get_bnnbloomberg_quote("JNK:UN")
     # exit(0)
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
     # exit(0)
-    # items = retrieve_headlines("nyt")
-    # print_most_read_table(items)
+    items = retrieve_headlines("nyt")
+    print_most_read_table(items)
 
     # items = retrieve_headlines("wsj")
     # print_most_read_table(items)

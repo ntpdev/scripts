@@ -32,6 +32,7 @@ from chatutils import (
     make_fullpath,
     save_content,
     translate_latex,
+    translate_thinking,
 )
 from ftutils import ftutils_functions  # retrieve_headlines, retrieve_article, retrieve_stock_quotes, get_function_map
 
@@ -326,8 +327,13 @@ class LLM:
             args["tools"] = [v["defn"] for v in ftutils_functions().values()]
             if supports_temp:
                 args["temperature"] = 0.6
-
-        return self.client.chat.completions.create(**args)
+        try:
+            res = self.client.chat.completions.create(**args)
+        except Exception as e:
+            console.print(f"Error: {e}", style="red")
+            breakpoint()
+            raise
+        return res
 
     def toggle_tool_use(self) -> bool:
         self.use_tool = not self.use_tool
@@ -359,8 +365,8 @@ def prt(msg: Message, model: str = None):
         console.print(f"{msg.role} ({model}):\n", style=c)
     else:
         console.print(f"{msg.role}:\n", style=c)
-    md = Markdown(translate_latex(msg.get_content()))
-    console.print(md, style=c, width=80)
+    text = translate_thinking(translate_latex(msg.get_content()))
+    console.print(Markdown(text), style=c, width=80)
 
 
 def save(messages: list, filename: Path):
@@ -427,7 +433,7 @@ def load_log(s: str) -> MessageHistory:
 
 
 def make_clean_filename(text: str) -> str:
-    words = re.sub(r"[\\\.\/[\]<>'\":*?|],", " ", text.lower()).split()
+    words = re.sub(r"[\\/[\]<>'\":*?|,.]", " ", text.lower()).split()
     return "_".join(words[:5])
 
 

@@ -632,7 +632,6 @@ def simple_message():
             input=prompt,
         )
         console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
-
         response_id = response.id
 
 
