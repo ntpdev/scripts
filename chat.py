@@ -101,6 +101,18 @@ class Message(BaseModel):
     role: Role
     content: list[SerializeAsAny[InputItem]]
 
+    def __str__(self) -> str:
+        # build and truncate content string, showing only text for input/output items
+        parts: list[str] = []
+        for item in self.content:
+            text = getattr(item, "text", None)
+            parts.append(text if text is not None else str(item))
+        content_str = " ".join(parts)
+        if len(content_str) > 70:
+            content_str = content_str[:67] + "..."
+        colour = role_to_color[self.role.value]
+        return f"[{colour}]{self.role.value}: {content_str}[/{colour}]"
+
 
 class FunctionCall(BaseModel):
     type: Literal["function_call"]
@@ -109,17 +121,29 @@ class FunctionCall(BaseModel):
     name: str
     arguments: str
 
+    def __str__(self) -> str:
+        colour = role_to_color["tool"]
+        return f"[{colour}]FunctionCall {self.name}({self.arguments})[/{colour}]"
+
 
 class FunctionCallResponse(BaseModel):
     type: Literal["function_call_output"] = "function_call_output"
     call_id: str
     output: str
 
+    def __str__(self) -> str:
+        colour = role_to_color["tool"]
+        return f"[{colour}]FunctionCallResponse result = {self.output}[/{colour}]"
+
 
 class ReasoningItem(BaseModel):
     id: str
     summary: list
     type: str
+
+    def __str__(self) -> str:
+        summary_str = " ".join(self.summary) if isinstance(self.summary, list) else str(self.summary)
+        return f"ReasoningItem {self.id}: {summary_str}"
 
 
 class MessageHistory(BaseModel):
@@ -138,6 +162,13 @@ class MessageHistory(BaseModel):
                 result.append(msg.model_dump())
                 self.processed[i] = True
         return result
+
+    def __repr__(self):
+        return f"MessageHistory len={len(self.messages)} unprocessed={sum(not x for x in self.processed)}"
+
+    def print(self) -> None:
+        """Print the message history to console using each item's __str__."""
+        console.print("\n".join(f"{i:2d} {m}" for i, m in enumerate(self.messages)))
 
 
 # helper functions for message construction
@@ -434,7 +465,7 @@ def dispatch(fn_name: str, args: dict) -> Any:
     return r
 
 
-def process_function_call(tool_call: ResponseFunctionToolCall, history: MessageHistory):
+def process_function_call(tool_call: ResponseFunctionToolCall, history: MessageHistory) -> None:
     """process the tool call and append response to history"""
     console.print(f"{tool_call.type}: {tool_call.name} with {tool_call.arguments}", style="yellow")
     history.append(function_call(tool_call))
@@ -446,7 +477,7 @@ def process_function_call(tool_call: ResponseFunctionToolCall, history: MessageH
     history.append(function_call_response(tool_call, result))
 
 
-def process_function_calls(history: MessageHistory, response: Response):
+def process_function_calls(history: MessageHistory, response: Response) -> None:
     """execute all function calls and append to message history. echo reason items back"""
     message_printed = False
     for output in response.output:
@@ -483,7 +514,7 @@ def extract_text_block(p: Path) -> str:
     return ""
 
 
-def print_message(msg):
+def print_message(msg) -> None:
     """print text if an instance of Message"""
     if isinstance(msg, Message):
         c = role_to_color[msg.role]
@@ -514,6 +545,10 @@ def print_response(response: Response) -> tuple[str, str, str]:
 
 
 def execute_script(language: str, script_lines: list[str]) -> Any:
+    if len(script_lines) == 1:
+        # llm might send multiline code as single escaped string
+        s = script_lines[0].replace("\\n", "\n").replace("\\t", "\t")
+        script_lines = s.splitlines()
     code = cu.CodeBlock(language.lower(), script_lines)
     return cu.execute_script(code)
 
@@ -551,24 +586,23 @@ class TaskList:
 
     def mark_task_complete(self, step: int) -> str:
         if step < 1 or step > len(self.tasks):
-            raise ValueError("Invalid task index")
+            raise ValueError(f"Invalid task index {step} out of range 1 to {len(self.tasks)}")
 
-        # Adjust step to 0-based index
-        step -= 1
+        idx = step - 1
 
-        if self.tasks[step]["completed"]:
-            return f"Task {step + 1} is already completed."
+        if self.tasks[idx]["completed"]:
+            return f"Task {step} is already completed."
 
-        self.tasks[step]["completed"] = True
+        self.tasks[idx]["completed"] = True
 
         # Find the next incomplete task
         next_task_index = next((i for i, task in enumerate(self.tasks) if not task["completed"]), None)
 
         if next_task_index is None:
-            return f"Subtask {step + 1} completed. All tasks completed!"
+            return f"Subtask {step} completed. All tasks completed!"
 
         self.current_task_index = next_task_index
-        return f"Subtask {step + 1} completed.\nThe next subtask is\n{next_task_index + 1} {self.tasks[next_task_index]['description']}"
+        return f"Subtask {step} completed.\nThe next subtask is\n{next_task_index + 1} {self.tasks[next_task_index]['description']}"
 
     def _format_tasks(self) -> str:
         """
@@ -694,29 +728,19 @@ def test_function_calling():
     dev_msg = developer_message(sys_msg)
     history.append(dev_msg)
 
-    msg = user_message("a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.")
-    print_message(msg)
-    history.append(msg)
-    response = llm.create(history)
-    print_response(response)
-
-    msg = user_message("find the roots of $$x^{2}-2x+6$$. express to 3 dp")  # complex roots 1 ± i√5
-    print_message(msg)
-    history.append(msg)
-    response = llm.create(history)
-    print_response(response)
-
-    msg = user_message("how many days since the first moon landing")
-    print_message(msg)
-    history.append(msg)
-    response = llm.create(history)
-    print_response(response)
-
-    msg = user_message("which has more letter 'r' in it Strawberry or Raspberry")
-    print_message(msg)
-    history.append(msg)
-    response = llm.create(history)
-    print_response(response)
+    prompts = [
+        "a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.",
+        r"find the roots of \(2x^{2}-5x-6\). express to 3 dp",
+        "how many days since the first moon landing",
+        "which has more letter 'r' in it Strawberry or Raspberry",
+    ]
+    for prompt in prompts:
+        msg = user_message(prompt)
+        print_message(msg)
+        history.append(msg)
+        response = llm.create(history)
+        print_response(response)
+    history.print()
 
 
 def test_function_calling_python():
@@ -799,15 +823,15 @@ def test_git_workflow():
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
 
-    question = "## task\ncommit the modified files with the message 'updates by Marvin'\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome."
-    msg = user_message(question)
+    prompt = "## task\ncommit the modified files with the message 'updates by Marvin'\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome."
+    msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
     response = llm.create(history)
     print_response(response)
 
-    question = "proceed"
-    msg = user_message(question)
+    prompt = "proceed"
+    msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
     response = llm.create(history)
@@ -954,6 +978,38 @@ def structured_output_message():
     q6_ans = load_and_insert_into_template(root / "q6-ans.md", answers_q6, "{answers}")
     ask_question_and_mark(q6, q6_ans)
 
+sysmsg = """\
+You are Marvin, an expert analytical assistant. Communicate with precision, depth, and intellectual rigour.
+
+Core Principles
+- Prioritize accuracy and critical analysis over consensus viewpoints or popular narratives
+- Adapt technical depth to match the user's demonstrated expertise
+- Present nuanced perspectives rather than simplified binary choices
+- Express appropriate uncertainty and distinguish between facts, expert opinions, and speculation
+
+Communication Guidelines
+1. Language Precision:
+   - Use domain-specific terminology where appropriate
+   - Define specialized terms only when context suggests unfamiliarity
+   - Favour specific, concrete language over vague generalizations
+
+2. Structural Clarity:
+   - Organize complex responses with clear headers
+   - Begin with key insights before elaborating
+   - Use bold formatting **sparingly** to highlight crucial concepts
+
+3. Intellectual Honesty:
+   - Explicitly state your reasoning process and assumptions
+   - Acknowledge limitations in available information
+   - Present competing perspectives fairly, articulating the strongest version of each position
+
+4. Response Quality:
+   - Balance conciseness with thoroughness
+   - Prioritize insight density over word count
+   - Avoid rhetorical filler and empty phrasing
+
+When discussing contentious topics, go beyond media talking points to examine underlying assumptions, methodological considerations, and contextual factors that shape different interpretations of the evidence.
+"""
 
 def test_chat_loop():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
@@ -966,12 +1022,20 @@ def test_chat_loop():
             lines.append(line)
         return "\n".join(lines)
 
-    dev_inst = f"The assistant is Marvin a helpful AI chatbot. The current date is {datetime.now().isoformat()}"
-    model = LLM(OpenAIModel.GPT_MINI)
+    dev_inst = f"The assistant is Marvin an AI chatbot. The assistant uses precise language and avoids vague or generic statements. The current date is {datetime.now().isoformat()}"
+    # dev_inst = f"""\
+    #     The assistant is Marvin a helpful AI chatbot. Marvin is an expert python programmer.
+    #     task: help the user write a design. the user will provides requirements and you should use those to formulate a design
+    #     you will need to collaborate with the user to refine the design until the user is satisfied
+    #     keep a track of all important decisions and the reasoning behind them
+    #     The current date is {datetime.now().isoformat()}
+    #     """
+    model = LLM(OpenAIModel.GPT, use_tools=True)
     history = MessageHistory()
-    history.append(developer_message(dev_inst))
+    history.append(developer_message(sysmsg))
     attachments = []
-    console.print(Markdown(dev_inst), style="yellow")
+    #    console.print(Markdown(dev_inst), style="yellow")
+    history.print()
     inp = ""
     while True:
         inp = input_multi_line()
@@ -991,6 +1055,7 @@ def test_chat_loop():
         attachments.clear()
 
     pprint(model.usage)
+    history.print()
     # pprint(history)
 
 

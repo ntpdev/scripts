@@ -288,7 +288,7 @@ def process(df, sw_perc = 5.0):
         print(f'5%   {r.end * .95:.2f}\n10%  {r.end * .9:.2f}')
     #plot_swings(swings)
     # plot('spy', df)
-    calc_range(df, [5,20,50])
+    calc_range(df, [5,10,20,50])
 
 
 def plot_latest(symbol: str):

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.markup import escape
 
 console = Console()
@@ -190,9 +191,9 @@ def execute_script(code: CodeBlock):
     output = None
     err = None
     msg = None
-    for i, s in enumerate(code.lines):
-        k = i + 1
-        console.print(f"{k:02d} {escape(s)}", style="white")
+    xs = (f"{i+1:02d} {s}" for i, s in enumerate(code.lines))
+    block = f"```{code.language}\n{"\n".join(xs)}\n```"
+    console.print(Markdown(block), style="white")
     if code.language == "python":
         output, err = save_and_execute_python(code)
         if err:

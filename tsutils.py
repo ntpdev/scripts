@@ -3,6 +3,7 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ from scipy.signal import find_peaks
 # Time series utility functions
 
 
-def find_initial_swing(s, perc_rev):
+def find_initial_swing(s: pd.Series, perc_rev: float) -> tuple[int, int, int]:
     """return direction and start index and end index of the first incomplete swing."""
     hw = s.iloc[0]
     hwi = 0
@@ -35,7 +36,7 @@ def find_initial_swing(s, perc_rev):
     return (0, 0, 0)
 
 
-def find_swings(s, perc_rev):
+def find_swings(s: pd.Series, perc_rev: float) -> list[int] | pd.DataFrame:
     """return df of swings. The final row is the current extreme of the in-progress swing"""
     dirn, start_index, end_index = find_initial_swing(s, perc_rev)
     xs = []
@@ -78,7 +79,7 @@ def find_swings(s, perc_rev):
     return df
 
 
-def calculate_mae(s):
+def calculate_mae(s: pd.Series) -> float:
     """calculate the mae for the series"""
     if s.iloc[0] < s.iloc[-1]:  # uptrend
         mx = s.expanding().max()
@@ -90,19 +91,19 @@ def calculate_mae(s):
 
 
 # return true if perc diff gt
-def pdiff(s, e, p):
+def pdiff(s: float, e: float, p: float) -> bool:
     return 100 * abs(e / s - 1) >= p
 
 
 # inclusive end
-def aggregate(df):
+def aggregate(df: pd.DataFrame) -> dict[str, Any]:
     acc = {}
     for i, r in df.iterrows():
         acc = combine(acc, i, r, 1) if acc else single(i, r, 1)
     return acc
 
 
-def aggregate_min_volume(df, minvol):
+def aggregate_min_volume(df: pd.DataFrame, minvol: float | int) -> pd.DataFrame:
     rows = []
     acc = {}
     #    selector = (df.index.minute == 0) & (df.index.to_series().diff() != timedelta(minutes=1))
@@ -126,7 +127,7 @@ def aggregate_min_volume(df, minvol):
     return df2
 
 
-def single(dt_fst, fst, period):
+def single(dt_fst: datetime, fst: pd.Series, period: int) -> dict[str, Any]:
     r = {}
     r["date"] = dt_fst
     r["dateCl"] = dt_fst + timedelta(minutes=period)
@@ -141,7 +142,7 @@ def single(dt_fst, fst, period):
     return r
 
 
-def combine(acc, dt_snd, snd, period):
+def combine(acc: dict[str, Any], dt_snd: datetime, snd: pd.Series, period: int) -> dict[str, Any]:
     r = {}
     r["date"] = acc["date"]
     r["dateCl"] = dt_snd + timedelta(minutes=period)
@@ -156,7 +157,7 @@ def combine(acc, dt_snd, snd, period):
     return r
 
 
-def count_back(xs, i):
+def count_back(xs: pd.Series, i: int) -> int:
     current = xs.iloc[i]
     c = 0
     for k in range(i - 1, -1, -1):
@@ -177,7 +178,7 @@ def count_back(xs, i):
     return c
 
 
-def calc_hilo(ser):
+def calc_hilo(ser: pd.Series) -> pd.Series:
     cs = []
     cs.append(0)
     for i in range(1, ser.size):
@@ -203,7 +204,7 @@ def day_index(df: pd.DataFrame) -> pd.DataFrame:
     return idx
 
 
-def create_day_summary(df, df_di):
+def create_day_summary(df: pd.DataFrame, df_di: pd.DataFrame) -> pd.DataFrame:
     xs = []
     for i, r in df_di.iterrows():
         open_time = r["first"]
@@ -247,7 +248,7 @@ def create_day_summary(df, df_di):
 
 
 # create a new DF which aggregates bars using a daily index
-def aggregate_daily_bars(df, daily_index, start_col, end_col):
+def aggregate_daily_bars(df: pd.DataFrame, daily_index: pd.DataFrame, start_col: str, end_col: str) -> pd.DataFrame:
     rows = []
     for i, r in daily_index.dropna(subset=[start_col, end_col]).iterrows():
         rows.append(aggregate_bars(df, pd.to_datetime(i), r[start_col], r[end_col]))
@@ -263,7 +264,7 @@ def aggregate_daily_bars(df, daily_index, start_col, end_col):
 
 
 # return a row which aggregates bars between inclusive indexes
-def aggregate_bars(df, dt, s, e):
+def aggregate_bars(df: pd.DataFrame, dt: datetime, s: pd.Timestamp, e: pd.Timestamp) -> dict[str, Any]:
     r = {}
     r["date"] = dt
     r["open"] = df.at[s, "open"]
@@ -277,7 +278,7 @@ def aggregate_bars(df, dt, s, e):
     return r
 
 
-def calc_vwap(df):
+def calc_vwap(df: pd.DataFrame) -> pd.Series:
     is_first_bar = df.index.to_series().diff() != timedelta(minutes=1)
     xs = []
     start = 0
@@ -289,29 +290,20 @@ def calc_vwap(df):
     return pd.Series(xs, df.index)
 
 
-def calc_strat(df):
+def calc_strat(df: pd.DataFrame) -> pd.Series:
     """return a series categorising bar by its strat bar type 0 - inside, 1 up, 2 down, 3 outside"""
-    hs = df.high.diff().gt(0)
-    ls = df.low.diff().lt(0)
+    hs = df["high"].diff().gt(0)
+    ls = df["low"].diff().lt(0)
     return hs.astype(int) + ls * 2
 
 
-def calc_atr(df, n):
+def calc_atr(df: pd.DataFrame, n: int) -> pd.Series:
     rng = df.high.rolling(n).max() - df.low.rolling(n).min()
     df2 = pd.DataFrame({"tm": df.index.time, "rng": rng}, index=rng.index)
     return df2.groupby("tm").rng.agg("mean")
 
 
-def make_three_lb(x, xs):
-    if x > xs[0]:
-        xs.append(x)
-    if len(xs) > 2 and x < xs[2]:
-        xs = deque()
-        xs.append(x)
-    return xs
-
-
-def to_date(timestmp):
+def to_date(timestmp: pd.Timestamp) -> date:
     return timestmp.to_pydatetime().date()
 
 
@@ -324,7 +316,7 @@ def load_files_as_dict(p: Path, spec: str) -> dict[Path, pd.DataFrame]:
     return {x: load_file(x) for x in sorted(p.glob(spec, case_sensitive=False))}
 
 
-def load_files(p: Path, spec: str) -> pd.DataFrame:
+def load_files(p: Path, spec: str) -> pd.DataFrame | None:
     """load all files matching specified pattern and return a single dataframe"""
     d = load_files_as_dict(p, spec)
     if len(d):
@@ -346,15 +338,20 @@ def load_overlapping_files(p: Path, spec: str) -> pd.DataFrame:
     return comb
 
 
-def load_file(fname):
-    """load csv skipping index and barcount col"""
-    df = pd.read_csv(fname, parse_dates=["Date"], usecols=[1, 2, 3, 4, 5, 6, 7], index_col="Date")
+def load_file(fname: Path | str) -> pd.DataFrame:
+    """load csv skipping first col and convert Date to index"""
+    df = pd.read_csv(
+        fname,
+        parse_dates=["Date"],
+        usecols=lambda col: not col.startswith("Unnamed"),
+        index_col="Date"
+    )
     df.columns = df.columns.str.lower()
     print(f"loaded {fname} {df.shape[0]} {df.shape[1]}")
     return df
 
 
-def save_df(df, symbol):
+def save_df(df: pd.DataFrame, symbol: str) -> None:
     """save dataframe to csv in original format"""
     idx = day_index(df)
     print(idx)
@@ -368,18 +365,18 @@ def save_df(df, symbol):
     df.to_csv(fout)
 
 
-def create_volume_profile(df, prominence=40, smoothing_period=1):
+def create_volume_profile(df: pd.DataFrame, prominence: float | int = 40, smoothing_period: int = 1) -> pd.DataFrame:
     """return df of price,volume, peak flag"""
     mx = df["high"].max()
     mn = df["low"].min()
 
-    def num_bins(hi, lo):
+    def num_bins(hi: float, lo: float) -> int:
         return int((hi - lo) * 4 + 1)
 
-    def to_bin(p):
+    def to_bin(p: float) -> int:
         return int((p - mn) * 4)
 
-    def to_price(b):
+    def to_price(b: int) -> float:
         return b / 4 + mn
 
     bins = num_bins(mx, mn)
@@ -415,13 +412,13 @@ class Block:
     close: float
 
 
-def blocks_to_df(blks):
+def blocks_to_df(blks: list[Block]) -> pd.DataFrame:
     df = pd.DataFrame(map(asdict, blks))
     df.set_index("dt", inplace=True)
     return df
 
 
-def calc_tlb(xs, n):
+def calc_tlb(xs: pd.Series, n: int) -> list | tuple[pd.DataFrame, float]:
     """takes a series and a number of blocks for a reversal and returns a DF and the reversal price."""
     if len(xs) < 2:
         return []
@@ -449,13 +446,13 @@ def calc_tlb(xs, n):
 
 
 class LineBreak:
-    def __init__(self, n):
+    def __init__(self, n: int):
         self.reversalBocksLength = n
         self.dirn = 0
         self.lines = deque(maxlen=n + 1)
         self.blocks = []
 
-    def append(self, x, dt):
+    def append(self, x: float, dt: pd.Timestamp | datetime) -> None:
         if len(self.lines) < self.reversalBocksLength:
             self._append_block(x, dt)
         else:
@@ -464,7 +461,7 @@ class LineBreak:
             if x > high or x < low:
                 # if reversal add prior close to queue of lines
                 if (x > high and self.dirn == -1) or (x < low and self.dirn == 1):
-                    #                    print(f'reversal adding {self.lines[-2]}')
+                    # print(f'reversal adding {self.lines[-2]}')
                     self.lines.append(self.lines[-2])
                 self._append_block(x, dt)
 
@@ -473,7 +470,7 @@ class LineBreak:
 
     # add closing price to lines queue and if there is at least 1 prior line add a block
     # update direction of the last block in self.dirn
-    def _append_block(self, x, dt):
+    def _append_block(self, x: float, dt: pd.Timestamp | datetime) -> None:
         if len(self.lines) > 0:
             last = self.lines[-1]
             self.dirn = 1 if x > last else -1
@@ -488,15 +485,10 @@ class LineBreak:
             self.lines.append(x)
 
     # first block is wrong
-    def test(self):
+    def test(self) -> None:
         cls = [135, 132, 128, 133, 130, 130, 132, 134, 139, 137, 145, 158, 147, 143, 150, 149, 160, 164, 167, 156, 165, 168, 171, 173, 169, 177, 180, 176, 170, 175, 179, 173, 170, 170, 168, 165, 171, 175, 179, 175]
         for c in cls:
             self.append(c)
             print(f"{c} {self.lines}")
         # df = self.asDataFrame()
         # print(df)
-
-
-# to reload a module then reload the name/alias of the imported module
-# from importlib import reload
-# reload(ts)

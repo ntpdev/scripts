@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from mdbutils import load_price_history
 import tsutils as ts
 
+STRAT_BAR_COLOUR: str = "strat"
 
 @dataclass
 class MinVolDay:
@@ -64,28 +65,26 @@ def draw_daily_lines(df, fig, tms, idxs):
         fig.add_shape(type="line", x0=tms.iloc[op], y0=y, x1=tms.iloc[cl], y1=y, line=dict(color="LightSeaGreen", dash="dot"))
 
 
-def highs(df, window):
-    hs = df["high"].rolling(window, center=True).max()
-    hsv = df["high"][np.equal(df["high"], hs)]
-    t = pd.Series.diff(hsv)
-    # remove 0 elements
-    return df.high[t[t.ne(0)].index]
+def high_lows(df: pd.DataFrame, window: int) -> tuple[pd.Series, pd.Series]:
+    """Return tuple of (local highs, local lows) as Series of original values with local extrema."""
+    def find_extrema(values, rolling) -> pd.Series:
+        local_extreme = values[values == rolling]
+        non_adjacent = local_extreme.diff().ne(0)
+        return values.loc[non_adjacent[non_adjacent].index]
+
+    high_col = df["high"]
+    low_col = df["low"]
+
+    rolling_high = high_col.rolling(window, center=True).max()
+    rolling_low = low_col.rolling(window, center=True).min()
+
+    return find_extrema(high_col, rolling_high), find_extrema(low_col, rolling_low)
 
 
-def lows(df, window):
-    hs = df["low"].rolling(window, center=True).min()
-    hsv = df["low"][np.equal(df["low"], hs)]
-    # remove adjacent values which are the same by differencing and removing 0
-    t = pd.Series.diff(hsv)
-    return df.low[t[t.ne(0)].index]
-
-
-def add_hilo_labels(df, tms, fig):
-    hs = highs(df, 21)
-    ls = lows(df, 21)
+def add_hilo_labels(df, fig) -> None:
+    hs, ls = high_lows(df, 21)
 
     fig.add_trace(go.Scatter(x=[tm for tm in df.loc[hs.index].tm], y=hs.add(1), text=[f"{p:.2f}" for p in df.loc[hs.index].high], mode="text", textposition="top center", name="local high"))
-
     fig.add_trace(go.Scatter(x=[tm for tm in df.loc[ls.index].tm], y=ls.sub(1), text=[f"{p:.2f}" for p in df.loc[ls.index].low], mode="text", textposition="bottom center", name="local low"))
 
 
@@ -135,13 +134,13 @@ def plot(index):
 
     # create a string for X labels
     tm = df.index.strftime("%d/%m %H:%M")
-    fig = color_bars(df, tm, "strat")
+    fig = color_bars(df, tm, STRAT_BAR_COLOUR)
     #    fig = go.Figure(data=[go.Candlestick(x=tm, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ES'),
     #                        go.Scatter(x=tm, y=df['VWAP'], line=dict(color='orange'), name='vwap') ])
     xs = make_day_index(df)
     rths = make_rth_index(df, xs)
     draw_daily_lines(df, fig, tm, rths)
-    add_hilo_labels(df, tm, fig)
+    add_hilo_labels(df, fig)
 
     op, cl = xs[index]
     fig.layout.xaxis.range = [op, cl]
@@ -150,8 +149,8 @@ def plot(index):
     fig.show()
 
 
-def color_bars(df, tm, opt):
-    if opt == "strat":
+def color_bars(df, tm, bar_colour: str):
+    if bar_colour == STRAT_BAR_COLOUR:
         df["tm"] = tm
         df["btype"] = ts.calc_strat(df)
         df_inside = df.loc[df["btype"] == 0]
@@ -234,37 +233,22 @@ def create_min_vol_index(df_min_vol, day_index) -> list[MinVolDay]:
     return xs
 
 
-# def create_day_summary(df, day_index):
-#     xs = []
-#     for i,r in day_index.iterrows():
-#         euClose = r.openTime + pd.Timedelta(minutes=929)
-#         rthOpen = r.openTime + pd.Timedelta(minutes=930)
-#         rthClose = r.openTime + pd.Timedelta(minutes=1319)
-#         xs.append({'date' : i,
-#                    'glbx_high': df['High'][r.openTime:euClose].max(),
-#                    'glbx_low': df['Low'][r.openTime:euClose].min(),
-#                    'rth_hi': df['High'][rthOpen:rthClose].max(),
-#                    'rth_lo': df['Low'][rthOpen:rthClose].min(),
-#                    'close': df['Close'][rthClose]
-#                    })
-#     day_summary_df = pd.DataFrame(xs)
-#     day_summary_df.set_index('date', inplace=True)
-#     return day_summary_df
-
-
-def plot_mongo(symbol, dt, n):
+def plot_mongo(symbol: str, dt: str, n: int):
+    """plot n days of price history for symbol starting with dt
+    dt is either a date in yyyymmdd format or a index value"""
     df = load_price_history(symbol, dt, n)
     idx = ts.day_index(df)
     day_summary_df = ts.create_day_summary(df, idx)
     num_days = idx.shape[0]
     # loaded an additional day for hi-lo info but create minVol for display skipping first day
-    slice = df[idx.iat[1, 0] : idx.iat[num_days - 1, 1]] if num_days > 1 else df
+    skip_first = num_days > 1
+    slice = df[idx.iat[1, 0] : idx.iat[num_days - 1, 1]] if skip_first else df
     df_min_vol = ts.aggregate_min_volume(slice, 1500)
 
     # create a string for X labels
     tm = df_min_vol.index.strftime("%d/%m %H:%M")
-    fig = color_bars(df_min_vol, tm, "strat")
-    add_hilo_labels(df_min_vol, tm, fig)
+    fig = color_bars(df_min_vol, tm, STRAT_BAR_COLOUR)
+    add_hilo_labels(df_min_vol, fig)
     mvds = create_min_vol_index(df_min_vol, idx)
 
     def add_h_line(x_start, x_end, y_value, prefix="", color="Gray", dash="dot"):
@@ -273,7 +257,7 @@ def plot_mongo(symbol, dt, n):
             label = f"{prefix} {y_value:.2f}"
             fig.add_annotation(text=label, x=x_end, y=y_value, showarrow=False)
 
-    for i in mvds[1:]:
+    for i in mvds[1:] if skip_first else mvds:
         eu_open = df_min_vol.at[df_min_vol.index[i.eu_start_bar], "open"]
         add_h_line(tm[i.eu_start_bar], tm[i.eu_end_bar], eu_open, "", color="LightSeaGreen")
         
@@ -376,14 +360,14 @@ def map_to_date_range(xs, x):
     return datetime.combine(xs[x[0]] - timedelta(days=1), time(22, 0)), datetime.combine(xs[x[1]], time(22, 0))
 
 
-def parse_isodate(s):
+def convert_to_date(s: str) -> date:
     try:
         return date.fromisoformat(s)
     except ValueError:
-        return datetime.now().date()
+        return date.today()
 
 
-def plot_stdvol(df):
+def plot_stdvol(df: pd.DataFrame) -> None:
     fig = px.bar(df, x=df.index, y="stdvol")
     fig.show()
 
@@ -404,9 +388,9 @@ def main():
     if len(argv.tlb) > 0:
         plot_3lb(argv.tlb)
     elif argv.volp and len(argv.mdb) > 0:
-        plot_volp(argv.sym, parse_isodate(argv.mdb), argv.days)
+        plot_volp(argv.sym, convert_to_date(argv.mdb), argv.days)
     elif len(argv.mdb) > 0:
-        plot_mongo(argv.sym, parse_isodate(argv.mdb), argv.days)
+        plot_mongo(argv.sym, argv.mdb, argv.days)
     elif argv.atr:
         plot_atr()
     elif argv.tick:

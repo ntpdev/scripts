@@ -164,8 +164,25 @@ class MDBRepository:
         return pd.DataFrame(map(lambda r: {"last_bar": r["lastTm"], "first_bar": r["timestamp"], "gap": r["gap"]}, cursor))
 
 
-def find_datetime_range(df, dt, n):
-    """find start,end interval for n days beginning or ending with dt"""
+def lookup_trade_date(idx: pd.Index, dt: str) -> date:
+    """return a date that exists in the index. dt is either a date in yyyymmdd format or a index value"""
+    try:
+        i = int(dt)
+        if i > 1000:
+            d = date.fromisoformat(dt)
+            pos = idx.searchsorted(d, side="right") - 1
+            return idx[max(0, pos)] 
+        else:
+            return idx[i]
+    except ValueError:
+        return date.today()
+
+
+def find_datetime_range(df: pd.DataFrame, dt_str: str, n: int):
+    """find start,end interval for n days beginning or ending with dt
+    df is either a date in YYYYMMDD format an index into df
+    """
+    dt = lookup_trade_date(df.index, dt_str)
     n = n if abs(n) > 1 else 1
     d = min(dt, df.index[-1])
     df_range = df[df.index >= d][:n] if n > 0 else df[df.index <= d][n:]
@@ -173,8 +190,8 @@ def find_datetime_range(df, dt, n):
     return df_range.iat[0, 0], df_range.iat[-1, 1]
 
 
-def make_trade_dates(tm_start, tm_end, df_gaps):
-    """build df of [trade_date, start, end, rth_start] where range is [start, end). rth_start may be NaT"""
+def make_trade_dates(tm_start, tm_end, df_gaps) -> pd.DataFrame:
+    """return df of [trade_date, start, end, rth_start] where range is [start, end). rth_start may be NaT"""
     e = pd.concat([df_gaps["last_bar"], pd.Series(tm_end)], ignore_index=True)
     s = pd.concat([pd.Series(tm_start), df_gaps["first_bar"]], ignore_index=True)
     rs = s + pd.Timedelta(minutes=930)
@@ -201,7 +218,7 @@ def calculate_trading_hours(df_trade_days, dt, range_name):
     return None
 
 
-def load_price_history(symbol, dt, n=1):
+def load_price_history(symbol:str, dt:str, n:int =1) -> pd.DataFrame:
     """return m1 bars for n days. if n is negative dt is the last day loaded"""
     mdb = MDBRepository("localhost", "futures")
     df_summary = mdb.load_summary()
@@ -254,6 +271,7 @@ def main(symbol: str):
     summ = ts.create_day_summary(df, df_di)
     console.print(summ)
     console.print(f"\n\n--- last row {summ.index[-1]}", style="yellow")
+    console.print(summ.iloc[-2])
     console.print(summ.iloc[-1])
 
 

@@ -224,9 +224,9 @@ def print_summary(df):
     # console.print(df2, style='cyan')
 
 
-def whole_day_concat(fspec, fnout):
+def whole_day_concat(path: Path, fspec: str, fnout: str):
     """combines all files in fspec into one file. takes whole days only"""
-    dfs = load_files_as_dict(fspec)
+    dfs = load_files_as_dict(path, fspec)
     hw = pd.Timestamp("2020-01-01")
     comb = None
     for fn, df in dfs.items():
@@ -251,7 +251,9 @@ def whole_day_concat(fspec, fnout):
 
     if comb is not None:
         save_df(comb, fnout)
-        print_summary(comb)
+        comb['Date'] = pd.to_datetime(comb['Date'])
+        comb2 = comb.set_index(comb["Date"])
+        print_summary(comb2)
 
 @dataclass
 class Fileinfo:
@@ -276,14 +278,14 @@ def check_overlap(p, spec):
             console.print(f"overlap found fileinfo {i} {xs[i].fname} and {i+1} {xs[i+1].fname}", style="red")
             console.print(f"from {xs[i+1].start} to {xs[i].end}")
             if xs[i+1].end <= xs[i].end:
-                console.print(f"file {i+1} not needed as contained", style="red")
+                console.print(f"file {i+1} {xs[i+1].fname} not needed as contained", style="red")
 
 
 if __name__ == "__main__":
-    #    whole_day_concat('esm4*.csv', 'zESM4')
+    # whole_day_concat(Path("c:/temp/ultra"), 'ztick-nyse*.csv', 'ztick-nyse')
     # test_tick()
     # check_overlap(Path.home() / "Documents" / "data", "esh5*.csv")
-    # check_overlap(Path("c:/temp/ultra"), "zesz4*.csv")
+    check_overlap(Path("c:/temp/ultra"), "zesm5*.csv")
     df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesm5*.csv")
     # df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esm5*.csv")
     print_summary(df_es)

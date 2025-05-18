@@ -6,6 +6,7 @@ import platform
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Any
+from textwrap import dedent
 
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -68,7 +69,7 @@ class MarkSheet(BaseModel):
 
 class Attachment(BaseModel):
     type: str = Field(default="media", description="Type of the attachment")
-    mime_type: str = Field(default="application/pdf", description="MIME type of the attachment")
+    mime_type: str = Field(default="application/octet-stream", description="MIME type of the attachment")
     data: str = Field(description="Base64 encoded data")
 
 
@@ -223,13 +224,23 @@ available_tools = [evaluate_expression, retrieve_headlines, retrieve_article, re
 # available_tools = [think, evaluate_expression, show_current_bookings, make_booking, remove_booking]
 
 
-def load_pdf(p: Path) -> Attachment | None:
+def load_attachment(p: Path) -> Attachment | None:
     try:
         with open(p, "rb") as pdf_file:
             pdf_binary = pdf_file.read()
             pdf_base64 = base64.b64encode(pdf_binary).decode("utf-8")
+            console.print(f"attachment loaded {p}", style="yellow")
 
-        return Attachment(data=pdf_base64)
+        # Determine MIME type based on file extension
+        ext = p.suffix.lower().lstrip('.')
+        mime_types = {
+            'pdf': 'application/pdf',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+        }
+        mime_type = mime_types.get(ext, 'application/octet-stream')
+        return Attachment(mime_type=mime_type, data=pdf_base64)
     except FileNotFoundError:
         console.print(f"Error: The file {p} does not exist.", style="red")
     except Exception as e:
@@ -295,7 +306,7 @@ def print_message(m: BaseMessage) -> None:
 
     console.print(f"\n{role}:", style=c)
     # google flash sometimes returns a list
-    s = isinstance(m.content, list) and " ".join(m.content) or m.content
+    s = "\n".join(e["text"] for e in m.content if e["type"] == "text") if isinstance(m.content, list) else m.content
     if s:
         try:
             md = Markdown(s)
@@ -409,14 +420,73 @@ def test_single_message(llm: BaseChatModel) -> None:
 
 def test_pdf_attachment(llm: BaseChatModel) -> None:
     session_id = "z1"
-    att = load_pdf(Path("~/Downloads/Thayaparan_24254472_ProgressReport.pdf").expanduser())
+    att = load_attachment(Path("~/Downloads/Thayaparan_24254472_ProgressReport.pdf").expanduser())
     prompt = ChatPromptTemplate.from_messages([
         MessagesPlaceholder(variable_name="history"),
-        HumanMessage([{"type":"text", "text": "task: review the progress report for a medical physics project carefully before it is submitted to the project review board. suggest improvements to the English sentence structure, increase clarity. check for technical accuracy. check the grammar and sentence construction. ensure there are no filler or fluff words. suggest improvements by quoting original and improved version. ensure a professional tone. check all abbreviations are defined."}, att.model_dump()])]
-    )
+        MessagesPlaceholder(variable_name="input"),
+    ])
     chain = prompt | llm
+    msg = HumanMessage([{"type":"text", "text": dedent("""\
+        role: medical physics lecturer
+        task: review the progress report for a medical physics project carefully before it is submitted to the project review board. the aim is to give feedback to the author
+        instructions:
+        work through the report section by section. check each section for errors, technical accuracy, possible omissions.
+        check the grammar and sentence construction. make sure the writing is clear and concise with no filler or fluff words.
+        suggest improvements by quoting original and improved version.
+        ensure a professional tone.
+        check all abbreviations are defined.
+        """)},
+                         att.model_dump()])
     chain_history = RunnableWithMessageHistory(chain, get_session_history, input_messages_key="input", history_messages_key="history")
-    chain_history.invoke({"input": "NA"}, config={"configurable": {"session_id": session_id}})
+    chain_history.invoke({"input": [msg]}, config={"configurable": {"session_id": session_id}})
+    print_history(session_id)
+
+
+def test_png_attachment(llm: BaseChatModel) -> None:
+    session_id = "z1"
+    att = load_attachment(Path("~/Downloads/sum1.png").expanduser())
+
+    # Define a generic prompt template that only includes history and the current input
+    prompt_template = ChatPromptTemplate.from_messages([
+        MessagesPlaceholder(variable_name="history"),
+        MessagesPlaceholder(variable_name="input"),
+    ])
+
+    # Create the chain with message history
+    chain = RunnableWithMessageHistory(
+        prompt_template | llm,
+        get_session_history,
+        input_messages_key="input",
+        history_messages_key="history"
+    )
+
+    def invoke_chain(content: str | list[Any]):
+        return chain.invoke(
+            {"input": [HumanMessage(content=content)]},
+            config={"configurable": {"session_id": session_id}}
+        )
+
+    # First invocation: Image analysis
+    invoke_chain([
+        {"type": "text",
+         "text": dedent("""\
+            task:
+            extract the paragraph of text at the top of the image and show within <text> tags inside a markdown block.
+            describe the 4 balance scales
+            """)},
+        att.model_dump()
+    ])
+
+    # Second invocation: Follow-up question
+    invoke_chain("The extracted text above is a question. What are the weights of the 3 shapes?")
+
+    # Third invocation: Marking task
+    invoke_chain(dedent("""\
+        task: mark the previous answer against the model answer.
+        Award 1 mark for every correct inequality and 1 mark for every correct weight.
+        model answer: The 4 inequalities are S > C, T > 2C, 2S > T + C, 2C > S. Given all are natural numbers less than 10, the only solution is C=4, S=7, T=9
+        """))
+
     print_history(session_id)
 
 
@@ -464,7 +534,6 @@ instructions:
 
 
 def create_llm(llm_name: str, temp: float, tool_use: bool) -> BaseChatModel:
-    HumanMessage([])
     if llm_name == "pro":
         llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", safety_settings=safety_settings, temperature=temp)
 #        llm = ChatVertexAI(model="gemini-1.5-pro-002", safety_settings=safety_settings, temperature=temp)
@@ -500,13 +569,15 @@ def chat(llm_name: str, tool_use: bool = False) -> None:
     chain = create_llm_with_history(llm)
     session_id = "xyz"
     config_data = {"configurable": {"session_id": session_id}}
+    test_png_attachment(llm)
+    exit(0)
     attach = None
 
     inp = ""
     while inp != "x":
         inp = input_multi_line()
         msg = None
-        if len(inp) > 3:
+        if len(inp) > 1:
             if inp.startswith("%load"):
                 msg = load_msg(inp)
                 if msg is None:
@@ -522,7 +593,7 @@ def chat(llm_name: str, tool_use: bool = False) -> None:
                 x = inp.find(" ")
                 if x > 0:
                     p = Path(inp[x:].strip()).expanduser()
-                    attach = load_pdf(p)
+                    attach = load_attachment(p)
                     console.print(f"attachment loaded {p}")
                 else:
                     attach = None
