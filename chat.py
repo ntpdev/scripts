@@ -367,6 +367,45 @@ mark_task_complete_fn = {
     "strict": True,
 }
 
+read_file_fn = {
+    "type": "function",
+    "name": "read_file",
+    "description": "read the contents of a file on the local computer",
+    "parameters": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+            "filename": {"type": "string", "description": "the file name"},
+        },
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+apply_diff_fn = {
+    "type": "function",
+    "name": "apply_diff",
+    "description": dedent("""
+        apply a diff to a file on the local computer. The diff must contains the line to be searched for in the file and the replacement lines. Example:
+        <<<
+        search
+        ===
+        replace_1
+        replace_2
+        >>>
+     """),
+    "parameters": {
+        "type": "object",
+        "required": ["filename", "diff"],
+        "properties": {
+            "filename": {"type": "string", "description": "the file name"},
+            "diff": {"type": "string", "description": "the diff to apply"},
+        },
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
 
 # lifted from agents SDK
 def function_to_json(func) -> dict:
@@ -440,6 +479,8 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         execute_script_fn["name"].lower(): {"defn": execute_script_fn, "fn": execute_script},
         create_tasklist_fn["name"].lower(): {"defn": create_tasklist_fn, "fn": create_tasklist},
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
+        read_file_fn["name"].lower(): {"defn": read_file_fn, "fn": read_file},
+        apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
     }
 
 
@@ -551,6 +592,24 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
         script_lines = s.splitlines()
     code = cu.CodeBlock(language.lower(), script_lines)
     return cu.execute_script(code)
+
+
+def read_file(filename: str) -> str:
+    p = Path.home() / "Documents" / "chats" / filename
+    console.print(f"reading file {p}", style="yellow")
+    return p.read_text(encoding="utf-8")
+
+
+def apply_diff(filename: str, diff: str) -> str:
+    p = Path.home() / "Documents" / "chats" / filename
+    console.print(f"reading file {p}", style="yellow")
+    result = cu.apply_diff(p, diff)
+    text = ""
+    for i, s in enumerate(result.splitlines(keepends=True)):
+        text += f"{i + 1:02d} {s}"
+    console.print(text, style="yellow")
+    p.write_text(result)
+    return "success"
 
 
 def evaluate_expression_impl(expression: str) -> Any:
@@ -759,13 +818,13 @@ def test_function_calling_python():
     response = llm.create(history)
     print_response(response)
 
-    question = (
-        "The 9 members of a baseball team went to an ice-cream parlor after their game."
-        " Each player had a single-scoop cone of chocolate, vanilla, or strawberry ice cream."
-        " At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry."
-        " Let N be the number of different assignments of flavors to players that meet these conditions."
-        " Find the remainder when N is divided by 1000."
-    )
+    question = dedent("""\
+        The 9 members of a baseball team went to an ice-cream parlor after their game.
+        Each player had a single-scoop cone of chocolate, vanilla, or strawberry ice cream.
+        At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry.
+        Let N be the number of different assignments of flavors to players that meet these conditions.
+        Find the remainder when N is divided by 1000.
+        """)
     msg = user_message(question)
     print_message(msg)
     history.append(msg)
@@ -831,6 +890,46 @@ def test_git_workflow():
     print_response(response)
 
     prompt = "proceed"
+    msg = user_message(prompt)
+    print_message(msg)
+    history.append(msg)
+    response = llm.create(history)
+    print_response(response)
+
+
+def test_code_edit():
+    dev_inst = dedent(f"""\
+        The assistant is Marvin an expert Python programmer. 
+        You have access to 2 tools:
+        - read_file: use the read_file tool to read a file.
+        - apply_diff: use apply_diff tool to makes edits to a file. minimise the size of the edits by only including the lines that need to be changed. The diff must follow the format below. 
+
+        ## diff format
+        <<<
+        search
+        ===
+        replacement code block
+        >>>
+
+        the current datetime is {datetime.now().isoformat()}
+        """)
+    llm = LLM(OpenAIModel.O4, "", True)
+    # llm = LLM(OpenAIModel.GPT_MINI, "use the eval tool as needed", True)
+    history = MessageHistory()
+    dev_msg = developer_message(dev_inst)
+    history.append(dev_msg)
+
+    prompt = dedent("""\
+        ## task
+        make the following changes to the python code in the file temp.py
+        
+        ## instructions
+        - add type hints to functions. use python 3.10 e.g. list | tuple and types from collections.abc
+        - implement any unfinished functions
+        - minimise the size of diffs by only including the lines that need to be changed
+        - apply the changes. do not ask for confirmation
+        - summarise the changes for the user. do not repeat the code
+        """)
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
@@ -978,6 +1077,7 @@ def structured_output_message():
     q6_ans = load_and_insert_into_template(root / "q6-ans.md", answers_q6, "{answers}")
     ask_question_and_mark(q6, q6_ans)
 
+
 sysmsg = """\
 You are Marvin, an expert analytical assistant. Communicate with precision, depth, and intellectual rigour.
 
@@ -1011,6 +1111,7 @@ Communication Guidelines
 When discussing contentious topics, go beyond media talking points to examine underlying assumptions, methodological considerations, and contextual factors that shape different interpretations of the evidence.
 """
 
+
 def test_chat_loop():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
 
@@ -1023,18 +1124,17 @@ def test_chat_loop():
         return "\n".join(lines)
 
     dev_inst = f"The assistant is Marvin an AI chatbot. The assistant uses precise language and avoids vague or generic statements. The current date is {datetime.now().isoformat()}"
-    # dev_inst = f"""\
-    #     The assistant is Marvin a helpful AI chatbot. Marvin is an expert python programmer.
-    #     task: help the user write a design. the user will provides requirements and you should use those to formulate a design
-    #     you will need to collaborate with the user to refine the design until the user is satisfied
-    #     keep a track of all important decisions and the reasoning behind them
-    #     The current date is {datetime.now().isoformat()}
-    #     """
+    dev_inst = dedent(f"""\
+        The assistant is Marvin a helpful AI chatbot. Marvin is an expert python programmer.
+        task: help the user write a design. the user will provides requirements and you should use those to formulate a design
+        you will need to collaborate with the user to refine the design until the user is satisfied
+        keep a track of all important decisions and the reasoning behind them
+        The current date is {datetime.now().isoformat()}
+        """)
     model = LLM(OpenAIModel.GPT, use_tools=True)
     history = MessageHistory()
-    history.append(developer_message(sysmsg))
+    history.append(developer_message(dev_inst))
     attachments = []
-    #    console.print(Markdown(dev_inst), style="yellow")
     history.print()
     inp = ""
     while True:
@@ -1070,6 +1170,7 @@ def main():
     # test_solve_visual_maths_problem()
     # structured_output_message()
     test_git_workflow()
+    # test_code_edit()
     # test_chat_loop()
 
 
