@@ -5,9 +5,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import dedent, shorten
 
 from rich.console import Console
-from rich.markdown import Markdown
 
 console = Console()
 THINK_PATTERN = re.compile("(.*?)<think>(.*?)</think>(.*)", re.DOTALL)
@@ -50,6 +50,17 @@ class CodeBlock:
     lines: list[str]
 
 
+def print_block(lines: str | list[str], line_numbers: bool = False, style: str = "") -> None:
+    xs = lines if isinstance(lines, list) else lines.splitlines()
+    text = ""
+    for i, s in enumerate(xs):
+        if line_numbers:
+            text += f"{i + 1:>3} {s if s.endswith('\n') else s + '\n'}"
+        else:
+            text += s if s.endswith("\n") else s + "\n"
+    console.print(text, markup=False, style=style)
+
+
 def make_fullpath(fn: str) -> Path:
     return Path.home() / "Documents" / "chats" / fn
 
@@ -83,13 +94,12 @@ def save_content(msg: str):
     name = f"z{next:02}.md"
     fn = make_fullpath(name)
     fn.write_text(msg, encoding="utf-8")
-    s = f"saved {name} {msg if len(msg) < 70 else msg[:70] + ' ...'}"
-    console.print(s, style="yellow")
+    console.print(f"saved {name} {shorten(msg, width=70, placeholder='...')}", style="yellow")
 
 
 def save_code(fn: str, code: CodeBlock) -> Path:
     full_path = make_fullpath(fn)
-    console.print(f"saving code {full_path}", style="red")
+    console.print(f"saving code {full_path}", style="yellow")
     full_path.write_text("\n".join(code.lines), encoding="utf-8")
     return full_path
 
@@ -100,11 +110,10 @@ def save_and_execute_python(code: CodeBlock, timeout: int = 30):
 
         result = subprocess.run([str(get_python()), script_path], cwd=script_path.parent, capture_output=True, text=True, timeout=timeout)
 
-        if len(result.stdout) > 0:
-            console.print(result.stdout, style="yellow")
-        else:
-            console.print(result.stderr, style="red")
-        return result.stdout, result.stderr
+        if result.stdout:
+            print_block(result.stdout, line_numbers=True, style="yellow")
+        if result.stderr:
+            print_block(result.stderr, line_numbers=True, style="green")
     except Exception as e:
         console.print(f"ERROR: {e.__class__.__name__} {str(e)}", style="red")
         return None, str(e)
@@ -117,10 +126,10 @@ def save_and_execute_bash(code: CodeBlock):
         os.chmod(script_path, 0o755)  # Set executable permissions
         result = subprocess.run(["bash", script_path], capture_output=True, text=True, timeout=5)
 
-        if len(result.stdout) > 0:
-            console.print(result.stdout, style="yellow")
-        else:
-            console.print(result.stderr, style="red")
+        if result.stdout:
+            print_block(result.stdout, line_numbers=True, style="yellow")
+        if result.stderr:
+            print_block(result.stderr, line_numbers=True, style="green")
         return result.stdout, result.stderr
     except Exception as e:
         console.print(f"ERROR: {e.__class__.__name__} {str(e)}", style="red")
@@ -137,10 +146,10 @@ def save_and_execute_powershell(code: CodeBlock):
             timeout=15,
         )
 
-        if len(result.stdout) > 0:
-            console.print(result.stdout, style="yellow")
-        else:
-            console.print(result.stderr, style="red")
+        if result.stdout:
+            print_block(result.stdout, line_numbers=True, style="yellow")
+        if result.stderr:
+            print_block(result.stderr, line_numbers=True, style="green")
         return result.stdout, result.stderr
     except Exception as e:
         console.print(f"ERROR: {e.__class__.__name__} {str(e)}", style="red")
@@ -187,30 +196,17 @@ def execute_python_script(code: str) -> str:
 
 
 def execute_script(code: CodeBlock):
-    output = None
-    err = None
-    msg = None
-    xs = (f"{i + 1:02d} {s}" for i, s in enumerate(code.lines))
-    block = f"```{code.language}\n{'\n'.join(xs)}\n```"
-    console.print(Markdown(block), style="white")
-    if code.language == "python":
-        output, err = save_and_execute_python(code)
-        if err:
-            msg = err
-        else:
-            msg = output
-    elif code.language == "bash":
-        output, err = save_and_execute_bash(code)
-        if err:
-            msg = err
-        else:
-            msg = output
-    elif code.language == "powershell":
-        output, err = save_and_execute_powershell(code)
-        if err:
-            msg = err
-        else:
-            msg = output
+    print_block(code.lines, True)
+    execution_functions = {
+        "python": save_and_execute_python,
+        "bash": save_and_execute_bash,
+        "powershell": save_and_execute_powershell,
+    }
+
+    msg = ""
+    if code.language in execution_functions:
+        output, err = execution_functions[code.language](code)
+        msg = err if err else output
     else:
         console.print("unrecognised code block found")
     return msg.strip()
@@ -239,7 +235,7 @@ def translate_thinking(s: str) -> str:
     return s
 
 
-def load_textfile(s: str) -> str | None:
+def load_textfile(s: str, line_numbers: bool = False) -> str | None:
     """loads a text file. if it is a code or data file wrap in markdown code block."""
     lmap = {
         ".py": "python",
@@ -253,6 +249,8 @@ def load_textfile(s: str) -> str | None:
     fname = make_fullpath(s)
     try:
         content = fname.read_text(encoding="utf-8")
+        if line_numbers:
+            content = "\n".join(f"[{i + 1:03d}] {s}" for i, s in enumerate(content.splitlines()))
         console.print(f"loaded file {fname} length {len(content)}", style="yellow")
         if fname.suffix in lmap:
             return f"\n## {fname.name}\n\n```{lmap[fname.suffix]}\n{content}\n```\n"
@@ -262,16 +260,44 @@ def load_textfile(s: str) -> str | None:
     return None
 
 
-def print_block(lines: str | list[str]) -> None:
-    xs = lines if isinstance(lines, list) else lines.splitlines()
-    text = ""
-    for i, s in enumerate(xs):
-        text += f"{i + 1:02d} {s if s.endswith('\n') else s + '\n'}"
-    console.print(text)
+def run_linter(fn: Path) -> str:
+    code = CodeBlock("powershell", [f"uvx ruff check --fix {fn}"])
+    out, err = save_and_execute_powershell(code)
+    return (
+        dedent(f"""\
+            ruff check --fix {fn.name}
+
+            # output""") + "\n\n" + out)
+
+
+def run_python_unittest(fn: Path, func_name: str | None = None) -> str:
+    """given a python file, run the test with filename test_x in folder ./tests"""
+    if not fn.is_file():
+        raise ValueError(f"file {fn} does not exist")
+
+    test_module = f"tests.test_{fn.stem}.Test_{func_name}" if func_name else f"tests.test_{fn.stem}"
+
+    code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uv run python -m unittest -v {test_module}"])
+    out, err = save_and_execute_powershell(code)
+    failed_tests = "FAIL" in err
+
+    # unittest sends the test output to stderr
+    # print_block(out, True)
+    # print_block(err, True)
+    s = (
+        dedent(f"""\
+            running module test
+
+            > python -m unittest {test_module}
+        """)
+        + "\n\n"
+        + err
+    )
+    return failed_tests, s
 
 
 def extract_diff(diff: str) -> list[tuple[list[str], list[str]]]:
-    """Extract all diffs from a string. Returns list of (search, replace) line tuples.
+    """Extract all diff blocks from a string. Returns list of (search, replace) line tuples.
 
     diff format for each block:
     <<<
@@ -287,39 +313,32 @@ def extract_diff(diff: str) -> list[tuple[list[str], list[str]]]:
         List of tuples where each tuple contains (search_lines, replace_lines)
         for each diff block found in the input
     """
+
+    def collect_lines(start_idx, end_marker, error_msg):
+        collected = []
+        idx=start_idx
+
+        while idx < len(lines) and not lines[idx].startswith(end_marker):
+            if lines[idx].startswith("+") or lines[idx].startswith("-"):
+                raise ValueError("Invalid diff block. Found line starting with + or - in diff block. Do not use unified diff format\n" + lines[idx])
+            collected.append(lines[idx])
+            idx += 1
+
+        if idx >= len(lines):
+            raise ValueError(error_msg)
+
+        return collected, idx
+
     lines = diff.splitlines()
     diffs = []
-    current_diff = None
+    i = 0
 
-    for line in lines:
-        if line.startswith("<<<"):
-            # Start new diff block
-            if current_diff is not None:
-                raise ValueError("Unclosed diff block before new <<< marker")
-            current_diff = {"search": [], "state": "search"}
-        elif line.startswith("==="):
-            # Transition to replace section
-            if current_diff is None or current_diff["state"] != "search":
-                raise ValueError("=== marker without preceding <<< or in wrong state")
-            current_diff["state"] = "replace"
-        elif line.startswith(">>>"):
-            # Finalize current diff block
-            if current_diff is None or current_diff["state"] != "replace":
-                raise ValueError(">>> marker without preceding === or in wrong state")
-            diffs.append((current_diff["search"], current_diff["replace"]))
-            current_diff = None
-        else:
-            # Add line to current section
-            if current_diff is not None:
-                if current_diff["state"] == "search":
-                    current_diff["search"].append(line)
-                else:
-                    if "replace" not in current_diff:
-                        current_diff["replace"] = []
-                    current_diff["replace"].append(line)
-
-    if current_diff is not None:
-        raise ValueError("Unterminated diff block at end of input")
+    while i < len(lines):
+        _, i = collect_lines(i, "<<<", "No diff block found. Block must start with <<<")
+        search_lines, i = collect_lines(i + 1, "===", "Invalid diff block. Found <<< without matching === marker")
+        replace_lines, i = collect_lines(i + 1, ">>>", "Invalid diff block. Found === without matching >>> marker")
+        diffs.append((search_lines, replace_lines))
+        i += 1
 
     return diffs
 
@@ -364,7 +383,8 @@ def find_block(lines: list[str], search: list[str]) -> tuple[int, int] | None:
 
 
 def apply_diff_impl(lines: list[str], search: list[str], replace: list[str]) -> list[str]:
-    """Replace the search block by the replace block. preserve the indentation of the original"""
+    """Replace the search block by the replace block.
+    Preserve the indentation of the original and the relative indentation of the replacement."""
 
     def count_indentation(s: str) -> int:
         count = 0
@@ -375,30 +395,24 @@ def apply_diff_impl(lines: list[str], search: list[str], replace: list[str]) -> 
                 break
         return count
 
-    # Find the matching block using find_match_lines
     match = find_block(lines, search)
     if match is None:
         raise ValueError(f"No matching block found. {search[0]}")
     start_idx, end_idx = match
 
-    console.print(f"found matching block at {start_idx} to {end_idx} replacing with {len(replace)} lines", style="yellow")
-    console.print(f"{search[0]} → {replace[0]}", style="yellow")
-    # print_block(search)
-    # print_block(replace)
+    original_indent = count_indentation(lines[start_idx])
+    replacement = []
 
-    # Determine indentation from the first line of the matched block
-    indentation = " " * count_indentation(lines[start_idx])
-
-    # Handle the replacement
-    if not replace:
-        replacement = []
-    else:
-        # Calculate minimum indentation in replacement block
-        min_indent = min((count_indentation(s) for s in replace if s.strip() != ""), default=0)
-        replacement = []
+    if replace:
+        # Use the first line's indent of the replacement block as the reference
+        first_line_indent = count_indentation(replace[0])
         for repl in replace:
-            repl_stripped = repl[min_indent:] if len(repl) >= min_indent else repl.lstrip()
-            replacement.append(indentation + repl_stripped + "\n")
+            current_indent = count_indentation(repl)
+            relative_indent = current_indent - first_line_indent
+            adjusted_indent = max(original_indent + relative_indent, 0)
+            stripped_line = repl.lstrip()
+            s = " " * adjusted_indent + stripped_line + "\n"
+            replacement.append(s)
 
     # Replace the matched block with the new content
     return lines[:start_idx] + replacement + lines[end_idx:]
@@ -413,3 +427,95 @@ def apply_diff(p: Path, diff: str) -> str:
     for diff in diffs:
         lines = apply_diff_impl(lines, diff[0], diff[1])
     return "".join(lines)
+
+
+def apply_simple_diff_impl(original_lines: list[str], start_line: int, diff_str: str) -> list[str]:
+    """
+    Core implementation that applies a simple diff string to a list of lines.
+
+    Args:
+        original_lines: The original content as a list of lines (without newlines)
+        start_line: The 1-indexed line number where the diff starts
+        diff_str: The simple diff string to apply (format: " " match, "-" delete, "+" insert)
+
+    Returns:
+        The updated content as a list of lines (without newlines)
+
+    Raises:
+        ValueError: If the diff format is invalid or cannot be applied
+    """
+    updated_content_lines: list[str] = []
+    original_ptr = 0  # Current 0-indexed position in original_lines
+
+    # Convert 1-indexed start_line to 0-indexed
+    diff_start_0idx = start_line - 1
+
+    # Add lines before the diff start
+    updated_content_lines.extend(original_lines[:diff_start_0idx])
+    original_ptr = diff_start_0idx
+
+    # Process the diff lines
+    diff_lines = diff_str.splitlines()
+
+    for diff_line in diff_lines:
+        if not diff_line:  # Skip empty lines
+            continue
+
+        op = diff_line[0]  # Operation character: ' ', '+', or '-'
+        line_content = diff_line[1:]  # The actual line content without the operation prefix
+
+        if op == " ":  # Context line (unchanged line)
+            if original_ptr >= len(original_lines) or original_lines[original_ptr] != line_content:
+                raise ValueError(f"Diff application error: Context line mismatch at original line {original_ptr + 1}. Expected '{line_content}', Got '{original_lines[original_ptr] if original_ptr < len(original_lines) else 'EOF'}'. Diff line: '{diff_line}'")
+            updated_content_lines.append(line_content)
+            original_ptr += 1
+
+        elif op == "-":  # Removed line
+            if original_ptr >= len(original_lines) or original_lines[original_ptr] != line_content:
+                breakpoint()
+                raise ValueError(f"Diff application error: Removed line mismatch at original line {original_ptr + 1}. Expected '{line_content}', Got '{original_lines[original_ptr] if original_ptr < len(original_lines) else 'EOF'}'. Diff line: '{diff_line}'")
+            original_ptr += 1  # Advance pointer, but do not add to updated_content_lines (it's removed)
+
+        elif op == "+":  # Added line
+            updated_content_lines.append(line_content)
+            # original_ptr does not advance for added lines as they don't consume original content
+
+        else:
+            raise ValueError(f"Diff application error: Unexpected character '{op}' in diff line: '{diff_line}'")
+
+    # Add any remaining lines from the original file after the diff
+    updated_content_lines.extend(original_lines[original_ptr:])
+
+    return updated_content_lines
+
+
+def apply_simple_diff(fn: Path, start_line: int, diff_str: str) -> str:
+    """
+    Applies a simple diff string to the content of a file.
+
+    Args:
+        fn: Path to the file to modify
+        start_line: The 1-indexed line number where the diff starts
+        diff_str: The simple diff string (format: " " match, "-" delete, "+" insert)
+
+    Returns:
+        The updated file content as a string
+    """
+    # Read the original content, determine its trailing newline status
+    # splitlines() removes newlines, so we must add them back if original had one.
+    raw_original_content = fn.read_text(encoding="utf-8")
+    original_content_lines = raw_original_content.splitlines()
+    original_ends_with_newline = raw_original_content.endswith("\n")
+
+    # Apply the diff to the content lines
+    print_block(diff_str, True, style="yellow")
+    updated_lines = apply_simple_diff_impl(original_content_lines, start_line, diff_str)
+
+    # Reconstruct the string from the list of lines
+    result = "\n".join(updated_lines)
+
+    # Preserve the original file's trailing newline status
+    if original_ends_with_newline:
+        result += "\n"
+
+    return result

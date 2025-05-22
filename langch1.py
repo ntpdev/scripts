@@ -546,7 +546,7 @@ def create_llm(llm_name: str, temp: float, tool_use: bool) -> BaseChatModel:
         llm = ChatAnthropicVertex(model_name="claude-3-5-haiku@20241022", location="us-east5", temperature=temp)
         # llm = ChatAnthropicVertex(model_name='claude-3-5-haiku@20241022', location='europe-west1', temperature=temp)
     elif llm_name == "sonnet":
-        llm = ChatAnthropicVertex(model_name="claude-3-5-sonnet-v2@20241022", location="europe-west1", temperature=temp)
+        llm = ChatAnthropicVertex(model_name="claude-sonnet-4@20250514", location="us-east5", temperature=temp)
     else:
         llm = ChatVertexAI(model="gemini-2.5-flash-preview-04-17", safety_settings=safety_settings, temperature=temp)
 
@@ -569,7 +569,8 @@ def chat(llm_name: str, tool_use: bool = False) -> None:
     chain = create_llm_with_history(llm)
     session_id = "xyz"
     config_data = {"configurable": {"session_id": session_id}}
-    test_png_attachment(llm)
+    test_single_message(llm)
+    # test_png_attachment(llm)
     exit(0)
     attach = None
 

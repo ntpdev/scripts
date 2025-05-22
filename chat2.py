@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import platform
+import textwrap
 
 # import sympy # used by eval
 import re
@@ -496,7 +497,8 @@ def prt_summary(history: MessageHistory):
     console.print(f"loaded from log {history} words {count_words} chars {count_chars}", style="red")
     for i, m in enumerate(history):
         c = m.get_content().replace("\n", "\\n")  # msgs:
-        s = f"{i:2} {m.role:<10} {c if len(c) < 70 else c[:70] + ' ...'}"
+        short_c = textwrap.shorten(c, width=70)
+        s = f"{i:2} {m.role:<10} {short_c}"
         console.print(s, style=role_to_color[m.role])
 
 

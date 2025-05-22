@@ -252,7 +252,7 @@ def main(symbol: str):
     console.print(f"\n\n--- trade date index for {symbol}", style="yellow")
     console.print(df_trade_days)
 
-    dt = date.today()
+    dt = date.today().isoformat().replace("-", "")
     tms, tme = find_datetime_range(df_trade_days, dt, -5)
     console.print(f"\nloaded 5 days before {dt} bars from {tms} to {tme}", style="cyan")
     df = mdb.load_timeseries(symbol, tms, tme)
@@ -270,7 +270,7 @@ def main(symbol: str):
     console.print("\n\n--- day summary", style="yellow")
     summ = ts.create_day_summary(df, df_di)
     console.print(summ)
-    console.print(f"\n\n--- last row {summ.index[-1]}", style="yellow")
+    console.print(f"\n\n--- last rows", style="yellow")
     console.print(summ.iloc[-2])
     console.print(summ.iloc[-1])
 

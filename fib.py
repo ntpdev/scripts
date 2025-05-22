@@ -24,16 +24,15 @@ def fib(n):
 
 
 def fibm(maxn):
-    memo = [-1] * maxn
-    memo[0] = 0
-    memo[1] = 1
-
     def impl(n):
         if memo[n] < 0:
             # print(f'calculating {n}')
             memo[n] = impl(n - 1) + impl(n - 2)
         return memo[n]
 
+    memo = [-1] * maxn
+    memo[0] = 0
+    memo[1] = 1
     return impl
 
 

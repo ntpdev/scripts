@@ -147,6 +147,7 @@ class ReasoningItem(BaseModel):
 
 
 class MessageHistory(BaseModel):
+    """tracks messages that have been sent to the LLM"""
     messages: list[Message | FunctionCall | FunctionCallResponse | ReasoningItem] = Field(default_factory=list)
     processed: list[bool] = Field(default_factory=list)
 
@@ -204,12 +205,12 @@ def reasoning_item(item: ResponseReasoningItem) -> ReasoningItem:
     return ReasoningItem(id=item.id, summary=item.summary, type=item.type)
 
 
+# structured output models
+
+
 class Answer(BaseModel):
     number: int = Field(description="question number")
     choice: str = Field(description="the single word answer")
-
-
-# structured output models
 
 
 class AnswerSheet(BaseModel):
@@ -234,7 +235,8 @@ class MarkSheet(BaseModel):
 
     def to_yaml(self) -> str:
         xs = (f"  {x.number}:\n    answer: {x.answer}\n    correct: {x.expected}\n    mark: {'✓' if x.is_correct else '✘'}\n    feedback: {x.feedback}" for x in self.answers)
-        return f"answers:\n{'\n'.join(xs)}\nmark: {self.correct}"
+        joined = '\n'.join(xs)
+        return f"answers:\n{joined}\nmark: {self.correct}"
 
 
 class Usage(BaseModel):
@@ -249,7 +251,7 @@ class Usage(BaseModel):
 
 
 class LLM:
-    """a stateful model which maintains a conversation thread"""
+    """a stateful model which maintains a conversation thread using a response_id"""
 
     model: OpenAIModel
     instructions: str
@@ -370,12 +372,15 @@ mark_task_complete_fn = {
 read_file_fn = {
     "type": "function",
     "name": "read_file",
-    "description": "read the contents of a file on the local computer",
+    "description": "read the contents of a file on the local computer.",
     "parameters": {
         "type": "object",
-        "required": ["filename"],
+        "required": ["filename", "line_number", "show_line_numbers", "window_size"],
         "properties": {
             "filename": {"type": "string", "description": "the file name"},
+            "line_number": {"type": "integer", "description": "the center of the block of lines to show"},
+            "show_line_numbers": {"type": "boolean", "description": "include line numbers in the output"},
+            "window_size": {"type": "integer", "description": "number of lines to show before and after the line number"},
         },
         "additionalProperties": False,
     },
@@ -399,6 +404,31 @@ apply_diff_fn = {
         "required": ["filename", "diff"],
         "properties": {
             "filename": {"type": "string", "description": "the file name"},
+            "diff": {"type": "string", "description": "the diff to apply"},
+        },
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+apply_unified_diff_fn = {
+    "type": "function",
+    "name": "apply_unified_diff",
+    "description": dedent("""
+        apply a unified diff to a file on the local computer. The diff should contain a single change affecting a block of lines. Do not add diff metadata. Example:
+
+         line1
+        -delete line2
+         +new line
+         +  indented line
+         line3"""),
+    "parameters": {
+        "type": "object",
+        "required": ["filename", "start_line", "diff"],
+        "properties": {
+            "filename": {"type": "string", "description": "the file name"},
+            "start_line": {"type": "integer", "description": "the line number (1 based) to start the diff at"},
             "diff": {"type": "string", "description": "the diff to apply"},
         },
         "additionalProperties": False,
@@ -480,7 +510,8 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         create_tasklist_fn["name"].lower(): {"defn": create_tasklist_fn, "fn": create_tasklist},
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
         read_file_fn["name"].lower(): {"defn": read_file_fn, "fn": read_file},
-        apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
+        # apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
+        apply_unified_diff_fn["name"].lower(): {"defn": apply_unified_diff_fn, "fn": apply_simple_diff},
     }
 
 
@@ -538,7 +569,7 @@ def process_function_calls(history: MessageHistory, response: Response) -> None:
 def extract_text_block(p: Path) -> str:
     """Extract lines from the first code block in a markdown file."""
     in_block = False
-    block_lines = []
+    block_lines: list[str] = []
 
     try:
         with p.open("r", encoding="utf-8") as f:
@@ -561,7 +592,7 @@ def print_message(msg) -> None:
         c = role_to_color[msg.role]
         s = "".join(e.text for e in msg.content if e.type in ["input_text", "output_text"])
         s = cu.translate_latex(s)
-        console.print(f"{msg.role}:\n{s}", style=c)
+        console.print(Markdown(f"{msg.role}:\n{s}"), style=c)
 
 
 def extract_text_content(response: Response) -> tuple[str, str, str]:
@@ -594,21 +625,55 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
     return cu.execute_script(code)
 
 
-def read_file(filename: str) -> str:
-    p = Path.home() / "Documents" / "chats" / filename
-    console.print(f"reading file {p}", style="yellow")
-    return p.read_text(encoding="utf-8")
+def read_file(filename: str, line_number: int, show_line_numbers: bool = False, window_size: int = 50) -> list[str]:
+    """
+    Read lines from a file centered around a specified line number.
+    
+    Args:
+        filename: Path to the file to read
+        line_number: Center line number (1-based)
+        show_line_numbers: Prefix lines with numbers
+        window_size: Number of lines to return
+    
+    Returns:
+        List of lines around the specified position
+    """
+    fn = Path("/code/scripts/" + filename)
+    lines = fn.read_text(encoding='utf-8').splitlines()
+    adjusted_pos = max(0, line_number - 1)  # Convert to 0-based index
+    window_size = max(50, window_size)
+    
+    n = len(lines)
+    if n <= window_size:
+        start_idx, selected = 0, lines
+    else:
+        start_idx = max(0, min(adjusted_pos - window_size//2, n - window_size))
+        selected = lines[start_idx:start_idx + window_size]
+    
+    console.print(f"read {fn.name} {show_line_numbers} lines {start_idx + 1} to {start_idx + len(selected) + 1}", style="yellow")
+    if show_line_numbers:
+        width = len(str(start_idx + window_size))
+        return [f"{i:>{width}} {line}" for i, line in enumerate(selected, start=start_idx + 1)]
+    
+    return selected
 
 
 def apply_diff(filename: str, diff: str) -> str:
     p = Path.home() / "Documents" / "chats" / filename
     console.print(f"reading file {p}", style="yellow")
     result = cu.apply_diff(p, diff)
-    text = ""
-    for i, s in enumerate(result.splitlines(keepends=True)):
-        text += f"{i + 1:02d} {s}"
-    console.print(text, style="yellow")
-    p.write_text(result)
+    cu.print_block(result, True, style="white")
+    p.write_text(result, encoding="utf-8")
+    return "success"
+
+
+def apply_simple_diff(filename: str, start_line: int, diff: str) -> str:
+    cu.print_block(diff, True, style="yellow")
+    p = Path("/code/scripts/" + filename)
+    console.print(f"reading file {p}", style="yellow")
+    result = cu.apply_simple_diff(p, start_line, diff)
+    cu.print_block(result, True, style="white")
+    p.write_text(result, encoding="utf-8")
     return "success"
 
 
@@ -882,7 +947,7 @@ def test_git_workflow():
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
 
-    prompt = "## task\ncommit the modified files with the message 'updates by Marvin'\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome."
+    prompt = "## task\ncommit the modified files with the message 'updates by Marvin'\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome. Use powershell to execute git commands"
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
@@ -902,39 +967,90 @@ def test_code_edit():
         The assistant is Marvin an expert Python programmer. 
         You have access to 2 tools:
         - read_file: use the read_file tool to read a file.
-        - apply_diff: use apply_diff tool to makes edits to a file. minimise the size of the edits by only including the lines that need to be changed. The diff must follow the format below. 
+        - apply_diff: use apply_diff tool to makes edits to a file. each edit is represented as a diff block. 
 
         ## diff format
+        each diff block contains two sections the lines to be searched for and the replacement lines. use <<< === >>> delimiters to mark the sections of the diff block. 
+        minimise the size of the diff blocks by only including the lines that need to be changed and one or two lines for context.
+
         <<<
-        search
+        line 1
+        line 2
         ===
-        replacement code block
+        line 1
+        modified line 2
+        new line 3
         >>>
 
         the current datetime is {datetime.now().isoformat()}
         """)
     llm = LLM(OpenAIModel.O4, "", True)
-    # llm = LLM(OpenAIModel.GPT_MINI, "use the eval tool as needed", True)
     history = MessageHistory()
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
-
-    prompt = dedent("""\
+    fname = "temp.py"
+    fn = cu.make_fullpath(fname)
+    
+    prompt = dedent(f"""\
         ## task
-        make the following changes to the python code in the file temp.py
+        modify the Python code in the file {fn.name}. The code should target Python 3.12
         
         ## instructions
-        - add type hints to functions. use python 3.10 e.g. list | tuple and types from collections.abc
-        - implement any unfinished functions
-        - minimise the size of diffs by only including the lines that need to be changed
-        - apply the changes. do not ask for confirmation
-        - summarise the changes for the user. do not repeat the code
+        - implement the function extract_diff
+        - do not run any code
         """)
+    code = cu.load_textfile(fname)
+    prompt += "\n\n" + code
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
     response = llm.create(history)
     print_response(response)
+
+    prompt = cu.run_python_unittest(fn)
+    msg = user_message(prompt)
+    print_message(msg)
+    if "failed" in prompt.lower():
+        history.append(msg)
+        response = llm.create(history)
+        print_response(response)
+
+        # - add type hints to functions. use python 3.10 e.g. list | tuple and types from collections.abc
+        # - current_diff is a dictionary of (search, replace) line tuples. replace with a dataclass
+        # - summarise the changes for the user. do not repeat the code
+        # - explain the purpose and logic of the code
+
+def test_code_edit_unified():
+    dev_inst = dedent(f"""\
+        The assistant is Marvin an expert Python programmer. 
+        You have access to 2 tools:
+        - read_file: use the read_file tool to read a file.
+        - apply_unified_diff: use apply_unified_diff tool to makes edits to a file. 
+
+        the current datetime is {datetime.now().isoformat()}
+        """)
+    llm = LLM(OpenAIModel.O4, "", True)
+    history = MessageHistory()
+    dev_msg = developer_message(dev_inst)
+    history.append(dev_msg)
+    fname = Path("/code/scripts/chat.py")
+    s = cu.run_linter(fname)
+    if "error" in s.lower():  
+        prompt = dedent(f"""\
+            ## task
+            read the output of the lint tool and fix {fname.name}
+            
+            ## instructions
+            - understand the lint output and make the necessary changes to the code
+            - show the unified diff to the user
+            - make the smallest changes possible to fix the lint issues
+            """)
+        prompt += f"\n##lint output\nruff check --fix {fname.name}\n\n" + s
+        msg = user_message(prompt)
+        print_message(msg)
+        history.append(msg)
+        response = llm.create(history)
+        print_response(response)
 
 
 def test_image_analysis():
@@ -1171,7 +1287,9 @@ def main():
     # structured_output_message()
     test_git_workflow()
     # test_code_edit()
+    # test_code_edit_unified()
     # test_chat_loop()
+
 
 
 if __name__ == "__main__":
