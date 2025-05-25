@@ -1,11 +1,11 @@
 #!/usr/bin/python3
 import math
 from collections import defaultdict, deque
+from collections.abc import Iterator
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import cache
 from io import StringIO
-from typing import Iterator
 
 import numpy as np
 import pandas as pd
@@ -139,11 +139,11 @@ def parsing_text():
     p = filter(lambda e: not e.strip().startswith("#"), StringIO(s))
     # note parse lines is stateful so cant use map()
     p1 = parse_lines(p)
-    pipeline = map(as_typed_values, p1)
+    Pipeline = map(as_typed_values, p1)
     # can use pipeline in a aggregration function
     # sum(e['price'] for e in pipeline)
     # or just iterating
-    for x in pipeline:
+    for x in Pipeline:
         console.print(x, style="green")
 
 
@@ -248,9 +248,7 @@ def example_cashflow():
     evaluate_cashflow(df, round(r, 2), interest_rate)
     console.print("--- example cashflow ---", style="yellow")
     console.print(f"drawdown {drawdown:.2f}, interest rate {interest_rate * 100:.4f}%, monthly payment {round(r, 2)}")
-    console.print(
-        f"total paid {df['repayment'].sum():.2f} , total interest {df['int_paid'].sum():.2f}, total frac {df['frac_int'].sum()}"
-    )
+    console.print(f"total paid {df['repayment'].sum():.2f} , total interest {df['int_paid'].sum():.2f}, total frac {df['frac_int'].sum()}")
     console.print(df)
 
 

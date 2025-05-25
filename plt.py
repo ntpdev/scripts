@@ -9,8 +9,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from mdbutils import load_price_history
 import tsutils as ts
+from mdbutils import load_price_history
 
 STRAT_BAR_COLOUR: str = "strat"
 

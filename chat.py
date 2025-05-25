@@ -29,6 +29,7 @@ console = Console()
 client = OpenAI()
 PYLINE_SPLIT = re.compile(r"; |\n")
 role_to_color = {"system": "white", "developer": "white", "user": "green", "assistant": "cyan", "tool": "yellow"}
+external_file_map: dict[str, Path] = {} # controls which files are visible to the LLM
 
 # types for message construction
 
@@ -381,7 +382,7 @@ read_file_fn = {
         "properties": {
             "filename": {"type": "string", "description": "the file name"},
             "line_number": {"type": "integer", "description": "the center of the block of lines to show"},
-            "show_line_numbers": {"type": "boolean", "description": "include line numbers in the output"},
+            "show_line_numbers": {"type": "boolean", "description": "include line numbers in the output. each line will be prefixed 'nnn '"},
             "window_size": {"type": "integer", "description": "number of lines to show before and after the line number"},
         },
         "additionalProperties": False,
@@ -390,38 +391,61 @@ read_file_fn = {
 }
 
 apply_diff_fn = {
+    "type": "function",
+    "name": "apply_diff",
+    "description": "Applies a sequence of diff hunks to a text file. Diffs are applied in order. Provide at least 1 unchanged context line in each diff",
+    "strict": True,
+    "parameters": {
+        "type": "object",
+        "required": ["filename", "diffs"],
+        "properties": {
+            "filename": {"type": "string", "description": "The name of the file to which diffs will be applied"},
+            "diffs": {
+                "type": "array",
+                "description": "Ordered list of diffs (hunks) to apply",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "start_position": {"type": "integer", "description": "1‐based index in the file where this diff is applied."},
+                        "diff": {"type": "string", "description": "Unified diff format. prefix lines with ' ' unchanged '-' delete '+' insert."},
+                    },
+                    "required": ["start_position", "diff"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+edit_file_fn = {
   "type": "function",
-  "name": "apply_diff",
-  "description": "Applies a sequence of diff hunks to a text file. Diffs are applied in order. Provide at least 1 unchanged context line in each diff",
+  "name": "edit_file",
+  "description": "Edits a specified file based on search and replace instructions. The search and replace instructions are applied in order. Each search block should include at least 1 unchanged context line.",
   "strict": True,
   "parameters": {
     "type": "object",
-    "required": ["filename", "diffs"],
+    "required": ["filename", "edits"],
     "properties": {
-      "filename": {"type": "string", "description": "The name of the file to which diffs will be applied"},
-      "diffs": {
+      "filename": {"type": "string", "description": "The name of the file to edit"},
+      "edits": {
         "type": "array",
-        "description": "Ordered list of diffs (hunks) to apply",
+        "description": "A list of edits to perform on the file",
         "items": {
           "type": "object",
           "properties": {
-            "start_position": {
-              "type": "integer",
-              "description": "1‐based index in the file where this diff is applied."
-            },
-            "diff": {
-              "type": "string",
-              "description": "Unified diff format. prefix lines with ' ' unchanged '-' delete '+' insert."
-            }
+            "search": {"type": "string", "description": "The lines to find in the source"},
+            "replace": {"type": "string", "description": "Replacement lines for the found lines"}
           },
-          "required": ["start_position", "diff"],
-          "additionalProperties": False
+          "required": ["search", "replace"],
+          "additionalProperties": False,
         }
       }
     },
-    "additionalProperties": False
+    "additionalProperties": False,
   }
 }
+
 
 # lifted from agents SDK
 def function_to_json(func) -> dict:
@@ -496,7 +520,8 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         create_tasklist_fn["name"].lower(): {"defn": create_tasklist_fn, "fn": create_tasklist},
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
         read_file_fn["name"].lower(): {"defn": read_file_fn, "fn": read_file},
-        apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
+        edit_file_fn["name"].lower(): {"defn": edit_file_fn, "fn": edit_file},
+        # apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
     }
 
 
@@ -507,7 +532,7 @@ def dispatch(fn_name: str, args: dict) -> Any:
             r = fn_entry["fn"](**args)
             if isinstance(r, str):
                 if r.strip():
-                    console.print(Markdown(r, style="yellow", code_theme="monokai"), width=80)
+                    console.print(r, style="yellow")
                 else:
                     r = "success: the tool executed but no output was returned. Add print statements."
                     console.print(r, style="red")
@@ -610,7 +635,7 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
     return cu.execute_script(code)
 
 
-def read_file(filename: str, line_number: int, show_line_numbers: bool = False, window_size: int = 50) -> list[str]:
+def read_file(filename: str, line_number: int, show_line_numbers: bool = False, window_size: int = 50) -> str:
     """
     Read lines from a file centered around a specified line number.
 
@@ -623,7 +648,7 @@ def read_file(filename: str, line_number: int, show_line_numbers: bool = False, 
     Returns:
         List of lines around the specified position
     """
-    fn = Path("/code/scripts/" + filename)
+    fn = external_file_map[filename]
     lines = fn.read_text(encoding="utf-8").splitlines()
     adjusted_pos = max(0, line_number - 1)  # Convert to 0-based index
     window_size = max(50, window_size)
@@ -635,18 +660,17 @@ def read_file(filename: str, line_number: int, show_line_numbers: bool = False, 
         start_idx = max(0, min(adjusted_pos - window_size // 2, n - window_size))
         selected = lines[start_idx : start_idx + window_size]
 
-    console.print(f"read {fn.name} {show_line_numbers} lines {start_idx + 1} to {start_idx + len(selected) + 1}", style="yellow")
+    console.print(f"read_file {fn.name} {show_line_numbers} lines {start_idx + 1} to {start_idx + len(selected) + 1}", style="yellow")
     if show_line_numbers:
         width = len(str(start_idx + window_size))
-        return [f"{i:>{width}} {line}" for i, line in enumerate(selected, start=start_idx + 1)]
+        selected = [f"{i:>{width}} {line}" for i, line in enumerate(selected, start=start_idx + 1)]
 
-    return selected
+    return "\n".join(selected)
 
 
-def apply_diff(filename: str, diffs: list[dict]) -> str:
-    console.print(f"applying {len(diffs)} diffs to {filename}", style="yellow")
+def edit_file(filename: str, edits: list[dict]) -> str:
     try:
-        return tu.apply_diff(Path(filename), [tu.DiffItem(**d) for d in diffs])
+        return tu.edit_file(external_file_map[filename], [tu.EditItem(search=e["search"].splitlines(), replace=e["replace"].splitlines()) for e in edits])
     except Exception as e:
         return f"ERROR: {type(e).__name__}: {e}"
 
@@ -768,8 +792,8 @@ def simple_message():
 
 
 def test_search_example():
-    question = cu.load_textfile("search1.md")
-    answer = cu.load_textfile("search1-ans.md")
+    question = cu.load_textfile(cu.make_fullpath("search1.md"))
+    answer = cu.load_textfile(cu.make_fullpath("search1-ans.md"))
     dev_inst = f"You are Marvin an AI chatbot who gives insightful and concise answers to questions which are always based on evidence. The current date is {datetime.now().isoformat()}"
 
     response_id = None
@@ -953,7 +977,7 @@ def test_apply_diff():
     history.append(dev_msg)
     fname = "test-apply-diff.md"
 
-    prompt = cu.load_textfile(fname)
+    prompt = cu.load_textfile(cu.make_fullpath(fname))
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
@@ -962,17 +986,18 @@ def test_apply_diff():
     console.print(llm.usage)
 
 
-def lint_workflow():
-    fname = Path("./tests/test_chatutils.py")
-    failed,lint_output = cu.run_linter(fname)
+def lint_workflow(fname: Path):
+    external_file_map[fname.name] = fname
+    success, lint_output = cu.run_linter(fname)
     # cu.print_block(s, True)
-    if not failed:
+    if success:
         return
+
     dev_inst = dedent(f"""\
-        The assistant is Marvin a senior Python programmer. 
+        The assistant is Marvin a senior Python developer. 
         You have access to 2 tools:
         - read_file: use the read_file tool to read a file.
-        - apply_diff: use apply_diff tool to makes edits to sections of a text file line by line.
+        - apply_diff: use apply_diff tool to makes edits to sections of a text file line by line. Do not include line numbers in the diff as they are not part of the source text.
 
         the current datetime is {datetime.now().isoformat()}
         """)
@@ -981,10 +1006,8 @@ def lint_workflow():
 
         instructions: 
         - understand the lint errors
-        - create and apply a diff to fix the errors
-        - provide at least 1 line of context for each diff
-        - group nearby changes into 1 diff
-        - do not add metadata or @@ lines in diff
+        - edit the file to fix the lint errors
+        - minimize the number of individual edits by grouping changes to nearby lines into a single operation
         - summarise the changes for the user. do not repeat the code
 
         ## lint output
@@ -994,17 +1017,52 @@ def lint_workflow():
         ```
         __output__
         ```
-
-        ## {fname.name}
-
-        ```python
-        __code__
-        ```
         """)
     msg = msg.replace("__output__", lint_output)
-    msg = msg.replace("__code__", fname.read_text(encoding="utf-8"))
+    # msg = msg.replace("__code__", fname.read_text(encoding="utf-8"))
     console.print(Markdown(msg))
     llm = LLM(OpenAIModel.O4, dev_inst, True)
+    history = MessageHistory()
+    history.append(user_message(msg))
+    response = llm.create(history)
+    print_response(response)
+
+
+def mypy_workflow(fname: Path):
+    external_file_map[fname.name] = fname
+    success, output = cu.run_mypy(fname)
+    # cu.print_block(s, True)
+    if success:
+        return
+
+    dev_inst = dedent(f"""\
+    The assistant is Marvin a senior Python developer. 
+    You have access to 2 tools:
+    - read_file: use the read_file tool to read a file.
+    - apply_diff: use apply_diff tool to makes edits to sections of a text file line by line. Do not include line numbers in the diff as they are not part of the source text.
+
+    the current datetime is {datetime.now().isoformat()}
+    """)
+    msg = dedent(f"""\
+        task: fix mypy errors
+
+        instructions: 
+        - understand the root cause of the error
+        - edit the file to fix the errors
+        - minimize the number of individual edits by grouping changes to nearby lines into a single operation
+        - summarise the changes for the user. do not repeat the code
+
+        ## mypy output
+
+        > mypy {fname.name}
+
+        ```
+        __output__
+        ```
+        """)
+    msg = msg.replace("__output__", output)
+    console.print(Markdown(msg))
+    llm = LLM(OpenAIModel.GPT, dev_inst, True)
     history = MessageHistory()
     history.append(user_message(msg))
     response = llm.create(history)
@@ -1016,20 +1074,7 @@ def test_code_edit():
         The assistant is Marvin an expert Python programmer. 
         You have access to 2 tools:
         - read_file: use the read_file tool to read a file.
-        - apply_diff: use apply_diff tool to makes edits to a file. each edit is represented as a diff block. 
-
-        ## diff format
-        each diff block contains two sections the lines to be searched for and the replacement lines. use <<< === >>> delimiters to mark the sections of the diff block. 
-        minimise the size of the diff blocks by only including the lines that need to be changed and one or two lines for context.
-
-        <<<
-        line 1
-        line 2
-        ===
-        line 1
-        modified line 2
-        new line 3
-        >>>
+        - edit_file: use edit_file tool to makes edits to a file. each edit consists of a search block of lines and a replacement block of lines. Attempt to include at least 1 unchange context line in the search block.
 
         the current datetime is {datetime.now().isoformat()}
         """)
@@ -1037,18 +1082,18 @@ def test_code_edit():
     history = MessageHistory()
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
-    fname = "temp.py"
-    fn = cu.make_fullpath(fname)
+
+    fname = Path("/code/scripts/a.py")
+    external_file_map[fname.name] = fname
 
     prompt = dedent(f"""\
         ## task
-        modify the Python code in the file {fn.name}. The code should target Python 3.12
+        modify the Python code in the file {fname.name}. The code should target Python 3.12
         
         ## instructions
-        - implement the function extract_diff
-        - do not run any code
+        - implement the collatz function
         """)
-    code = cu.load_textfile(fname)
+    code = cu.load_textfile(cu.make_fullpath(fname))
     prompt += "\n\n" + code
     msg = user_message(prompt)
     print_message(msg)
@@ -1056,13 +1101,13 @@ def test_code_edit():
     response = llm.create(history)
     print_response(response)
 
-    prompt = cu.run_python_unittest(fn)
-    msg = user_message(prompt)
-    print_message(msg)
-    if "failed" in prompt.lower():
-        history.append(msg)
-        response = llm.create(history)
-        print_response(response)
+    # prompt = cu.run_python_unittest(fn)
+    # msg = user_message(prompt)
+    # print_message(msg)
+    # if "failed" in prompt.lower():
+    #     history.append(msg)
+    #     response = llm.create(history)
+    #     print_response(response)
 
         # - add type hints to functions. use python 3.10 e.g. list | tuple and types from collections.abc
         # - current_diff is a dictionary of (search, replace) line tuples. replace with a dataclass
@@ -1278,6 +1323,20 @@ When discussing contentious topics, go beyond media talking points to examine un
 """
 
 
+def process_command(cmd: str, params: str, attachments: list[str]) -> None:
+    if cmd == "attach":
+        if s := cu.load_textfile(cu.make_fullpath(params)):
+            attachments.append(s)
+    elif cmd == "lint":
+        p = Path(params + ".py")
+        if p.exists():
+            lint_workflow(p)
+        else:
+            console.print(f"file {p} not found", style="red")
+    else:
+        console.print(f"unknown command: {cmd}", style="red")
+
+
 def test_chat_loop():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
 
@@ -1290,13 +1349,13 @@ def test_chat_loop():
         return "\n".join(lines)
 
     dev_inst = f"The assistant is Marvin an AI chatbot. The assistant uses precise language and avoids vague or generic statements. The current date is {datetime.now().isoformat()}"
-    dev_inst = dedent(f"""\
-        The assistant is Marvin a helpful AI chatbot. Marvin is an expert python programmer.
-        task: help the user write a design. the user will provides requirements and you should use those to formulate a design
-        you will need to collaborate with the user to refine the design until the user is satisfied
-        keep a track of all important decisions and the reasoning behind them
-        The current date is {datetime.now().isoformat()}
-        """)
+    # dev_inst = dedent(f"""\
+    #     The assistant is Marvin a helpful AI chatbot. Marvin is an expert python programmer.
+    #     task: help the user write a design. the user will provides requirements and you should use those to formulate a design
+    #     you will need to collaborate with the user to refine the design until the user is satisfied
+    #     keep a track of all important decisions and the reasoning behind them
+    #     The current date is {datetime.now().isoformat()}
+    #     """)
     model = LLM(OpenAIModel.GPT, use_tools=True)
     history = MessageHistory()
     history.append(developer_message(dev_inst))
@@ -1307,9 +1366,9 @@ def test_chat_loop():
         inp = input_multi_line()
         if inp == "x":
             break
-        if inp.startswith("%attach"):
-            if s := cu.load_textfile(inp.split()[1]):
-                attachments.append(s)
+        if inp[0] == "%":
+            xs = inp.split(maxsplit=1)
+            process_command(xs[0][1:], xs[1], attachments)
             continue
 
         for a in attachments:
@@ -1336,7 +1395,8 @@ def main():
     # test_solve_visual_maths_problem()
     # structured_output_message()
     git_workflow()
-    # lint_workflow()
+    # lint_workflow(Path("/code/scripts/chat.py"))
+    # mypy_workflow(Path("/code/scripts/chatutils.py"))
     # test_code_edit()
     # test_apply_diff()
     # test_chat_loop()

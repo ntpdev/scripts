@@ -2,45 +2,34 @@
 import unittest
 from textwrap import dedent
 
-from toolutils import apply_diff_impl
+from toolutils import edit_file_impl, EditItem
 
 
-class TestApplyDiffImpl(unittest.TestCase):
+class TestEditFileImpl(unittest.TestCase):
     def test_simple_replacement(self):
-        original = (
-            dedent("""
+        original = dedent("""\
             line 1
             line 2
             line 3
             line 4
             line 5
-        """)
-            .strip()
-            .splitlines()
+        """).splitlines()
+
+
+        edit = EditItem(
+            search=["line 3"],
+            replace=["modified line 3"]
         )
 
-        diff = (
-            dedent("""
-            -line 3
-            +modified line 3
-        """)
-            .strip()
-            .splitlines()
-        )
-
-        expected = (
-            dedent("""
+        expected = dedent("""\
             line 1
             line 2
             modified line 3
             line 4
             line 5
-        """)
-            .strip()
-            .splitlines()
-        )
+        """).splitlines()
 
-        result = apply_diff_impl(original, 2, diff)
+        result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
 
     def test_insertion(self):
@@ -50,10 +39,10 @@ class TestApplyDiffImpl(unittest.TestCase):
             line 3
         """).splitlines()
 
-        diff = dedent("""\
-             line 2
-            +new line
-        """).splitlines()
+        edit = EditItem(
+            search=["line 2"],
+            replace=["line 2", "new line"]
+        )
 
         expected = dedent("""\
             line 1
@@ -62,7 +51,7 @@ class TestApplyDiffImpl(unittest.TestCase):
             line 3
         """).splitlines()
 
-        result = apply_diff_impl(original, 1, diff)
+        result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
 
     def test_deletion(self):
@@ -73,10 +62,10 @@ class TestApplyDiffImpl(unittest.TestCase):
             line 4
         """).splitlines()
 
-        diff = dedent("""\
-             line 2
-            -line 3
-        """).splitlines()
+        edit = EditItem(
+            search=["line 2", "line 3"],
+            replace=["line 2"]
+        )
 
         expected = dedent("""\
             line 1
@@ -84,10 +73,10 @@ class TestApplyDiffImpl(unittest.TestCase):
             line 4
         """).splitlines()
 
-        result = apply_diff_impl(original, 2, diff)
+        result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
 
-    def test_complex_diff(self):
+    def test_preserve_indent(self):
         original = dedent("""\
             def hello():
                 print("Hello")
@@ -95,22 +84,76 @@ class TestApplyDiffImpl(unittest.TestCase):
                 return True
         """).splitlines()
 
-        diff = dedent("""\
-             def hello():
-            -    print("Hello")
-            -    print("World")
-            +    print("Hello, World!")
-                 return True
+        edit = EditItem(
+            search=[
+                "print(\"Hello\")",
+                "print(\"World\")",
+                "return True"
+            ],
+            replace=[
+                "print(\"Hello, World!\")",
+                "return True"
+            ]
+        )
+
+    def test_preserve_indent(self):
+        original = dedent("""\
+            def hello():
+                print("Hello")
+                print("World")
+                return True
         """).splitlines()
 
+        edit = EditItem(
+            search=[
+                "print(\"Hello\")",
+                "print(\"World\")",
+                "return True"
+            ],
+            replace=[
+                "print(\"Hello, World!\")",
+                "return True"
+            ]
+        )
         expected = dedent("""\
             def hello():
                 print("Hello, World!")
                 return True
         """).splitlines()
 
-        result = apply_diff_impl(original, 0, diff)
+        result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
+
+    def test_preserve_relative_indent(self):
+        original = dedent("""\
+            def hello(n):
+                print("Hello")
+                if n:
+                    print("World")
+                return True
+        """).splitlines()
+
+        edit = EditItem(
+            search=[
+                "print(\"World\")",
+            ],
+            replace=[
+                "    print(\"World\")",
+                "print(\"new\")",
+            ]
+        )
+        expected = dedent("""\
+            def hello(n):
+                print("Hello")
+                if n:
+                    print("World")
+                print("new")
+                return True
+        """).splitlines()
+
+        result = edit_file_impl(original, edit)
+        self.assertEqual(result, expected)
+
 
     def test_reorder(self):
         original = dedent("""\
@@ -120,12 +163,10 @@ class TestApplyDiffImpl(unittest.TestCase):
             pear
         """).splitlines()
 
-        diff = dedent("""\
-             apple
-            -melon
-             banana
-            +melon
-        """).splitlines()
+        edit = EditItem(
+            search=["apple", "melon", "banana"],
+            replace=["apple", "banana", "melon"]
+        )
 
         expected = dedent("""\
             apple
@@ -134,7 +175,7 @@ class TestApplyDiffImpl(unittest.TestCase):
             pear
         """).splitlines()
 
-        result = apply_diff_impl(original, 0, diff)
+        result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
 
     def test_insert_start(self):
@@ -145,10 +186,10 @@ class TestApplyDiffImpl(unittest.TestCase):
             pear
         """).splitlines()
 
-        diff = dedent("""\
-            +strawberry
-             apple
-        """).splitlines()
+        edit = EditItem(
+            search=["apple"],
+            replace=["strawberry", "apple"]
+        )
 
         expected = dedent("""\
             strawberry
@@ -158,41 +199,31 @@ class TestApplyDiffImpl(unittest.TestCase):
             pear
         """).splitlines()
 
-        result = apply_diff_impl(original, 0, diff)
+        result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
 
-    def test_approximate_start_position(self):
-        original = ["line " + str(i) for i in range(1, 21)]
 
-        diff = dedent("""\
-             line 10
-            +inserted line
-        """).splitlines()
+    def test_error_multiple_matches(self):
+        original = ["line 1", "line 2", "line 1", "line 4"]
 
-        # Test with start_position slightly off
-        result = apply_diff_impl(original, 12, diff)
-
-        expected = original.copy()
-        expected.insert(10, "inserted line")
-
-        self.assertEqual(result, expected)
-
-    def test_invalid_diff_format(self):
-        original = ["line 1", "line 2", "line 3"]
-
-        # Diff with invalid prefix
-        invalid_diff = ["line 1", "? invalid prefix"]
+        edit = EditItem(
+            search=["line 1"],
+            replace=["new line"]
+        )
 
         with self.assertRaises(ValueError):
-            apply_diff_impl(original, 0, invalid_diff)
+            edit_file_impl(original, edit)
 
-    def test_no_matching_line(self):
+    def test_error_no_match(self):
         original = ["line 1", "line 2", "line 3"]
 
-        diff = ["-non existent line", "+new line"]
+        edit = EditItem(
+            search=["non existent line"],
+            replace=["new line"]
+        )
 
         with self.assertRaises(ValueError):
-            apply_diff_impl(original, 0, diff)
+            edit_file_impl(original, edit)
 
 
 if __name__ == "__main__":

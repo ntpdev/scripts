@@ -55,7 +55,8 @@ def print_block(lines: str | list[str], line_numbers: bool = False, style: str =
     text = ""
     for i, s in enumerate(xs):
         if line_numbers:
-            text += f"{i + 1:>3} {s if s.endswith('\n') else s + '\n'}"
+            s2 = s if s.endswith("\n") else s + "\n"
+            text += f"{i + 1:>3} {s2}"
         else:
             text += s if s.endswith("\n") else s + "\n"
     console.print(text, markup=False, style=style)
@@ -114,7 +115,7 @@ def save_and_execute_python(code: CodeBlock, timeout: int = 30):
             print_block(result.stdout, line_numbers=True, style="yellow")
         if result.stderr:
             print_block(result.stderr, line_numbers=True, style="green")
-        return result.stdout, result.stderr    
+        return result.stdout, result.stderr
     except Exception as e:
         console.print(f"ERROR: {e.__class__.__name__} {str(e)}", style="red")
         return None, str(e)
@@ -173,11 +174,12 @@ def extract_code_block(contents: str, sep: str) -> CodeBlock | None:
             if inside:
                 code = CodeBlock(x.strip()[len(sep) :].lower(), [])
             else:
-                if len(code.language) == 0:
-                    code.language = search_for_language(contents)
+                if code is not None:
+                    if len(code.language) == 0:
+                        code.language = search_for_language(contents)
                 return code
         else:
-            if inside:
+            if inside and code is not None:
                 # infer language based on content
                 if (len(code.language) == 0) and ("print(" in x or "import" in x):
                     code.language = "python"
@@ -215,7 +217,6 @@ def execute_script(code: CodeBlock):
     return msg.strip()
 
 
-
 def translate_latex(s: str) -> str:
     for k, v in latex_to_unicode.items():
         s = s.replace("\\" + k, v)
@@ -239,7 +240,7 @@ def translate_thinking(s: str) -> str:
     return s
 
 
-def load_textfile(s: str, line_numbers: bool = False) -> str | None:
+def load_textfile(fname: Path, line_numbers: bool = False) -> str | None:
     """loads a text file. if it is a code or data file wrap in markdown code block."""
     lmap = {
         ".py": "python",
@@ -250,7 +251,6 @@ def load_textfile(s: str, line_numbers: bool = False) -> str | None:
         ".json": "json",
         ".xml": "xml",
     }
-    fname = make_fullpath(s)
     try:
         content = fname.read_text(encoding="utf-8")
         if line_numbers:
@@ -267,11 +267,11 @@ def load_textfile(s: str, line_numbers: bool = False) -> str | None:
 def run_linter(fn: Path) -> tuple[bool, str]:
     code = CodeBlock("powershell", [f"uvx ruff check --fix {fn}"])
     out, err = save_and_execute_powershell(code)
-    return ("error" in out, out)
+    return ("error" not in out, out)
 
 
 def make_test_cls_name(s: str) -> str:
-    return "Test" + ''.join(word.capitalize() for word in s.split('_'))
+    return "Test" + "".join(word.capitalize() for word in s.split("_"))
 
 
 def run_python_unittest(fn: Path, func_name: str | None = None) -> tuple[bool, str]:
@@ -298,3 +298,8 @@ def run_python_unittest(fn: Path, func_name: str | None = None) -> tuple[bool, s
         + err
     )
     return failed_tests, s
+
+def run_mypy(fn: Path) -> tuple[bool, str]:
+    code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uvx --with pydantic mypy --pretty --ignore-missing-imports --follow-imports=skip --strict-optional {fn.name}"])
+    out, err = save_and_execute_powershell(code)
+    return ("error" not in out, out)

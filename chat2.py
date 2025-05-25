@@ -594,7 +594,7 @@ def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -
             history.append(msg)
             next_action = True
     if cmd == "code":
-        code1 = load_textfile(inp)
+        code1 = load_textfile(make_fullpath(inp))
     elif cmd == "resp":
         msg = user_message(text=tool_response(inp))
     elif cmd == "reset":
