@@ -7,7 +7,7 @@ from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from openai import OpenAI
 from openai.types.responses.response import Response
@@ -19,7 +19,17 @@ from rich.markdown import Markdown
 from rich.pretty import pprint
 
 import chatutils as cu
+from pd import test
 import toolutils as tu
+
+
+# TypedDict for OpenAI function definitions
+class FunctionDef(TypedDict, total=False):
+    type: Literal["function"]
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    strict: bool
 
 # ---
 # chat using OpenAI responses API
@@ -254,12 +264,12 @@ class Usage(BaseModel):
 
 
 class LLM:
-    """a stateful model which maintains a conversation thread using a response_id"""
+    """a stateful model which maintains a conversation thread using the response_id"""
 
     model: OpenAIModel
     instructions: str
     use_tools: bool
-    response_id: str = None
+    response_id: str | None = None
     usage: Usage
 
     def __init__(self, model: OpenAIModel, instructions: str = "", use_tools: bool = False):
@@ -312,7 +322,7 @@ class LLM:
 
 
 # uses the Responses API function defintions
-eval_fn = {
+eval_fn: FunctionDef = {
     "type": "function",
     "name": "eval",
     "description": "evaluate a mathematical or Python expressions",
@@ -325,7 +335,7 @@ eval_fn = {
     "strict": True,
 }
 
-execute_script_fn = {
+execute_script_fn: FunctionDef = {
     "type": "function",
     "name": "execute_script",
     "description": "execute a PowerShell or Python script on the local computer. Include print statements to see output. Text written to stdout and stderr will be returned",
@@ -342,7 +352,7 @@ execute_script_fn = {
 }
 
 
-create_tasklist_fn = {
+create_tasklist_fn: FunctionDef = {
     "type": "function",
     "name": "create_tasklist",
     "description": "create a new task list with all the steps that need to be done.",
@@ -357,7 +367,7 @@ create_tasklist_fn = {
     "strict": True,
 }
 
-mark_task_complete_fn = {
+mark_task_complete_fn: FunctionDef = {
     "type": "function",
     "name": "mark_task_complete",
     "description": "mark a step on the active tasklist as complete. It will return the next task to be done.",
@@ -372,7 +382,7 @@ mark_task_complete_fn = {
     "strict": True,
 }
 
-read_file_fn = {
+read_file_fn: FunctionDef = {
     "type": "function",
     "name": "read_file",
     "description": "read the contents of a file on the local computer.",
@@ -390,7 +400,7 @@ read_file_fn = {
     "strict": True,
 }
 
-apply_diff_fn = {
+apply_diff_fn: FunctionDef = {
     "type": "function",
     "name": "apply_diff",
     "description": "Applies a sequence of diff hunks to a text file. Diffs are applied in order. Provide at least 1 unchanged context line in each diff",
@@ -418,7 +428,7 @@ apply_diff_fn = {
     },
 }
 
-edit_file_fn = {
+edit_file_fn: FunctionDef = {
   "type": "function",
   "name": "edit_file",
   "description": "Edits a specified file based on search and replace instructions. The search and replace instructions are applied in order. Each search block should include at least 1 unchanged context line.",
@@ -532,7 +542,7 @@ def dispatch(fn_name: str, args: dict) -> Any:
             r = fn_entry["fn"](**args)
             if isinstance(r, str):
                 if r.strip():
-                    console.print(r, style="yellow")
+                    console.print(r, style="yellow", markup=False)
                 else:
                     r = "success: the tool executed but no output was returned. Add print statements."
                     console.print(r, style="red")
@@ -1079,11 +1089,12 @@ def test_code_edit():
         the current datetime is {datetime.now().isoformat()}
         """)
     llm = LLM(OpenAIModel.O4, "", True)
+    llm.instructions = dev_inst
     history = MessageHistory()
-    dev_msg = developer_message(dev_inst)
-    history.append(dev_msg)
+    # dev_msg = developer_message(dev_inst)
+    # history.append(dev_msg)
 
-    fname = Path("/code/scripts/a.py")
+    fname = Path("/code/scripts/chat.py")
     external_file_map[fname.name] = fname
 
     prompt = dedent(f"""\
@@ -1091,8 +1102,10 @@ def test_code_edit():
         modify the Python code in the file {fname.name}. The code should target Python 3.12
         
         ## instructions
-        - implement the collatz function
+        - the file contains a number of dictionaries eval_fn, read_file_fn, edit_file_fn which define OpenAI functions.
+        - create a class FunctionDef(TypedDict) that provides types for the top level fields. Edit the dics to use this class.
         """)
+        
     code = cu.load_textfile(cu.make_fullpath(fname))
     prompt += "\n\n" + code
     msg = user_message(prompt)
@@ -1101,9 +1114,67 @@ def test_code_edit():
     response = llm.create(history)
     print_response(response)
 
-    # prompt = cu.run_python_unittest(fn)
-    # msg = user_message(prompt)
-    # print_message(msg)
+def unittest_workflow(fname: Path):
+    testname = fname.parent / f"tests/test_{fname.name}"
+    external_file_map[fname.name] = fname
+    external_file_map[f"tests/test_{fname.name}"] = testname
+    success, output = cu.run_python_unittest(fname)
+    if success:
+        return
+
+    dev_inst = dedent(f"""\
+        The assistant is Marvin an expert Python programmer. 
+        You have access to 2 tools:
+        - read_file: use the read_file tool to read a file.
+        - edit_file: use edit_file tool to makes edits to a file. each edit consists of a search block of lines and a replacement block of lines. Attempt to include at least 1 unchange context line in the search block.
+
+        the current datetime is {datetime.now().isoformat()}
+        """)
+    llm = LLM(OpenAIModel.O4, "", True)
+    llm.instructions = dev_inst
+    history = MessageHistory()
+
+    prompt = dedent(f"""\
+        task: fix unittest errors
+
+        instructions: 
+        - understand the the error message.
+        - check the test code to understand the purpose of the test
+        - study the function being tested.
+        - explain the error and proposed fix to the user and wait for approval
+
+        ## unittest output
+
+        > python -m unittest tests.{testname.name}
+
+        ```
+        __output__
+        ```
+
+        ## unittest {testname.name}
+        ```
+        __test__
+        ```
+
+        ## {fname.name}
+        ```
+        __code__
+        ```
+        """)
+        # - edit the appropriate file to fix the errors
+        # - minimize the number of individual edits by grouping changes to nearby lines into a single operation
+        # - summarise the changes for the user. do not repeat the code
+
+    code = fname.read_text(encoding="utf-8")
+    testcode = testname.read_text(encoding="utf-8")
+    prompt = prompt.replace("__output__", output)
+    prompt = prompt.replace("__test__", testcode)
+    prompt = prompt.replace("__code__", code)
+    msg = user_message(prompt)
+    history.append(msg)
+    print_message(msg)
+    response = llm.create(history)
+    print_response(response)
     # if "failed" in prompt.lower():
     #     history.append(msg)
     #     response = llm.create(history)
@@ -1397,6 +1468,7 @@ def main():
     git_workflow()
     # lint_workflow(Path("/code/scripts/chat.py"))
     # mypy_workflow(Path("/code/scripts/chatutils.py"))
+    # unittest_workflow(Path("/code/scripts/toolutils.py"))
     # test_code_edit()
     # test_apply_diff()
     # test_chat_loop()

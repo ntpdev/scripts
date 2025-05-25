@@ -297,7 +297,7 @@ def run_python_unittest(fn: Path, func_name: str | None = None) -> tuple[bool, s
         + "\n\n"
         + err
     )
-    return failed_tests, s
+    return not failed_tests, s
 
 def run_mypy(fn: Path) -> tuple[bool, str]:
     code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uvx --with pydantic mypy --pretty --ignore-missing-imports --follow-imports=skip --strict-optional {fn.name}"])

@@ -76,25 +76,6 @@ class TestEditFileImpl(unittest.TestCase):
         result = edit_file_impl(original, edit)
         self.assertEqual(result, expected)
 
-    def test_preserve_indent(self):
-        original = dedent("""\
-            def hello():
-                print("Hello")
-                print("World")
-                return True
-        """).splitlines()
-
-        edit = EditItem(
-            search=[
-                "print(\"Hello\")",
-                "print(\"World\")",
-                "return True"
-            ],
-            replace=[
-                "print(\"Hello, World!\")",
-                "return True"
-            ]
-        )
 
     def test_preserve_indent(self):
         original = dedent("""\
