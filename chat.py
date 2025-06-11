@@ -101,6 +101,13 @@ class OpenAIModel(StrEnum):
     GPT_MINI = "gpt-4.1-mini"
     O4 = "o4-mini"
 
+# Costs are per million tokens (input / output)
+PRICING = {
+    OpenAIModel.GPT: (2.00, 8.00),
+    OpenAIModel.GPT_MINI: (0.40, 1.60),
+    OpenAIModel.O4: (1.10, 4.40),
+}
+
 
 class Role(StrEnum):
     ASSISTANT = "assistant"
@@ -253,6 +260,7 @@ class MarkSheet(BaseModel):
 
 
 class Usage(BaseModel):
+    model: OpenAIModel
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
@@ -262,6 +270,28 @@ class Usage(BaseModel):
         self.output_tokens += response_usage.output_tokens
         self.reasoning_tokens += response_usage.output_tokens_details.reasoning_tokens
 
+    def calculate_cost(self) -> float:
+        """Calculates the cost based on accumulated usage and the stored model pricing."""
+        if self.model not in PRICING:
+            return 0.0
+
+        input_price_per_million, output_price_per_million = PRICING[self.model]
+
+        input_cost = (self.input_tokens / 1_000_000) * input_price_per_million
+
+        total_output_tokens = self.output_tokens + self.reasoning_tokens
+        output_cost = (total_output_tokens / 1_000_000) * output_price_per_million
+
+        return input_cost + output_cost
+
+    def __str__(self) -> str:
+        return (
+            f"Usage:\n"
+            f"  Input Tokens: {self.input_tokens}\n"
+            f"  Output Tokens: {self.output_tokens}\n"
+            f"  Reasoning Tokens: {self.reasoning_tokens}\n"
+            f"  Estimated Cost: ${self.calculate_cost():.5f}"
+        )
 
 class LLM:
     """a stateful model which maintains a conversation thread using the response_id"""
@@ -276,7 +306,7 @@ class LLM:
         self.model = model
         self.instructions = instructions
         self.use_tools = use_tools
-        self.usage = Usage()
+        self.usage = Usage(model=model)
 
     def _create(self, args) -> Response:
         if self.response_id:
@@ -941,7 +971,8 @@ def test_function_calling_powershell():
 
 def git_workflow():
     dev_inst = dedent(f"""\
-        You are Marvin an AI assistant. You are an expert using Git version control. 
+        The assistant is Marvin an expert at using Git version control.
+        You are an agent. Keep going until the task is completed, before ending your turn.
         You have access to 4 tools:
         - eval: use the eval tool to evaluate a mathematical or Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
         - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
@@ -956,14 +987,13 @@ def git_workflow():
     history.append(dev_msg)
 
     prompt = (
-        "## task\ncommit the modified files with the message 'updates by Marvin'\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome. Use powershell to execute git commands"
+        "## task\ncommit the modified files in the directory /code/scripts with the message 'updates by Marvin'. Do not commit any untracked files.\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome. Use powershell to execute git commands"
     )
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
     response = llm.create(history)
     print_response(response)
-
     prompt = "proceed"
     msg = user_message(prompt)
     print_message(msg)
@@ -1135,13 +1165,13 @@ def unittest_workflow(fname: Path):
     history = MessageHistory()
 
     prompt = dedent(f"""\
-        task: fix unittest errors
+        task: fix unittest errors. the user is following TDD and has added the test test_error_multiple_matches
 
         instructions: 
-        - understand the the error message.
+        - understand the error message.
         - check the test code to understand the purpose of the test
-        - study the function being tested.
-        - explain the error and proposed fix to the user and wait for approval
+        - read relevant source code and fix error
+        - summarise the change for the user
 
         ## unittest output
 
@@ -1151,30 +1181,19 @@ def unittest_workflow(fname: Path):
         __output__
         ```
 
-        ## unittest {testname.name}
-        ```
-        __test__
-        ```
-
-        ## {fname.name}
-        ```
-        __code__
-        ```
         """)
-        # - edit the appropriate file to fix the errors
-        # - minimize the number of individual edits by grouping changes to nearby lines into a single operation
-        # - summarise the changes for the user. do not repeat the code
 
-    code = fname.read_text(encoding="utf-8")
-    testcode = testname.read_text(encoding="utf-8")
     prompt = prompt.replace("__output__", output)
-    prompt = prompt.replace("__test__", testcode)
-    prompt = prompt.replace("__code__", code)
+    errors = tu.extract_error_locations(output)
+    for e in errors:
+        s = f"\n## {e.file_path}:{e.line_number}\n\n```{''.join(e.get_source())}\n```"
+        prompt += s
     msg = user_message(prompt)
     history.append(msg)
     print_message(msg)
     response = llm.create(history)
     print_response(response)
+    console.print(model.usage, style="green")
     # if "failed" in prompt.lower():
     #     history.append(msg)
     #     response = llm.create(history)
@@ -1427,7 +1446,7 @@ def test_chat_loop():
     #     keep a track of all important decisions and the reasoning behind them
     #     The current date is {datetime.now().isoformat()}
     #     """)
-    model = LLM(OpenAIModel.GPT, use_tools=True)
+    model = LLM(OpenAIModel.O4, use_tools=True)
     history = MessageHistory()
     history.append(developer_message(dev_inst))
     attachments = []
@@ -1450,7 +1469,7 @@ def test_chat_loop():
         console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
         attachments.clear()
 
-    pprint(model.usage)
+    console.print(model.usage, style="green")
     history.print()
     # pprint(history)
 
@@ -1467,7 +1486,7 @@ def main():
     # structured_output_message()
     git_workflow()
     # lint_workflow(Path("/code/scripts/chat.py"))
-    # mypy_workflow(Path("/code/scripts/chatutils.py"))
+    # mypy_workflow(Path("/code/scripts/toolutils.py"))
     # unittest_workflow(Path("/code/scripts/toolutils.py"))
     # test_code_edit()
     # test_apply_diff()

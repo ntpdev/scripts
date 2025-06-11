@@ -13,12 +13,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.subplots as subp
 import requests as req
+from dataclasses import dataclass
 from twelvedata import TDClient
 from xlsxwriter.utility import xl_range
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.table import Table
+from textwrap import dedent
 
 import tsutils
+
 
 # pip install twelvedata
 BASEDIR = 'Downloads'
@@ -51,29 +55,32 @@ def json_to_df(objs):
     return pd.DataFrame(objs['values'])
 
 
-def plot(symbol, df):
-    pts = -250
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index[pts:], y=df[pts:]['close'], mode='lines', name=symbol))
-    fig.add_trace(go.Scatter(x=df.index[pts:], y=df[pts:]['ema19'], mode='lines', name='ema19'))
-    # fig1 = px.line(df[pts:], x=df.index[pts:], y=['close', 'ema19'], title=symbol, template='plotly_dark')
-    x = df[pts:]
-    x = x[x['hilo'] > 19]
-    # print(x)
-    fig.add_trace(go.Scatter(x=x.index, y=x['close'], mode='markers', name='20d high', marker=dict(color='green')))
-    x = df[pts:]
-    x = x[x['hilo'] < -19]
-    fig.add_trace(go.Scatter(x=x.index, y=x['close'], mode='markers', name='20d low', marker=dict(color='red')))
-    # fig2 = px.scatter(x, x=x.index, y='close', color='green')
+def plot(symbol, dfCopy, mas, n: int = 250):
+    df = dfCopy.iloc[-n:].copy()
 
-    # fig3 = px.Figure(data=fig1.data + fig2.data)
-    # fig3.show()
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=symbol))
+    for ma in mas:
+        fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma))
+
+    # add hi lo markers
+    markers = df[df['hilo'] > 19]
+    fig.add_trace(go.Scatter(x=markers.index, y=markers['high'] * 1.01, mode='markers', name='20d high', marker=dict(color='green', symbol="triangle-up")))
+    markers = df[df['hilo'] < -19]
+    fig.add_trace(go.Scatter(x=markers.index, y=markers['low'] * 0.99, mode='markers', name='20d low', marker=dict(color='red', symbol="triangle-down")))
+
+    # remove weekends / holidays
+    all_dates = pd.date_range(df.index[0], df.index[-1])
+    missing_dates = all_dates.difference(df.index)
+    fig.update_xaxes(rangebreaks=[dict(values=missing_dates)])
+
     fig.show()
 
 
 def plot_3lb(symbol, df):
-    tlb2, rev = tsutils.calc_tlb(df.close, 3)
-    tlb = tlb2[-100:]
+    tlb, rev = tsutils.calc_tlb(df.close, 3)
+    # tlb = tlb2[-100:]
     tlb['height'] = tlb['close']-tlb['open']
     tlb['dirn'] = np.sign(tlb['height'])
     colours = tlb['dirn'].map({-1: "red", 1: "green"})
@@ -85,6 +92,7 @@ def plot_3lb(symbol, df):
     fig.add_trace(f1, row=1, col=1)
     fig.add_trace(f2, row=1, col=2)
     c = 'green' if df.loc[df.index[-1], 'close'] < rev else 'red'
+    fig.add_hline(y=rev, line_width=1, line_color=c, line_dash="dash", row=1, col=1)
     fig.add_hline(y=rev, line_width=1, line_color=c, line_dash="dash", row=1, col=2)
     fig.add_annotation(text=f"reversal {rev:.2f}", x=df.index[-100], y=rev * 1.01,
                      font=dict(size=12, color=c),
@@ -135,8 +143,8 @@ def plot_heatmap(df):
 
 
 # standardise but use *100 so +1 std is 100
-def normalise_as_perc(v, n=20):
-    return (100 * (v - v.rolling(window=n).mean())/v.rolling(window=n).std()).fillna(0).round(0).astype(int)
+def normalise_as_perc(series: pd.Series, n: int = 20) -> pd.Series:
+    return (100 * (series - series.rolling(window=n).mean())/series.rolling(window=n).std()).fillna(0).round(0).astype(int)
 
 
 def strat(hs, ls):
@@ -146,22 +154,23 @@ def strat(hs, ls):
     return x.astype(int) + y * 2
 
 
-def calc_range(df, xs):
-    last = df['close'].iloc[-1]
+def print_range_table(df, xs):
+    last = df['close'].iat[-1]
     
-    headers = ["Range", "High", "Low", "Last", "% Decline", "Volatility", "% Range"]
-    markdown_table = f"| {' | '.join(headers)} |\n| {' | '.join(['---']*len(headers))} |\n"
+    headers = ["Range", "High", "Low", "Last", "% Drawdown", "Volatility", "% Range"]
+    tbl = f"| {' | '.join(headers)} |\n| {' | '.join(['---']*len(headers))} |\n"
     
     log_returns = np.log(df['close'] / df['close'].shift(1)).dropna()
     for n in xs:
+        mx_cl = df['close'].iloc[-n:].max()
         mx = df['high'].iloc[-n:].max()
         mn = df['low'].iloc[-n:].min()
         rng = 100. * (last - mn) / (mx - mn)
         volatility = log_returns.rolling(window=n).std() * np.sqrt(252)    
-        markdown_table += f"| {n}d | {mx:.2f} | {mn:.2f} | {last:.2f} | {(last/mx-1)*100:.2f} | {100 * volatility.iloc[-1]:.1f} | {rng:.1f} |\n"
+        tbl += f"| {n}d | {mx:.2f} | {mn:.2f} | {last:.2f} | {(last/mx_cl-1)*100:.2f} | {100 * volatility.iloc[-1]:.1f} | {rng:.1f} |\n"
     
     console.print("\n--- ranges", style="yellow")
-    console.print(Markdown(markdown_table))
+    console.print(Markdown(tbl), style="cyan")
 
 
 # returns {'datetime': '1993-01-29', 'unix_time': 728317800} for SPY
@@ -175,8 +184,8 @@ def load_earliest_date(symbol):
 
 def load_twelve_data(symbol, days=255):
     print(f'loading {symbol}')
-    # ts = td.time_series(symbol=symbol, interval='1day', start_date='2010-01-01', outputsize=5000, dp=2, order='ASC')
-    ts = tdc.time_series(symbol=symbol, interval='1day', outputsize=days, dp=2, order='ASC')
+    ts = tdc.time_series(symbol=symbol, interval='1day', start_date='2007-01-01', outputsize=5000, dp=2, order='ASC')
+    # ts = tdc.time_series(symbol=symbol, interval='1day', outputsize=days, dp=2, order='ASC')
     df = ts.with_ma(ma_type='SMA', time_period=150).with_ma(ma_type='SMA', time_period=50).with_ma(ma_type='EMA', time_period=19).as_pandas()
 
     df.rename(columns={'ma1':'sma150', 'ma2':'sma50', 'ma3':'ema19'}, inplace=True)
@@ -261,6 +270,478 @@ def plot_swings(df):
     fig.show()
 
 
+def add_historic_volatility(df: pd.DataFrame, period: int, col_name: str = 'pct_chg') -> pd.DataFrame:
+    """
+    Calculate historic volatility over a given period and add it to the dataframe.
+    Also prints 10th, 50th, and 90th percentile values in a markdown table.
+    
+    Parameters:
+        df (pd.DataFrame): Input dataframe with price data
+        period (int): Lookback period for volatility calculation
+        col_name (str): Column name to use for volatility calculation (default 'pct_chg')
+        
+    Returns:
+        pd.DataFrame: DataFrame with added 'hvol' column
+    """
+    # Calculate rolling standard deviation of percentage changes
+    rolling_std = df[col_name].rolling(window=period).std()
+    
+    # Annualize the volatility (assuming 252 trading days)
+    df['hvol'] = rolling_std * np.sqrt(252)
+    
+    # Calculate percentiles
+    percentiles = df['hvol'].quantile([0.1, 0.5, 0.9])
+    
+    # Create and print markdown table
+    md_text = dedent(f"""\
+        ## Historic Volatility Percentiles (Period: {period} days)
+        | Percentile | Value |
+        |------------|-------|
+        | 10th       | {percentiles[0.1]:.4f} |
+        | 50th (median) | {percentiles[0.5]:.4f} |
+        | 90th       | {percentiles[0.9]:.4f} |
+    """)
+    console.print(Markdown(md_text))
+    
+    return df
+
+
+def plot_with_indicator(
+    symbol: str,
+    df: pd.DataFrame, indicator_name: str, overlays: list[str] = None, shaded_areas: list[str] = None
+) -> go.Figure:
+    """
+    Create a candlestick chart with specified overlays and a subplot of the
+    specified indicator, including horizontal percentile/level lines
+
+    Parameters:
+        df (pd.DataFrame): Input dataframe with OHLC data and indicators.
+                           The DataFrame index should be datetime-like for
+                           proper time-series plotting.
+                           Must contain 'open', 'high', 'low', 'close' columns.
+        indicator_name (str): Name of the indicator column to plot in the
+                              subplot.
+        overlay_cols (list[str], optional): List of column names in df to
+                                            plot as overlays on the main
+                                            candlestick chart.
+                                            Defaults to None or an empty list.
+
+    Returns:
+        go.Figure: Plotly figure object.
+    """
+    if overlays is None:
+        overlays = []
+    if shaded_areas is None:
+        shaded_areas = []
+
+    indicator_name = ""
+    if indicator_name in df.columns:
+        rows = 2
+        heights = [0.7, 0.3]
+    else:
+        rows = 1
+        heights = [1]
+
+    # Create figure with subplots
+    fig = subp.make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=heights,
+    )
+
+    # --- Plot 1: Candlestick and Overlays (Row 1) ---
+    candlestick = go.Candlestick(
+        x=df.index,
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        name='Price',
+        increasing_line_color='green',
+        decreasing_line_color='red',
+    )
+    fig.add_trace(candlestick, row=1, col=1)
+
+    # Add overlay traces
+    overlay_trace_colors = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
+    ]
+    for i, col_name in enumerate(overlays):
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df[col_name],
+                name=col_name,
+                line=dict(
+                    color=overlay_trace_colors[i % len(overlay_trace_colors)],
+                    width=1.2,
+                ),), row=1, col=1,)
+
+    # Add horizontal lines at -10% and -20% of max close
+    if 'close' in df.columns and not df['close'].empty:
+        max_close = df['close'].max()
+        if pd.notna(max_close) and np.isfinite(max_close):
+            last = df['close'].iat[-1] 
+            last_perc = (last / max_close - 1) * 100
+            level_minus_10 = max_close * 0.90
+            level_minus_20 = max_close * 0.80
+
+            fig.add_hline(
+                y=level_minus_10,
+                line_dash="dash",
+                line_color="salmon",
+                annotation_text=f"-10% {level_minus_10:.2f}",
+                annotation_position="bottom left",
+                annotation_font_size=10,
+                annotation_font_color="salmon",
+                row=1, col=1
+            )
+            fig.add_hline(
+                y=level_minus_20,
+                line_dash="dash",
+                line_color="lightcoral",
+                annotation_text=f"-20% {level_minus_20:.2f}",
+                annotation_position="bottom left",
+                annotation_font_size=10,
+                annotation_font_color="lightcoral",
+                row=1, col=1
+            )
+            fig.add_hline(
+                y=last,
+                line_dash="dash",
+                line_color="lightcoral",
+                annotation_text=f"{last_perc:.1f}% {level_minus_20:.2f}",
+                annotation_position="bottom left",
+                annotation_font_size=10,
+                annotation_font_color="lightcoral",
+                row=1, col=1
+            )
+
+    # --- Plot 2: Indicator (Row 2) ---
+    if indicator_name in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df[indicator_name],
+                name=indicator_name,
+                line=dict(color='teal', width=1.5),
+            ),
+            row=2,
+            col=1,
+        )
+
+        # Add horizontal lines for 10, 50, 90 percentile values
+        # Ensure data is numeric and finite for percentile calculation
+        indicator_data = df[indicator_name].dropna()
+        indicator_data = indicator_data[np.isfinite(indicator_data)]
+
+        if not indicator_data.empty:
+            try:
+                percentiles = indicator_data.quantile([0.10, 0.50, 0.90])
+                p_labels = {0.10: "10th Pctl", 0.50: "Median (50th Pctl)", 0.90: "90th Pctl"}
+                p_colors = {0.10: "blueviolet", 0.50: "darkcyan", 0.90: "blueviolet"}
+                p_pos = {0.10: "bottom left", 0.50: "top left", 0.90: "top left"}
+
+
+                for p_val, p_label_val in p_labels.items():
+                    value = percentiles.loc[p_val]
+                    if pd.notna(value):
+                        fig.add_hline(
+                            y=value,
+                            line_dash="dot",
+                            line_color=p_colors[p_val],
+                            annotation_text=f"{p_label_val} ({value:.2f})",
+                            annotation_position=p_pos[p_val],
+                            annotation_font_size=10,
+                            annotation_font_color=p_colors[p_val],
+                            row=2, col=1
+                        )
+            except Exception as e:
+                print(f"Could not calculate/plot percentiles for {indicator_name}: {e}")
+        else:
+            print(f"Not enough valid data to calculate percentiles for {indicator_name}.")
+
+    else:
+        print(f"Warning: Indicator column '{indicator_name}' not found or empty.")
+
+    # # --- Layout Updates ---
+    # fig.update_layout(
+    #     title_text=f"Stock Price Analysis: Overlays & {indicator_name}",
+    #     height=800,
+    #     legend_title_text='Legend',
+    # )
+
+    # # Update y-axis titles
+    # fig.update_yaxes(title_text="Price / Overlays", row=1, col=1)
+    # fig.update_yaxes(title_text=indicator_name, row=2, col=1)
+
+    # Remove gaps for non-trading days work if DatetimeIndex
+    fig.update_xaxes(
+        rangebreaks=[dict(bounds=["sat", "mon"])],
+    )
+
+
+    # # Hide the X-axis title for the top subplot as it's shared
+    # fig.update_xaxes(title_text=None, row=1, col=1)
+    # # Set X-axis title for the bottom subplot (which is the shared one)
+    # fig.update_xaxes(title_text="Date", row=2, col=1)
+
+    fig.show()
+
+    return fig
+
+
+def calculate_relative_performance(symbol1: str, df1: pd.DataFrame, symbol2: str, df2: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate relative performance of two stocks based on their closing prices.
+    
+    Args:
+        symbol1: Name/ticker of first stock
+        df1: DataFrame containing OHLC data for first stock with 'close' column
+        symbol2: Name/ticker of second stock 
+        df2: DataFrame containing OHLC data for second stock with 'close' column
+        
+    Returns:
+        DataFrame with percentage change from first close for each stock,
+        indexed by date and with columns named after the symbols.
+    """
+    # Calculate percentage change from first close for each dataframe
+    perc_change1 = 100 * (df1['close'] / df1['close'].iloc[0] - 1)
+    perc_change2 = 100 * (df2['close'] / df2['close'].iloc[0] - 1)
+    
+    # Create new dataframe combining both series aligned by date
+    rel_df = pd.DataFrame({
+        symbol1: perc_change1,
+        symbol2: perc_change2
+    })
+    
+    return rel_df.dropna()
+
+def plot_relative_performance(df: pd.DataFrame, show_indicator: str="hist") -> None:
+    rel_df = df.iloc[-200:]
+    all_dates = pd.date_range(rel_df.index[0], rel_df.index[-1])
+    missing_dates = all_dates.difference(rel_df.index)
+    """
+    Plot relative performance of stocks over time using Plotly,
+    including a histogram showing the difference between the first two columns.
+    
+    Args:
+        rel_df: DataFrame containing percentage change values for each stock,
+                typically output from calculate_relative_performance()
+                
+    Returns:
+        None (displays interactive plot)
+    """
+    if len(rel_df.columns) < 2:
+        raise ValueError("DataFrame must have at least two columns to compare")
+        
+    # Create figure with subplots
+    fig = subp.make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.15,
+        row_heights=[0.7, 0.3],
+        subplot_titles=('Performance', 'Performance Difference')
+    )
+    
+    # Add performance lines to top subplot
+    for col in rel_df.columns[:2]:  # Only show first two columns if there are more
+        fig.add_trace(
+            go.Scatter(
+                x=rel_df.index,
+                y=rel_df[col],
+                name=col,
+                mode='lines',
+                connectgaps=False
+            ),
+            row=1, col=1
+        )
+    
+    # Calculate differences between first two columns and add histogram to bottom subplot
+    diff = rel_df.iloc[:, 1] - rel_df.iloc[:, 0]
+    if show_indicator == "hist":
+        
+        # Calculate some statistics for annotation
+        mean_diff = diff.mean()
+        median_diff = diff.median()
+        
+        fig.add_trace(
+            go.Histogram(
+                x=diff,
+                name=f"{rel_df.columns[0]} - {rel_df.columns[1]}",
+                marker_color='#FFA15A',
+                opacity=0.75,
+                nbinsx=50,
+                hoverinfo='x+y'
+            ),
+            row=2, col=1
+        )
+    
+        # Add vertical lines for mean and median differences 
+        fig.add_vline(
+            x=mean_diff, line_dash="dot",
+            annotation_text=f"Mean: {mean_diff:.2f}",
+            annotation_position="top right",
+            line_color="red", row=2, col=1)
+        
+        fig.add_vline(
+            x=median_diff, line_dash="dash",
+            annotation_text=f"Median: {median_diff:.2f}",
+            annotation_position="bottom right",
+            line_color="blue", row=2, col=1)
+
+        # Customize layout 
+        fig.update_layout(
+            title_text=f"Relative Performance Comparison & Difference Analysis<br>{rel_df.columns[0]} vs {rel_df.columns[1]}",
+            height=800,
+            showlegend=True,
+            bargap=0.05  # gap between bars in histogram 
+        )
+        fig.update_yaxes(title_text="Frequency", row=2, col=1)
+        fig.update_xaxes(title_text=f"Difference ({rel_df.columns[0]} - {rel_df.columns[1]})", row=2, col=16)
+    elif show_indicator == "bar":
+        # Show the difference rel_df.columns[1]} - {rel_df.columns[0] as a barchart
+        fig.add_trace(
+            go.Bar(
+                x=diff.index,
+                y=diff.values,
+                name=f"{rel_df.columns[1]} - {rel_df.columns[0]}",
+                marker_color='teal',
+                opacity=0.75,
+                hoverinfo='x+y'
+            ),
+            row=2, col=1
+        )
+        percentiles = diff.quantile([0.1, 0.5, 0.9])
+        # Add percentile lines
+        for p, value in percentiles.items():
+            fig.add_hline(
+                y=value,
+                line_dash="dash",
+                line_color="salmon",
+                annotation_text=f"{p * 100:.0f}% {value:.2f}",
+                annotation_position="bottom left",
+                annotation_font_size=10,
+                annotation_font_color="salmon",
+                row=2, col=1
+            )
+
+
+        # Customize layout
+        fig.update_layout(
+            title_text=f"Relative Performance Comparison & Difference Analysis<br>{rel_df.columns[0]} vs {rel_df.columns[1]}",
+            height=800,
+            showlegend=True,
+        )
+        # fig.update_xaxes(
+        #     type='category',
+        #     tickangle=45,
+        #     tickmode='array',
+        #     tickvals=diff.index[::21],  # Show ~every 21 trading days (monthly)
+        #     ticktext=diff.index[::21].strftime('%b %d, %Y'),
+        #     nticks=12
+        # )
+
+    else:
+        raise ValueError("show_indicator must be either 'hist' or 'bar'")
+     
+    # Update axis titles 
+    fig.update_yaxes(title_text="Percentage Change (%)", row=1, col=1)
+    fig.update_xaxes(rangebreaks=[dict(values=missing_dates)], row=1, col=1)
+    fig.update_xaxes(rangebreaks=[dict(values=missing_dates)], row=2, col=1)
+    # fig.update_xaxes(title_text="Date", row=1, col=1)
+    
+
+    fig.show()
+
+def plot_tr_pct(df, n):
+    # Calculate previous day's close
+    df['prev_close'] = df['close'].shift(1)
+    
+    # Calculate True Range components
+    df['true_high'] = df[['high', 'prev_close']].max(axis=1)
+    df['true_low'] = df[['low', 'prev_close']].min(axis=1)
+    
+    # Compute True Range and percentage
+    df['TR'] = df['true_high'] - df['true_low']
+    df['TR_pct'] = (df['TR'] / df['close']) * 100
+    df["diff"] = (df["close"] / df["ema19"] - 1.0) * 100
+    plot_daily_bar(df.copy(), 'diff', "ratio close ema19", n)
+
+
+def plot_daily_bar(df: pd.DataFrame, colname: str, collabel: str, n: int):
+    # Clean data
+    df = df.dropna(subset=[colname]).copy()
+    idx = df.index
+    all_dates = pd.date_range(idx[0], idx[-1])
+    missing_dates = all_dates.difference(idx)
+    
+    # Calculate moving average
+    ma = df[colname].rolling(n).mean()
+    
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add traces
+    fig.add_trace(go.Bar(
+        x=df.index,
+        y=df[colname],
+        name=colname,
+        marker_color='#636EFA'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=ma,
+        mode='lines',
+        name=f'{n}-Period MA',
+        line=dict(color='#FFA15A', width=2)
+    ))
+    
+    # Calculate percentiles in a df [value colour label] index on percentile
+    qs = [0.1, 0.5, 0.9]
+    quant_df = df[colname].quantile(qs).round(2).to_frame(name="value").assign(
+            color=['#00CC96', '#AB63FA', '#EF553B'],
+            label=lambda x: (x.index * 100).astype(int).astype(str) + "% " + x["value"].astype(str)
+        )
+
+    # Add horizontal lines
+    for _, row in quant_df.iterrows():
+        fig.add_hline(
+            y=row['value'],
+            line_dash='dot',
+            line_color=row['color'],
+            annotation_text=row['label'],
+            annotation_position='bottom left'
+        )
+    
+   
+    # Configure layout
+    fig.update_layout(
+        title=f'{collabel} with {n} ma',
+        xaxis=dict(
+            title='Date',
+            showgrid=True,
+            gridcolor='rgba(211, 211, 211, 0.3)',
+            rangebreaks=[dict(values=missing_dates)],
+        ),
+        yaxis=dict(
+            title=colname,
+            range=[df[colname].min(), df[colname].max()],
+            gridcolor='rgba(211, 211, 211, 0.3)'
+        ),
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    fig.show()
+    return fig
+
+
 def three_line_break(xs):
     '''input a series of closes. return a series with the 3LB value after the current close.'''
     tlb, rev = tsutils.calc_tlb(xs, 3)
@@ -273,8 +754,100 @@ def three_line_break(xs):
     return df2.tlb.ffill().fillna(0).astype('int32')
 
 
-def process(df, sw_perc = 5.0):
-    print(df[-20:])
+def print_summary_information(symbol: str, df: pd.DataFrame, mas: list[str]):
+    # Summary Information Table
+    close = df['close']
+    date_range = f"{df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}"
+    trading_days = len(df)
+    
+    high_idx = close.idxmax()
+    high_value = close.max()
+    high_date = high_idx.strftime('%Y-%m-%d')
+    
+    low_idx = close.idxmin()
+    low_value = close.min()
+    low_date = low_idx.strftime('%Y-%m-%d')
+    
+    last_value = close.iloc[-1]
+    avg_vol = int(df['volume'].iloc[-20:].mean())
+    
+    pct_in_range = round(((last_value - low_value) / (high_value - low_value)) * 100)
+    pct_drawdown = round(((last_value / high_value) - 1) * 100, 2)
+    pct_off_low = round((last_value / low_value - 1) * 100, 2)
+    
+    # Create summary table
+    summary_table = Table(title="Summary Information", style="white")
+    
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Value", justify="right")
+    
+    summary_table.add_row("Symbol", symbol)
+    summary_table.add_row("Range", date_range)
+    summary_table.add_row("Trading Days", str(trading_days))
+    summary_table.add_row("First", f"{close.iloc[0]:.2f}")
+    summary_table.add_row("High", f"{high_date} {high_value:.2f}")
+    summary_table.add_row("Low", f"{low_date} {low_value:.2f}")
+    summary_table.add_row("Last", f"{last_value:.2f}")
+    summary_table.add_row("Volume Avg", f"{avg_vol:,d}")
+    summary_table.add_row("% in range", f"{pct_in_range}%")
+    summary_table.add_row("% drawdown", f"{pct_drawdown}%")
+    summary_table.add_row("% off low", f"{pct_off_low}%")
+    
+    # Current price info calculations
+    price_data = {
+        'name': ["high", "low", "last"] + mas,
+        'value': [high_value, low_value, last_value] + [df[ma].iloc[-1] for ma in mas]
+    }
+
+    # Create DataFrame
+    price_df = pd.DataFrame(price_data)
+
+    price_df['pct_diff'] = ((price_df['value'] - last_value) / last_value) * 100
+
+    # Formatting functions as vectorized operations
+    def format_pct_diff(row):
+        if row['name'] == "last":
+            return "-"
+        if abs(row['pct_diff']) < 0.01:
+            return "~0.00%"
+        
+        colour = "[white]"
+        arrow = ""
+        if row['pct_diff'] > 0:
+            colour = "[green]"
+            arrow = " ▲"
+        elif row['pct_diff'] < 0:
+            colour = "[red]"
+            arrow = " ▼"
+        
+        return f"{colour}{row['pct_diff']:>8.2f}%{arrow}[/]"
+
+    price_df['formatted_value'] = price_df['value'].apply(lambda x: f"{x:.2f}")
+    price_df['formatted_pct_diff'] = price_df.apply(format_pct_diff, axis=1)
+
+    # Sort by value descending
+    price_df.sort_values('value', ascending=False, inplace=True)
+    # Create current price table (assuming you're using Rich Table)
+    current_price_table = Table(title="Current Price Information", style="white")
+    current_price_table.add_column("Metric", style="cyan")
+    current_price_table.add_column("Value", justify="right")
+    current_price_table.add_column("% Difference", justify="right")
+
+    for _, row in price_df.iterrows():
+        current_price_table.add_row(
+            row['name'],
+            row['formatted_value'],
+            row['formatted_pct_diff']
+        )
+
+    # Print both tables using rich
+    console.print(summary_table)
+    console.print(current_price_table)
+
+
+def process(symbol: str, df: pd.DataFrame, sw_perc:float = 5.0):
+    print_summary_information(symbol, df, ['ema19', 'sma50', 'sma150'])
+    print(df.iloc[-20:])
     console.print('\n-- 3 line break', style="yellow")
     tlb, rev = tsutils.calc_tlb(df.close, 3)
     print(tlb[-5:])
@@ -288,16 +861,14 @@ def process(df, sw_perc = 5.0):
         print(f'5%   {r.end * .95:.2f}\n10%  {r.end * .9:.2f}')
     #plot_swings(swings)
     # plot('spy', df)
-    calc_range(df, [5,10,20,50])
-
+    print_range_table(df, [5,10,20,50, 100, 250])
 
 def plot_latest(symbol: str):
     xs = list_cached_files(symbol)
     if len(xs) > 0:
         df = load_file(xs[0])
-        plot(symbol, df)
+        plot(symbol, df, ['ema19', 'sma50', 'sma150'], 500)
         return df
-    return None
 
 
 def plot_latest_3lb(symbol: str):
@@ -306,17 +877,33 @@ def plot_latest_3lb(symbol: str):
         df = load_file(xs[0])
         plot_3lb(symbol, df)
         return df
-    return None
 
+def plot_latest_ind(symbol: str):
+    xs = list_cached_files(symbol)
+    if len(xs) > 0:
+        df = load_file(xs[0])
+        add_historic_volatility(df, 20)
+        df["above"] = df["close"] > df["ema19"]
+        # plot_with_indicator(symbol, df, 'voln', ['sma150', 'sma50', 'ema19'], "above")
+        plot_tr_pct(df, 10)
+        return df
+
+def plot_relative(symbol: str):
+    xs = list_cached_files('spy')
+    ys = list_cached_files(symbol)
+    if len(xs) > 0 and len(ys) > 0:
+        df = load_file(xs[0])
+        df2 = load_file(ys[0])
+        rel = calculate_relative_performance("spy", df, symbol, df2)
+        plot_relative_performance(rel, "bar")
 
 def view(symbol: str):
     xs = list_cached_files(symbol)
     if len(xs) > 0:
         df = load_file(xs[0])
-        process(df, 5.0 if (symbol == 'spy' or symbol == 'qqq') else 10.0)
+        process(symbol, df, 5.0 if (symbol == 'spy' or symbol == 'qqq') else 10.0)
         save_excel(symbol, df)
         return df
-    return None
 
 
 def load(symbol: str):
@@ -396,6 +983,10 @@ if __name__ == '__main__':
         plot_latest(args.symbol)
     elif args.action == 'plot3lb':
         plot_latest_3lb(args.symbol)
+    elif args.action == "plotind":
+        plot_latest_ind(args.symbol)
+    elif args.action == "plotrel":
+        plot_relative(args.symbol)
 
     #load_earliest_date('spy')
     #df = load_file('c:\\users\\niroo\\downloads\\spy 2023-12-15.csv')

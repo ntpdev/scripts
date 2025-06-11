@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from rich.table import Table
+from rich.console import Console
 
 import numpy as np
 import pandas as pd
@@ -14,6 +16,7 @@ from scipy.signal import find_peaks
 
 # Time series utility functions
 
+console = Console()
 
 def find_initial_swing(s: pd.Series, perc_rev: float) -> tuple[int, int, int]:
     """return direction and start index and end index of the first incomplete swing."""
@@ -204,64 +207,128 @@ def day_index(df: pd.DataFrame) -> pd.DataFrame:
     return idx
 
 
-def create_day_summary(df: pd.DataFrame, df_di: pd.DataFrame) -> pd.DataFrame:
-    xs = []
-    for i, r in df_di.iterrows():
-        open_time = r["first"]
-        rth_open = r["rth_first"]
-        eu_close = min(r["last"], rth_open - pd.Timedelta(minutes=1))
-        glbx_df = df[open_time:eu_close]
-        rth_hi, rth_lo, rth_hi_tm, rth_lo_tm, rth_open_price, rth_close, rth_fhi, rth_flo = pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA, pd.NA
-        if not pd.isnull(rth_open):
-            rth_df = df[rth_open : r["rth_last"]]
-            rth_hi = rth_df["high"].max()
-            rth_hi_tm = rth_df["high"].idxmax()
-            rth_lo = rth_df["low"].min()
-            rth_lo_tm = rth_df["low"].idxmin()
-            rth_open_price = rth_df.iat[0, rth_df.columns.get_loc("open")]
-            rth_close = rth_df.iat[-1, rth_df.columns.get_loc("close")]
+def create_day_summary(df: pd.DataFrame, di: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create daily summary statistics for GLOBEX and RTH sessions.
+    
+    Efficiently processes intraday data to extract key metrics for each trading day
+    including GLOBEX highs/lows, RTH OHLC, extremes timing, and first hour statistics.
+    
+        
+    Returns
+    -------
+    Daily summary with trade dates as index and columns:
+    - glbx_high, glbx_low: GLOBEX session extremes
+    - rth_open, rth_high, rth_low, close: RTH OHLC
+    - rth_high_tm, rth_low_tm: timestamps of RTH extremes
+    - rth_h1_high, rth_h1_low: first hour RTH extremes
+    """
+    
+    # Create intervals for GLOBEX sessions (first to EU close)
+    eu_close_times = pd.concat([di['last'], di['rth_first'] - pd.Timedelta(minutes=1)], axis=1).min(axis=1)
+    glbx_intervals = pd.IntervalIndex.from_arrays(di['first'], eu_close_times, closed='both')
+    
+    # Create intervals for RTH sessions
+    rth_mask = di['rth_first'].notna()
+    rth_intervals = pd.IntervalIndex.from_arrays(di.loc[rth_mask, 'rth_first'], di.loc[rth_mask, 'rth_last'], closed='both')
+    
+    # Create intervals for RTH first hour
+    rth_h1_end = di['rth_first'] + pd.Timedelta(minutes=59)
+    rth_h1_intervals = pd.IntervalIndex.from_arrays(di.loc[rth_mask, 'rth_first'], rth_h1_end[rth_mask], closed='both')
+    
+    # Map all timestamps to their respective sessions
+    glbx_session_idx = glbx_intervals.get_indexer(df.index)
+    rth_session_idx = rth_intervals.get_indexer(df.index)  
+    rth_h1_session_idx = rth_h1_intervals.get_indexer(df.index)
+    
+    # Create session mapping series
+    df_enhanced = df.copy()
+    df_enhanced['glbx_session'] = pd.Series(di.index[glbx_session_idx], index=df.index).where(glbx_session_idx >= 0)
+    df_enhanced['rth_session'] = pd.Series(di.index[rth_mask][rth_session_idx], index=df.index).where(rth_session_idx >= 0)
+    df_enhanced['rth_h1_session'] = pd.Series(di.index[rth_mask][rth_h1_session_idx], index=df.index).where(rth_h1_session_idx >= 0)
+    
+    # Vectorized aggregations
+    # GLOBEX stats
+    glbx_stats = df_enhanced[df_enhanced['glbx_session'].notna()].groupby('glbx_session').agg({
+        'high': 'max',
+        'low': 'min'
+    }).rename(columns={'high': 'glbx_high', 'low': 'glbx_low'})
+    
+    # RTH stats with extremes timing
+    rth_data = df_enhanced[df_enhanced['rth_session'].notna()]
+    rth_stats = rth_data.groupby('rth_session').agg({
+        'open': 'first',
+        'high': ['max', 'idxmax'],
+        'low': ['min', 'idxmin'], 
+        'close': 'last'
+    })
+    
+    # Flatten RTH column names
+    rth_stats.columns = ['rth_open', 'rth_high', 'rth_high_tm', 'rth_low', 'rth_low_tm', 'close']
+    
+    # RTH first hour stats
+    rth_h1_stats = df_enhanced[df_enhanced['rth_h1_session'].notna()].groupby('rth_h1_session').agg({
+        'high': 'max',
+        'low': 'min'
+    }).rename(columns={'high': 'rth_h1_high', 'low': 'rth_h1_low'})
+    
+    # Combine all statistics
+    result = pd.concat([glbx_stats, rth_stats, rth_h1_stats], axis=1)
+    result.index.name = 'date'
+    
+    # Fill NaN values for sessions without RTH data
+    result = result.reindex(di.index)
+    
+    return result[['glbx_high', 'glbx_low', 'rth_open', 'rth_high', 'rth_low', 'close', 'rth_high_tm', 'rth_low_tm', 'rth_h1_high', 'rth_h1_low']]
 
-            rth_h1_last = rth_open + pd.Timedelta(minutes=59)
-            rth_h1_df = df[rth_open:rth_h1_last]
-            rth_fhi = rth_h1_df["high"].max()
-            rth_flo = rth_h1_df["low"].min()
 
-        xs.append(
-            {
-                "date": i,
-                "glbx_high": glbx_df["high"].max(),
-                "glbx_low": glbx_df["low"].min(),
-                "rth_open": rth_open_price,
-                "rth_high": rth_hi,
-                "rth_low": rth_lo,
-                "close": rth_close,
-                "rth_high_tm": rth_hi_tm,
-                "rth_low_tm": rth_lo_tm,
-                "rth_h1_high": rth_fhi,
-                "rth_h1_low": rth_flo,
-            }
-        )
+def aggregate_to_time_bars(df: pd.DataFrame, di: pd.DataFrame, start_col: str, end_col: str, target_freq: str | None = None) -> pd.DataFrame:
+    """
+    Aggregate 1-minute OHLCV data into fixed time bars. If no target_freq is specified, aggregate to daily bars.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with datetime index and OHLCV columns (open, high, low, close, volume).
+        Should contain 1-minute frequency data. May contain optional columns like
+        'ema' and 'vwap'.
+    di : pd.DataFrame  
+        DataFrame with trade dates as index and columns 'start_time', 'end_time' 
+        defining the inclusive RTH periods for each trading session.
+    target_freq : str, optional
+        Target frequency for aggregation using pandas offset aliases 
+        (e.g., '5min' for 5-minute, '15T' for 15-minute, '1H' for hourly).
+        If None, aggregates to daily bars (one bar per trading session).
+    """   
+    # Create IntervalIndex for efficient RTH period lookup
+    intervals = pd.IntervalIndex.from_arrays(di[start_col], di[end_col], closed='both')
+    
+    # Map timestamps to trading sessions using IntervalIndex
+    session_idx = intervals.get_indexer(df.index)
+    valid_mask = session_idx >= 0
+    
+    # Filter to RTH data and assign trade dates
+    df_rth = df[valid_mask].copy()
+    df_rth['date'] = di.index[session_idx[valid_mask]]
+    
+    # Build aggregation dictionary using comprehension
+    agg = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+    agg.update({col: 'last' for col in ['ema', 'vwap'] if col in df.columns})
+    
+    if target_freq:
+        # Intraday aggregation - group by time buckets
+        df_rth['date'] = df_rth.index.floor(target_freq)
 
-    day_summary_df = pd.DataFrame(xs)
-    day_summary_df.set_index("date", inplace=True)
-    return day_summary_df
+    result = df_rth.groupby('date').agg(agg)
 
-
-# create a new DF which aggregates bars using a daily index
-def aggregate_daily_bars(df: pd.DataFrame, daily_index: pd.DataFrame, start_col: str, end_col: str) -> pd.DataFrame:
-    rows = []
-    for i, r in daily_index.dropna(subset=[start_col, end_col]).iterrows():
-        rows.append(aggregate_bars(df, pd.to_datetime(i), r[start_col], r[end_col]))
-
-    daily = pd.DataFrame(rows)
-    daily.set_index("date", inplace=True)
-    daily["change"] = daily.close.diff()
-    daily["gap"] = daily.open - daily.close.shift()
-    daily["day_chg"] = daily.close - daily.open
-    daily["range"] = daily.high - daily.low
-    daily["strat"] = calc_strat(daily)
-    return daily[daily.volume > 10000]
-
+    if not target_freq:
+        result["change"] = result["close"].diff()
+        result["gap"] = result["open"] - result["close"].shift()
+        result["day_chg"] = result["close"] - result["open"]
+        result["range"] = result["high"] - result["low"]
+        result["strat"] = calc_strat(result)
+        
+    return result
 
 # return a row which aggregates bars between inclusive indexes
 def aggregate_bars(df: pd.DataFrame, dt: datetime, s: pd.Timestamp, e: pd.Timestamp) -> dict[str, Any]:
@@ -278,16 +345,70 @@ def aggregate_bars(df: pd.DataFrame, dt: datetime, s: pd.Timestamp, e: pd.Timest
     return r
 
 
+def pivot_cum_vol_avg_by_day(df: pd.DataFrame, di: pd.DataFrame, n: int = 30) -> pd.DataFrame:
+    """
+    Create a pivot table with time of day as rows, trading dates as columns, and cum_vol_avg as values.
+    Trading sessions start at 23:00 (bar_num = 0).
+    
+    Args:
+        df: normal 1 min ohlcv data
+        di: daily index
+        
+    Returns:
+        DataFrame with time (HH:MM format) as index, trading dates as columns, cum_vol_avg as values
+    """
+    # create dataframe [day, first] trade date and datetime of first bar of day (typically 23:00)
+    dr = di[["first"]].copy()
+    dr["day"] = dr.index
+
+    # remove the index in order to do the merge
+    dc = df.copy()
+    dc.reset_index(inplace=True)
+
+    # merge the 2 sorted data frames - this will add the trade date to each row
+    m = pd.merge_asof(dc, dr, left_on="Date", right_on="first", direction="backward")
+    m.drop(columns=["first"], inplace=True)
+
+    # number each bar and calc cumulative volume trade day
+    m["cum_vol"] = m.groupby("day")["volume"].cumsum()
+    m["bar_num"] = m.groupby("day").cumcount()
+
+    # extract last bar of each n min period
+    sampled = m.loc[m['bar_num'] % n == n-1].copy()
+
+    # 2. Extract the time part as a string (e.g., '09:29', '09:59')
+    sampled['time'] = sampled['Date'].dt.strftime('%H:%M')
+
+    pivot = sampled.pivot(index=['bar_num', 'time'], columns='day', values='cum_vol')
+
+    # 4. Sort by bar_num (which will also sort time in session order)
+    pivot = pivot.sort_index(level='bar_num')
+
+    # 5. Drop the bar_num level, keeping only time as the index
+    pivot.index = pivot.index.droplevel('bar_num')
+
+    # 6. Calculate the row-wise average, ignoring NaNs
+    row_avg = pivot.mean(axis=1, skipna=True)
+
+    # 7. Update each value to be the % of average volume for that row
+    pivot_pct = (pivot.div(row_avg, axis=0) * 100).round(2)
+
+    return pivot_pct
+
+
 def calc_vwap(df: pd.DataFrame) -> pd.Series:
-    is_first_bar = df.index.to_series().diff() != timedelta(minutes=1)
-    xs = []
-    start = 0
-    for i, r in df.iterrows():
-        if is_first_bar.loc[i]:
-            start = i
-        v = np.average(df["wap"].loc[start:i], weights=df["volume"].loc[start:i])
-        xs.append(round(v, 2))
-    return pd.Series(xs, df.index)
+    # 1) mark where the 1-minute gap occurs
+    gap = df.index.to_series().diff().ne(pd.Timedelta(minutes=1))
+    # 2) build a group label that increments at each gap
+    grp = gap.cumsum()
+
+    # 3) running numerator and denominator per group
+    num = df["wap"] * df["volume"]
+    cum_num = num.groupby(grp).cumsum()
+    cum_vol = df["volume"].groupby(grp).cumsum()
+
+    # 4) VWAP is running numerator / running volume
+    return (cum_num / cum_vol).round(2)
 
 
 def calc_strat(df: pd.DataFrame) -> pd.Series:
@@ -297,8 +418,43 @@ def calc_strat(df: pd.DataFrame) -> pd.Series:
     return hs.astype(int) + ls * 2
 
 
+def calc_standardized_volume(df: pd.DataFrame, n: int) -> pd.Series:
+    # Calculate the normalized volume (z-score for volume)
+    # ((volume - rolling_mean) / rolling_std) * 100, rounded to 0 decimal places
+    nvol = (
+        (df['volume'] - df['volume'].rolling(window=n).mean()) /
+        df['volume'].rolling(window=n).std()
+    ) * 100
+    return nvol.fillna(0).astype(int)
+
+
+def add_indicators(df: pd.DataFrame, ema_length:int = 88, nvol_window:int = 20) -> None:
+    df["vwap"] = calc_vwap(df)
+    df["ema"] = df["close"].ewm(span=ema_length, adjust=False).mean().round(2)
+    df["strat"] = calc_strat(df)
+    df["nvol"] = calc_standardized_volume(df, nvol_window)
+
+
+def single_day(df: pd.DataFrame, di: pd.DataFrame, dt: str | date, rth_only: bool = True) -> pd.DataFrame:
+    timestamp = pd.to_datetime(dt)
+    return  df[di.at[timestamp, "rth_first"]:di.at[timestamp, "rth_last"]] if rth_only else df[di.at[timestamp, "first"]:di.at[timestamp, "last"]]
+
+
+def local_extremes(df: pd.DataFrame, n: int) -> tuple[list[pd.Timestamp], list[pd.Timestamp]]:
+    hs = df["high"].rolling(2*n + 1, center=True, min_periods=1).max()
+    ls = df["low"].rolling(2*n + 1, center=True, min_periods=1).min()
+    return df[df["high"] == hs].index.to_list(), df[df["low"] == ls].index.to_list()
+
+def around(df: pd.DataFrame, tmstmp: pd.Timestamp | str, n: int = 9, offset: int = 0) -> pd.DataFrame:
+    """return a slice of df around a timestamp of 2n+2 minutes"""
+    if isinstance(tmstmp, str):
+        tmstmp = pd.to_datetime(tmstmp)
+    m = pd.Timedelta(minutes=n - offset)
+    m1 = pd.Timedelta(minutes=n+1 + offset)
+    return df.loc[tmstmp - m:tmstmp + m1]    
+
 def calc_atr(df: pd.DataFrame, n: int) -> pd.Series:
-    rng = df.high.rolling(n).max() - df.low.rolling(n).min()
+    rng = df["high"].rolling(n).max() - df["low"].rolling(n).min()
     df2 = pd.DataFrame({"tm": df.index.time, "rng": rng}, index=rng.index)
     return df2.groupby("tm").rng.agg("mean")
 
@@ -404,6 +560,125 @@ def create_volume_profile(df: pd.DataFrame, prominence: float | int = 40, smooth
 
     return pd.DataFrame({"volume": xs, "is_peak": mxs}, index=to_price(np.arange(bins)))
 
+
+def display(df: pd.DataFrame) -> None:
+    """
+    Displays a DataFrame in a Rich table with conditional cell highlighting.
+
+    Args:
+        df_input (pd.DataFrame): The input DataFrame with a DatetimeIndex and expected columns.
+    """
+    title = f"ES 1 min {df.index[0].strftime("%d-%m")}"
+    table = Table(title=title, title_style="yellow", show_header=True, header_style="bold cyan", box=None)
+
+    # --- 1. Data Preparation ---
+    df_display = df.copy() # Use .copy() to avoid SettingWithCopyWarning
+
+    # Calculate previous high and low for comparison
+    # We do this on the original df_input to get correct previous values even for the first row of the slice
+    # then select the relevant slice.
+    df_temp_for_comparison = df[['high', 'low']].copy()
+    df_temp_for_comparison['prev_high'] = df_temp_for_comparison['high'].shift(1)
+    df_temp_for_comparison['prev_low'] = df_temp_for_comparison['low'].shift(1)
+
+    # Add these shifted columns to our display slice
+    df_display['prev_high'] = df_temp_for_comparison['prev_high']
+    df_display['prev_low'] = df_temp_for_comparison['prev_low']
+    df_display['rng'] = (df_display['high'] - df_display['low']) * 4
+
+
+    # Define columns to display and their headers for the Rich table
+    # Order matters here for table.add_column and later for row_data.append
+    columns_to_render = {
+        "time": "time",
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close",
+        "volume": "volume",
+        "vwap": "vwap",
+        "ema": "ema",
+        "strat": "strat",
+        "rng": "rng",
+        "nvol": "nvol"
+    }
+
+    for header in columns_to_render.values():
+        if header in ["volume", "nvol"]:
+            table.add_column(header, justify="right")
+        else:
+            table.add_column(header)
+
+    # Color mapping for 'strat' column
+    strat_colors = {
+        0: "yellow",
+        1: "green",
+        2: "red",
+        3: "purple"
+    }
+
+    is_first_row = True
+    # --- 2. Iterate and Build Table Rows ---
+    for index, row in df_display.iterrows():
+        row_data_styled = []
+        if index.minute % 5 == 0 and not is_first_row:
+            table.add_row(*[""] * len(columns_to_render))
+        is_first_row = False
+        # Time (hh:mm)
+        time_str = index.strftime('%H:%M') if isinstance(index, pd.Timestamp) else str(index)
+        row_data_styled.append(time_str)
+
+        # Open
+        row_data_styled.append(f"{row['open']:.2f}") # Assuming 2 decimal places for price
+
+        # High (conditional color)
+        high_val = row['high']
+        prev_high_val = row['prev_high']
+        high_display = f"{high_val:.2f}"
+        if pd.notna(prev_high_val) and high_val > prev_high_val:
+            high_display = f"[green]{high_display}[/]"
+        row_data_styled.append(high_display)
+
+        # Low (conditional color)
+        low_val = row['low']
+        prev_low_val = row['prev_low']
+        low_display = f"{low_val:.2f}"
+        if pd.notna(prev_low_val) and low_val < prev_low_val:
+            low_display = f"[red]{low_display}[/]"
+        row_data_styled.append(low_display)
+
+        # Close
+        row_data_styled.append(f"{row['close']:.2f}")
+
+        # Volume
+        row_data_styled.append(str(int(row['volume'])))
+
+        # VWAP
+        row_data_styled.append(f"{row['vwap']:.2f}") # VWAP often has more precision
+
+        # EMA
+        row_data_styled.append(f"{row['ema']:.2f}")   # EMA also
+
+        # Strat (conditional color)
+        strat_val = int(row['strat'])
+        strat_display = str(strat_val)
+        color = strat_colors.get(strat_val) # Safely get color
+        if color:
+            strat_display = f"[{color}]{strat_display}[/]"
+        row_data_styled.append(strat_display)
+
+        row_data_styled.append(str(int(row['rng'])))
+        # NVol (conditional color)
+        nvol_val = int(row['nvol'])
+        nvol_display = str(nvol_val)
+        if nvol_val > 99:
+            nvol_display = f"[yellow]{nvol_display}[/]"
+        row_data_styled.append(nvol_display)
+
+        table.add_row(*row_data_styled)
+
+    console.print(table)
+    
 
 @dataclass
 class Block:

@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from rich.console import Console
 
-from tsutils import aggregate_daily_bars, calc_vwap, day_index, load_file, load_files, load_files_as_dict, load_overlapping_files, save_df
+from tsutils import aggregate_to_time_bars, calc_vwap, day_index, load_file, load_files, load_files_as_dict, load_overlapping_files, save_df
 
 console = Console()
 
@@ -211,15 +211,19 @@ def print_summary(df):
     console.print(di)
 
     console.print("\n--- Daily bars ---", style="yellow")
-    daily = aggregate_daily_bars(df, di, "first", "last")
+    daily = aggregate_to_time_bars(df, di, "first", "last")
     console.print(daily, style="cyan")
     console.print(f"range min,median,max = {daily['range'].min():.2f} {daily['range'].median():.2f} {daily['range'].max():.2f}", style="green")
 
     console.print("\n--- RTH bars ---", style="yellow")
-    rth = aggregate_daily_bars(df, di, "rth_first", "rth_last")
+    rth = aggregate_to_time_bars(df, di, "rth_first", "rth_last")
     console.print(rth, style="cyan")
     console.print(f"range min,median,max = {rth['range'].min():.2f} {rth['range'].median():.2f} {rth['range'].max():.2f}", style="green")
-
+    if rth.shape[0] > 10:
+        console.print("last 10 days only", style="yellow")
+        s = rth.iloc[-10:]
+        console.print(f"range min,median,max = {s['range'].min():.2f} {s['range'].median():.2f} {s['range'].max():.2f}", style="green")
+        console.print(f"change total, rth-only = {s['change'].sum():.2f} {s['day_chg'].sum():.2f}", style="green")
     # df2 = plot_hl_times(df, di, 'rth_first', 'rth_last', 15)
     # console.print(df2, style='cyan')
 
@@ -286,8 +290,8 @@ if __name__ == "__main__":
     # test_tick()
     # check_overlap(Path.home() / "Documents" / "data", "esh5*.csv")
     check_overlap(Path("c:/temp/ultra"), "zesm5*.csv")
-    df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesm5*.csv")
-    # df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esm5*.csv")
+    # df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesm5*.csv")
+    df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esm5*.csv")
     print_summary(df_es)
     # compare_emas()
     # df_tick = simple_concat('ztick-nyse*.csv', 'x')

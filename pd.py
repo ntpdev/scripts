@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from rich.console import Console
 
-from tsutils import aggregate, aggregate_daily_bars, aggregate_min_volume, calc_tlb, day_index, load_overlapping_files, make_filename, calc_strat
+from tsutils import aggregate, aggregate_to_time_bars, aggregate_min_volume, calc_tlb, day_index, load_overlapping_files, make_filename, calc_strat
 
 console = Console()
 Price = namedtuple("Price", ["date", "value"])
@@ -197,12 +197,12 @@ def print_summary(df: pd.DataFrame) -> None:
         console.print(df[r["rth_first"] : r["rth_last"]]["volume"].median())
 
     console.print("\n--- Daily bars ---", style="yellow")
-    df2 = aggregate_daily_bars(df, di, "first", "last")
+    df2 = aggregate_to_time_bars(df, di, "first", "last")
     export_daily(df2, "es-daily")
     console.print(df2)
 
     console.print("\n--- RTH bars ---", style="yellow")
-    df_rth = aggregate_daily_bars(df, di, "rth_first", "rth_last")
+    df_rth = aggregate_to_time_bars(df, di, "rth_first", "rth_last")
     export_daily(df_rth, "es-daily-rth")
     console.print(df_rth)
 
@@ -267,7 +267,7 @@ if __name__ == "__main__":
     p = Path("c:/temp/ultra")
     # p = Path.home() / 'Documents' / 'data'
     df = load_overlapping_files(p, "zesm5*.csv")
-    # print_summary(df)
+    print_summary(df)
     di = day_index(df)
     row = di.iloc[-1]
     day = df[row["first"] : row["last"]]

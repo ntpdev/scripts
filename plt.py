@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from pathlib import Path
 
 import tsutils as ts
 from mdbutils import load_price_history
@@ -179,13 +180,23 @@ def color_bars(df, tm, bar_colour: str):
     return go.Figure(data=[go.Candlestick(x=tm, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="ES"), go.Scatter(x=tm, y=df["vwap"], line=dict(color="orange"), name="vwap")])
 
 
-def plot_atr():
-    df = ts.load_files(ts.make_filename("esu4*.csv"))
-    atr = ts.calc_atr(df, 2)
+def plot_atr(n: int):
+    df = ts.load_files(Path("/temp/ultra"), "zesm5*.csv")
+    atr = ts.calc_atr(df, n)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=atr.index, y=atr, mode="lines", name="ATR5"))
+    fig.layout.title = f"rolling {n} minute ATR"
     fig.show()
 
+
+def plot_cumulative_volume():
+    # df = ts.load_files(Path("~/documents/data").expanduser(), "esm5*.csv")
+    df = ts.load_overlapping_files(Path("/temp/ultra"), "zesm5*.csv")
+    di = ts.day_index(df)
+    df_pivot = ts.pivot_cum_vol_avg_by_day(df, di)
+    fig = plot_cumulative_volume_by_day(df_pivot)
+    fig.show()
+    
 
 def plot_tick(days: int):
     """display the last n days"""
@@ -301,7 +312,7 @@ def plot_mongo(symbol: str, dt: str, n: int):
     fig.show()
 
 
-def plot_volp(symbol, dt, n):
+def plot_volp(symbol: str, dt: str, n: int):
     df = load_price_history(symbol, dt, n)
     idx = ts.day_index(df)
     # day_summary_df = ts.create_day_summary(df, idx)
@@ -335,6 +346,124 @@ def plot_volp(symbol, dt, n):
     )
 
     fig.show()
+
+
+def plot_cumulative_volume_by_day(pivot_df: pd.DataFrame) -> go.Figure:
+    """
+    Plot cumulative volume percentage lines for each trading day.
+    Highlights the most recent day's points for easy identification.
+    
+    Args:
+        pivot_df: DataFrame with time as index, trading dates as columns, cum_vol_avg as values
+        
+    Returns:
+        Plotly figure object
+    """
+    fig = go.Figure()
+    
+    # Get column names (trading dates) and sort them
+    trading_dates = sorted(pivot_df.columns)
+    
+    # Get the most recent date (rightmost column)
+    most_recent_date = trading_dates[-1] if trading_dates else None
+    
+    # Define colors - use a color scale for better distinction
+    colors = px.colors.qualitative.Set3
+    if len(trading_dates) > len(colors):
+        # If we have more days than colors, cycle through them
+        colors = colors * (len(trading_dates) // len(colors) + 1)
+    
+    # Plot each trading day
+    for i, date in enumerate(trading_dates):
+        # Get data for this day, drop NaN values
+        day_data = pivot_df[date].dropna()
+        
+        if len(day_data) == 0:
+            continue
+            
+        # Determine if this is the most recent day
+        is_most_recent = (date == most_recent_date)
+        
+        # Format date for legend
+        date_str = date.strftime('%Y-%m-%d')
+        
+        # Add line trace
+        fig.add_trace(go.Scatter(
+            x=day_data.index,  # Time values
+            y=day_data.values,  # cum_vol_avg values
+            mode='lines+markers' if is_most_recent else 'lines',
+            name=date_str,
+            line=dict(
+                color=colors[i % len(colors)],
+                width=3 if is_most_recent else 2
+            ),
+            marker=dict(
+                size=8 if is_most_recent else 4,
+                color=colors[i % len(colors)],
+                symbol='circle'
+            ) if is_most_recent else dict(size=4),
+            hovertemplate=f'<b>{date_str}</b><br>' +
+                         'Time: %{x}<br>' +
+                         'Cum Vol %: %{y:.1f}%<br>' +
+                         '<extra></extra>'
+        ))
+    
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': 'Cumulative Volume Percentage by Trading Day',
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 18}
+        },
+        xaxis_title='Time',
+        yaxis_title='Cumulative Volume (%)',
+        hovermode='x unified',
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        ),
+        width=1000,
+        height=600,
+        template='plotly_white'
+    )
+
+    # Add horizontal reference lines at 75%, 100%, 125%
+    for level in [90, 110]:
+        fig.add_hline(
+            y=level,
+            line_dash="dash",
+            line_color="gray",
+            line_width=1,
+            opacity=0.7,
+            annotation_text=f"{level}%",
+            annotation_position="right",
+            annotation_font_size=10,
+            annotation_font_color="gray"
+        )
+    
+    # Format x-axis to show times nicely
+    fig.update_xaxes(
+        tickangle=45,
+        tickmode='array',
+        tickvals=pivot_df.index[::max(1, len(pivot_df.index)//10)],  # Show every nth tick to avoid crowding
+        showgrid=True,
+        gridcolor='lightgray'
+    )
+    
+
+    # Format y-axis with fixed range
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor='blue',
+        ticksuffix='%',
+        range=[50, 150],  # Fixed y-axis range from 50% to 150%
+        dtick=25  # Show ticks every 25%
+    )
+    return fig
 
 
 def floor_index(df, tm):
@@ -379,6 +508,7 @@ def main():
     parser.add_argument("--volp", action="store_true", help="Display volume profile for day")
     parser.add_argument("--mdb", type=str, default="", help="Load from MongoDB [yyyymmdd]")
     parser.add_argument("--atr", action="store_true", help="Display ATR")
+    parser.add_argument("--cumvol", action="store_true", help="plot relative cumulative volume")
     parser.add_argument("--tick", action="store_true", help="Display tick")
     parser.add_argument("--days", type=int, default=1, help="Number of days")
     parser.add_argument("--sym", type=str, default="esm5", help="Index symbol")
@@ -388,11 +518,13 @@ def main():
     if len(argv.tlb) > 0:
         plot_3lb(argv.tlb)
     elif argv.volp and len(argv.mdb) > 0:
-        plot_volp(argv.sym, convert_to_date(argv.mdb), argv.days)
+        plot_volp(argv.sym, argv.mdb, argv.days)
     elif len(argv.mdb) > 0:
         plot_mongo(argv.sym, argv.mdb, argv.days)
     elif argv.atr:
-        plot_atr()
+        plot_atr(5)
+    elif argv.cumvol:
+        plot_cumulative_volume()
     elif argv.tick:
         plot_tick(argv.days)
     else:

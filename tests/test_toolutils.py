@@ -2,7 +2,7 @@
 import unittest
 from textwrap import dedent
 
-from toolutils import edit_file_impl, EditItem
+from toolutils import edit_file_impl, EditItem, extract_error_locations, get_source_code
 
 
 class TestEditFileImpl(unittest.TestCase):
@@ -205,6 +205,41 @@ class TestEditFileImpl(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             edit_file_impl(original, edit)
+
+
+class TestExtractErrorLocations(unittest.TestCase):
+    def test_extract_error_locations(self):
+        error_message = r"""
+        ERROR
+
+        ======================================================================
+        ERROR: test_simple_replacement (tests.test_toolutils.TestEditFileImpl.test_simple_replacement)
+        ----------------------------------------------------------------------
+        Traceback (most recent call last):
+        File "C:\code\scripts\tests\test_toolutils.py", line 32, in test_simple_replacement
+            result = edit_file_impl(original, edit)
+        File "C:\code\scripts\toolutils.py", line 60, in edit_file_impl
+            update_edit_position(source, edit)
+            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+        File "C:\code\scripts\toolutils.py", line 42, in update_edit_position
+            raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
+        ValueError: No occurrences of search block found. Search pattern: ['line 3x']
+
+        ----------------------------------------------------------------------
+        Ran 9 tests in 0.020s
+
+        FAILED (errors=1)
+        """
+
+        extracted_locations = extract_error_locations(error_message)
+
+        self.assertEqual(len(extracted_locations), 3)
+        self.assertTrue(extracted_locations[0].file_path.exists())
+        self.assertEqual(extracted_locations[0].line_number, 32)
+        self.assertEqual(extracted_locations[0].function_name, "test_simple_replacement")
+
+        for location in extracted_locations:
+            self.assertGreater(len(location.get_source()), 0)
 
 
 if __name__ == "__main__":

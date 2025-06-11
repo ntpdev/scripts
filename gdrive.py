@@ -35,6 +35,7 @@ mime_types = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".7z": "application/x-compressed",
     ".zip": "application/zip",
+    ".csv": "text/plain",
     ".txt": "text/plain",
 }
 
