@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 import argparse
+import glob
+import re
+from pathlib import Path
 from textwrap import dedent
+
 import pandas as pd
 from rich.console import Console
-from rich.pretty import pprint
-from pathlib import Path
 
 console = Console()
 
@@ -72,77 +74,128 @@ def calc_profit(symbol: str, pts: float) -> float:
     return pts * MULTIPLIER.get(symbol, 1)
 
 
-def print_trade_stats(trades):
+def print_trade_stats(trades: pd.Series, commissions: float = 0) -> None:
+    def safe_div(n: float, d: float) -> float:
+        return n / d if abs(d) > 1e-6 else 0
+
     # Basic trade metrics
     min_sz = 3
-    wins = trades.Profit[trades.Profit > min_sz].count()
-    sum_wins = trades.Profit[trades.Profit > min_sz].sum()
-    loses = trades.Profit[trades.Profit < -min_sz].count()
-    sum_loses = trades.Profit[trades.Profit < -min_sz].sum()
-    win_perc = 100 * wins / (wins + loses) if (wins + loses) > 0 else 0
-    avg_win = sum_wins / wins if wins > 0 else 0
-    avg_loss = sum_loses / loses if loses > 0 else 0
-    ratio = avg_win / -avg_loss if avg_loss < 0 else 0
+    wins_mask = trades > min_sz
+    loses_mask = trades < -min_sz
+
+    count_wins = wins_mask.sum()
+    sum_wins = trades[wins_mask].sum()
+    count_loses = loses_mask.sum()
+    sum_loses = trades[loses_mask].sum()
+    count_trades = count_wins + count_loses
+
+    win_perc = safe_div(100 * count_wins, count_trades)
+    avg_win = safe_div(sum_wins, count_wins)
+    avg_loss = safe_div(sum_loses, count_loses)
+    ratio = safe_div(avg_win, -avg_loss)
 
     # Kelly Criterion calculation
     p = win_perc / 100  # Win probability (decimal)
     b = ratio  # Win/loss ratio
-    kelly = (p * (b + 1) - 1) / b if b > 0 else 0
+    kelly = safe_div((p * (b + 1) - 1), b)
 
     # Financial metrics
-    profit = trades.Profit.sum()
-    commisions = trades.Comm.sum()
-    net_profit = profit - commisions
+    profit = sum(trades)
+    net_profit = profit - commissions
 
     # Print results
     console.print("\n--- trade stats ---", style="yellow")
     s = dedent(f"""\
-    contracts: {len(trades)}  net profit: ${net_profit:.2f}  gross: ${profit:.2f}  commissions: ${commisions:.2f}
-    wins: {wins} ({sum_wins:.2f})  losses: {loses} ({sum_loses:.2f})  win%: {win_perc:.0f}%
+    contracts: {len(trades)}  net profit: ${net_profit:.2f}  gross: ${profit:.2f}  commissions: ${commissions:.2f}
+    wins: {count_wins} ({sum_wins:.2f})  losses: {count_loses} ({sum_loses:.2f})  win%: {win_perc:.0f}%
     avg win: {avg_win:.1f}  avg loss: {avg_loss:.1f}  W/L ratio: {ratio:.1f}
     Kelly criterion: {kelly:.2%} (suggested max risk per trade)
     """)
 
     # Optional: Risk of Ruin estimation
-    if wins > 0 and loses > 0:
+    if count_trades > 0:
         risk_of_ruin = ((1 - p) / p) ** (net_profit / abs(avg_loss)) if p > 0.5 else 1
         s += f"estimated risk of ruin: {risk_of_ruin:.2%}"
     console.print(s, style="green")
 
 
 def load_file(fname: str) -> pd.DataFrame:
-    df = pd.read_csv(Path.home() / "OneDrive" / "Documents" / fname, usecols=[0, 1, 2, 3, 4, 5, 6], parse_dates={"Timestamp": [5, 6]})
+    #    df = pd.read_csv(Path.home() / "OneDrive" / "Documents" / fname, usecols=[0, 1, 2, 3, 4, 5, 6], parse_dates={"Timestamp": [5, 6]})
+    df = pd.read_csv(Path("c:\\temp") / fname, usecols=[0, 1, 2, 3, 4, 5, 6], parse_dates={"Timestamp": [5, 6]})
     print(f"loaded {fname} {df.shape[0]} {df.shape[1]}")
     return df
 
 
 def read_trades(filepath: str) -> pd.DataFrame:
+    """Read trades from CSV file and return processed DataFrame"""
+    # Only read the columns we need
     usecols = ["Fin Instrument", "Symbol", "Action", "Quantity", "Price", "Time", "Date"]
-    dtype = {"Quantity": "int32", "Price": "float64", "Date": "str", "Time": "str"}
+
+    # Optimize data types for memory efficiency
+    dtype = {"Fin Instrument": "string", "Symbol": "string", "Action": "string", "Quantity": "int32", "Price": "float64", "Date": "string", "Time": "string"}
 
     df = pd.read_csv(filepath, usecols=usecols, dtype=dtype)
 
+    # Create timestamp more efficiently
     df["Timestamp"] = pd.to_datetime(df["Date"] + " " + df["Time"], format="%Y%m%d %H:%M:%S")
-    console.print(f"loaded {filepath} {df.shape[0]} {df.shape[1]}", style="green")
 
-    final_cols = ["Timestamp", "Fin Instrument", "Symbol", "Action", "Quantity", "Price"]
-    return df[final_cols]
+    # Drop the original Date and Time columns since we have Timestamp
+    df = df.drop(columns=["Date", "Time"])
+
+    console.print(f"loaded {Path(filepath).name} {len(df)} rows", style="green")
+
+    # Return with desired column order
+    return df[["Timestamp", "Fin Instrument", "Symbol", "Action", "Quantity", "Price"]]
 
 
 def aggregrate_by_sequence(df):
     return df.groupby(["Seq"]).agg(Symbol=pd.NamedAgg(column="Symbol", aggfunc="first"), Action=pd.NamedAgg(column="Action", aggfunc="first"), Num=pd.NamedAgg(column="Symbol", aggfunc="count"), Profit=pd.NamedAgg(column="Profit", aggfunc="sum"))
 
 
+def extract_date_from_filename(filepath: str) -> str:
+    """Extract date from filename for sorting purposes"""
+    filename = Path(filepath).name
+    # Look for YYMMDD pattern in filename
+    match = re.search(r"(\d{6})", filename)
+    return match.group(1) if match else filename
+
+
+def load_trades_from_input(input_spec: str) -> pd.DataFrame:
+    """Load trades from either a single file or file specification"""
+    if "*" in input_spec or "?" in input_spec:
+        # Handle file specification with wildcards
+        matching_files = glob.glob(input_spec)
+
+        if not matching_files:
+            raise FileNotFoundError(f"No files found matching pattern: {input_spec}")
+
+        # Sort files by date extracted from filename
+        matching_files.sort(key=extract_date_from_filename)
+
+        dataframes = []
+        for filepath in matching_files:
+            df = read_trades(filepath)
+            dataframes.append(df)
+
+        return pd.concat(dataframes, ignore_index=True)
+    # Handle single file
+    return read_trades(input_spec)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process IB trade logs")
     parser.add_argument("--skip", metavar="skip", default=0, type=int, help="number of rows to skip")
-    parser.add_argument("--input", metavar="input", default="", help="file name")
+    parser.add_argument("--input", metavar="input", default="", help="file name or file specification")
     args = parser.parse_args()
 
     if args.input:
-        df = read_trades(args.input)
+        df = load_trades_from_input(args.input)
     else:
-        df = pd.concat([load_file("trades-0214.csv"), load_file("trades.20220222.csv"), load_file("trades.20220223.csv")])
+        # Default behavior - load specific files
+        base_path = Path(r"c:\temp")
+        default_files = [base_path / "trades-250606.csv", base_path / "trades-250613.csv", base_path / "trades-250620.csv"]
+        dataframes = [read_trades(str(f)) for f in default_files]
+        df = pd.concat(dataframes, ignore_index=True)
 
     b = Blotter()
     trades = b.process_trade_log(df, args.skip)
@@ -155,6 +208,9 @@ if __name__ == "__main__":
             console.print(f"{p['Symbol']} {p['Action']} {p['Price']}", style="cyan")
     else:
         console.print("All contracts matched", style="yellow")
+    print_trade_stats(trades["Profit"], trades["Comm"].sum())
+
     console.print("\n--- sequences ---", style="yellow")
-    console.print(aggregrate_by_sequence(trades), style="cyan")
-    print_trade_stats(trades)
+    seqs = aggregrate_by_sequence(trades)
+    console.print(seqs, style="cyan")
+    print_trade_stats(seqs["Profit"], trades["Comm"].sum())

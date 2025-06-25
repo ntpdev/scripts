@@ -368,7 +368,7 @@ def plot_cumulative_volume_by_day(pivot_df: pd.DataFrame) -> go.Figure:
     most_recent_date = trading_dates[-1] if trading_dates else None
     
     # Define colors - use a color scale for better distinction
-    colors = px.colors.qualitative.Set3
+    colors = px.colors.qualitative.Prism
     if len(trading_dates) > len(colors):
         # If we have more days than colors, cycle through them
         colors = colors * (len(trading_dates) // len(colors) + 1)
@@ -460,7 +460,7 @@ def plot_cumulative_volume_by_day(pivot_df: pd.DataFrame) -> go.Figure:
         showgrid=True,
         gridcolor='blue',
         ticksuffix='%',
-        range=[50, 150],  # Fixed y-axis range from 50% to 150%
+        range=[50, 175],  # Fixed y-axis range from 50% to 150%
         dtick=25  # Show ticks every 25%
     )
     return fig
@@ -511,7 +511,7 @@ def main():
     parser.add_argument("--cumvol", action="store_true", help="plot relative cumulative volume")
     parser.add_argument("--tick", action="store_true", help="Display tick")
     parser.add_argument("--days", type=int, default=1, help="Number of days")
-    parser.add_argument("--sym", type=str, default="esm5", help="Index symbol")
+    parser.add_argument("--sym", type=str, default="esu5", help="Index symbol")
 
     argv = parser.parse_args()
     print(argv)

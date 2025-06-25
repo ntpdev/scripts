@@ -164,25 +164,33 @@ class MDBRepository:
         return pd.DataFrame(map(lambda r: {"last_bar": r["lastTm"], "first_bar": r["timestamp"], "gap": r["gap"]}, cursor))
 
 
-def lookup_trade_date(idx: pd.Index, dt: str) -> date:
-    """return a date that exists in the index. dt is either a date in yyyymmdd format or a index value"""
+def lookup_trade_date(idx: pd.Index, dt_input: str) -> pd.Timestamp:
+    """return a date that exists in the index. dt is an index value or a date typically in yyyymmdd format."""
     try:
-        i = int(dt)
-        if i > 1000:
-            d = date.fromisoformat(dt)
-            pos = idx.searchsorted(d, side="right") - 1
-            return idx[max(0, pos)] 
-        else:
-            return idx[i]
+        pos = int(dt_input)
+        n = len(idx)
+        if -n <= pos < n:
+            return idx[pos]
     except ValueError:
-        return date.today()
+        pass
+
+    try:
+        return asof_index(idx, pd.to_datetime(dt_input))
+    except ValueError:
+        pass
+
+    return idx[-1]
 
 
-def find_datetime_range(df: pd.DataFrame, dt_str: str, n: int):
-    """find start,end interval for n days beginning or ending with dt
-    df is either a date in YYYYMMDD format an index into df
+def asof_index(idx: pd.Index, target: pd.Timestamp) -> pd.Timestamp:
+    pos = idx.searchsorted(target, side="right") - 1
+    return idx[pos] if pos >= 0 else idx[0]
+            
+
+def find_datetime_range(df: pd.DataFrame, dt: pd.Timestamp, n: int):
+    """find start,end interval for n days beginning or ending with dt.
+    dt must be a date in the index
     """
-    dt = lookup_trade_date(df.index, dt_str)
     n = n if abs(n) > 1 else 1
     d = min(dt, df.index[-1])
     df_range = df[df.index >= d][:n] if n > 0 else df[df.index <= d][n:]
@@ -197,15 +205,20 @@ def make_trade_dates(tm_start, tm_end, df_gaps) -> pd.DataFrame:
     rs = s + pd.Timedelta(minutes=930)
 
     # mask rth_start values where rth_start is after end
-    df = pd.DataFrame({"start": s, "end": e + pd.Timedelta(minutes=1), "rth_start": rs.mask(e < rs)})
-    df.set_index(e.dt.date, inplace=True)
+    # use to_numpy() to remove indexes and allow the datetime to be used as an index
+    df = pd.DataFrame({
+        "start": s.to_numpy(),
+        "end": (e + pd.Timedelta(minutes=1)).to_numpy(),
+        "rth_start": rs.mask(e < rs).to_numpy()},
+        index = e.dt.normalize())
     df.index.name = "date"
     return df
 
 
-def calculate_trading_hours(df_trade_days, dt, range_name):
-    """return start and end inclusive datetime for a given date and range name. range_name is 'rth' or 'glbx' or 'day'."""
+def calculate_trading_hours(df_trade_days: pd.DataFrame , dt: pd.Timestamp | date | str, range_name: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """return start and end inclusive datetime for a given date and range name. range_name is 'rth' or 'glbx' or 'day'."""   
     try:
+        dt = dt if isinstance(dt, pd.Timestamp) else pd.to_datetime(dt)
         st = df_trade_days.at[dt, "start"]
         end = df_trade_days.at[dt, "end"]  # df_trade_days has exclusive end
         if range_name == "rth":
@@ -218,14 +231,112 @@ def calculate_trading_hours(df_trade_days, dt, range_name):
     return None
 
 
-def load_price_history(symbol:str, dt:str, n:int =1) -> pd.DataFrame:
-    """return m1 bars for n days. if n is negative dt is the last day loaded"""
+def load_price_history(symbol:str, dt_str:str, n:int = 1) -> pd.DataFrame:
+    """return m1 bars for n days. dt_str is either a date or and index value. if n is negative dt_str is the last day loaded"""
     mdb = MDBRepository("localhost", "futures")
     df_summary = mdb.load_summary()
     df_gaps = mdb.load_gaps(symbol, 30)
     df_trade_days = make_trade_dates(df_summary.at[symbol, "start"], df_summary.at[symbol, "end"], df_gaps)
-    s, e = find_datetime_range(df_trade_days, dt, n)
+    s, e = find_datetime_range(df_trade_days,  lookup_trade_date(df_trade_days.index, dt_str), n)
     return mdb.load_timeseries(symbol, s, e)
+
+
+def print_summary_row(df: pd.DataFrame, row_idx: int | str | pd.Timestamp) -> None:
+    """
+    Print a single row from the DataFrame in the specified format using rich.
+    
+    Parameters:
+        df: DataFrame with a DatetimeIndex and price columns.
+        row_idx: The index (date or integer) of the row to print.
+    """
+    # Get the row as a Series
+    row = df.loc[row_idx] if not isinstance(row_idx, int) else df.iloc[row_idx]
+    
+    # Filter only float columns (price columns)
+    price_cols = [
+        col for col in df.columns 
+        if pd.api.types.is_float_dtype(df[col])
+    ]
+    
+    # Build a mapping: price -> list of column names (labels)
+    price_to_labels = {}
+    for col in price_cols:
+        price = row[col]
+        if pd.isna(price):
+            continue
+        price_to_labels.setdefault(price, []).append(col)
+    
+    # Sort prices descending
+    sorted_prices = sorted(price_to_labels.keys(), reverse=True)
+    
+    # Prepare rich console and table
+    trade_date = (
+        row.name.strftime("%Y-%m-%d")
+        if isinstance(row.name, (pd.Timestamp, pd.DatetimeIndex))
+        else str(row.name)
+    )
+    console.print(f"\n[bold]Trade date {trade_date}[/bold]\n")
+    
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("price", justify="right")
+    table.add_column("change", justify="right")
+    table.add_column("name", justify="left")
+    
+    rth_open = row.get("rth_open", None)
+    
+    for price in sorted_prices:
+        labels = ", ".join(sorted(price_to_labels[price]))
+        if pd.notna(rth_open):
+            change = price - rth_open
+            change_str = f"{change:+.2f}" if change != 0 else ""
+        else:
+            change_str = ""
+        table.add_row(f"{price:.2f}", change_str, labels)
+    
+    console.print(table)
+
+        # --- Summary line ---
+    # Get high/low prices and times
+    rth_high = row.get("rth_high", None)
+    rth_low = row.get("rth_low", None)
+    rth_high_tm = row.get("rth_high_tm", None)
+    rth_low_tm = row.get("rth_low_tm", None)
+    
+    # Only print summary if all values are present
+    if (pd.notna(rth_high) and pd.notna(rth_low) and pd.notna(rth_high_tm) and pd.notna(rth_low_tm)):
+        # Format times
+        high_time_str = pd.to_datetime(rth_high_tm).strftime("%H:%M")
+        low_time_str = pd.to_datetime(rth_low_tm).strftime("%H:%M")
+        
+        # Determine direction and compute change/time
+        if rth_high_tm < rth_low_tm:
+            # High to low
+            direction = "traded from high to low"
+            start_price, start_time = rth_high, high_time_str
+            end_price, end_time = rth_low, low_time_str
+            change = rth_low - rth_high
+            time_delta = pd.to_datetime(rth_low_tm) - pd.to_datetime(rth_high_tm)
+        else:
+            # Low to high
+            direction = "traded from low to high"
+            start_price, start_time = rth_low, low_time_str
+            end_price, end_time = rth_high, high_time_str
+            change = rth_high - rth_low
+            time_delta = pd.to_datetime(rth_high_tm) - pd.to_datetime(rth_low_tm)
+        
+        # Format time delta
+        hours, remainder = divmod(time_delta.seconds, 3600)
+        minutes = remainder // 60
+        
+        # Format change with sign
+        change_str = f"{change:+.2f}"
+        
+        summary = (
+            f"day {direction} {start_price:.2f} ({start_time}) "
+            f"to {end_price:.2f} ({end_time}) {change_str} "
+            f"{hours} hours {minutes} minutes"
+        )
+        console.print(summary)
 
 
 def main(symbol: str):
@@ -240,7 +351,7 @@ def main(symbol: str):
 
     min_vol = 100000
     df_days = mdb.load_trading_days(symbol, min_vol)
-    console.print(f"\n\n--- trading days for {symbol} min volumne {min_vol}", style="yellow")
+    console.print(f"\n\n--- trading days for {symbol} min volume {min_vol}", style="yellow")
     console.print(df_days)
 
     df_gaps = mdb.load_gaps(symbol, 30)
@@ -252,13 +363,12 @@ def main(symbol: str):
     console.print(f"\n\n--- trade date index for {symbol}", style="yellow")
     console.print(df_trade_days)
 
-    dt = date.today().isoformat().replace("-", "")
-    tms, tme = find_datetime_range(df_trade_days, dt, -5)
-    console.print(f"\nloaded 5 days before {dt} bars from {tms} to {tme}", style="cyan")
+    tms, tme = find_datetime_range(df_trade_days, lookup_trade_date(df_trade_days.index, "-1"), -5)
+    console.print(f"\nloaded 5 days from {tms} to {tme}", style="cyan")
     df = mdb.load_timeseries(symbol, tms, tme)
-    tms, tme = calculate_trading_hours(df_trade_days, tme.date(), "rth")
+    tms, tme = calculate_trading_hours(df_trade_days, tme.normalize(), "rth")
     console.print(f"\n\n--- m1 rth bars from {tms} to {tme}", style="yellow")
-    rows = df[tms:tme]
+    rows = df.loc[tms:tme]
     if not rows.empty:
         console.print(rows.head())
         console.print(rows.tail())
@@ -271,9 +381,9 @@ def main(symbol: str):
     summ = ts.create_day_summary(df, df_di)
     console.print(summ)
     console.print(f"\n\n--- last rows", style="yellow")
-    console.print(summ.iloc[-2])
-    console.print(summ.iloc[-1])
+    print_summary_row(summ, -2)
+    print_summary_row(summ, -1)
 
 
 if __name__ == "__main__":
-    main("esm5")
+    main("esu5")

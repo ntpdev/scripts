@@ -335,7 +335,7 @@ class LLM:
                 args["temperature"] = 0.6
         response = self._create(args)
 
-        max_tool_calls = 9
+        max_tool_calls = 15
         while max_tool_calls and any(e.type == "function_call" for e in response.output):
             process_function_calls(history, response)
             console.print(f"{10 - max_tool_calls}: returning function call results", style="yellow")

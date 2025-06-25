@@ -264,9 +264,9 @@ def test() -> None:
 
 if __name__ == "__main__":
     # test()
-    p = Path("c:/temp/ultra")
-    # p = Path.home() / 'Documents' / 'data'
-    df = load_overlapping_files(p, "zesm5*.csv")
+    # p = Path("c:/temp/ultra")
+    p = Path.home() / 'Documents' / 'data'
+    df = load_overlapping_files(p, "esm5*.csv")
     print_summary(df)
     di = day_index(df)
     row = di.iloc[-1]

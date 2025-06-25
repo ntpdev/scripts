@@ -184,8 +184,8 @@ def load_earliest_date(symbol):
 
 def load_twelve_data(symbol, days=255):
     print(f'loading {symbol}')
-    ts = tdc.time_series(symbol=symbol, interval='1day', start_date='2007-01-01', outputsize=5000, dp=2, order='ASC')
-    # ts = tdc.time_series(symbol=symbol, interval='1day', outputsize=days, dp=2, order='ASC')
+    # ts = tdc.time_series(symbol=symbol, interval='1day', start_date='2007-01-01', outputsize=5000, dp=2, order='ASC')
+    ts = tdc.time_series(symbol=symbol, interval='1day', outputsize=days, dp=2, order='ASC')
     df = ts.with_ma(ma_type='SMA', time_period=150).with_ma(ma_type='SMA', time_period=50).with_ma(ma_type='EMA', time_period=19).as_pandas()
 
     df.rename(columns={'ma1':'sma150', 'ma2':'sma50', 'ma3':'ema19'}, inplace=True)
@@ -195,7 +195,7 @@ def load_twelve_data(symbol, days=255):
     df['pct_chg'] = (pd.Series.pct_change(df.close) * 100).round(2)
     df['voln'] = normalise_as_perc(df.volume)
     # df['perc'] = percFromMin(df.close)
-    df['hilo'] = tsutils.calc_hilo(df.close)
+    df['hilo'] = tsutils.calc_hilo(df["close"])
     df['strat'] = strat(df.high, df.low)
     df['tlb'] = three_line_break(df.close)
     df.to_csv(fname)
@@ -966,7 +966,7 @@ def concat(filename1, filename2, output_name):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Load EoD data from twelvedata.com')
-    parser.add_argument('action', type=str, help='The action to perform [load|view|list|earliest|plot|plot3lb]')
+    parser.add_argument('action', type=str, help='The action to perform [load|view|list|earliest|plot|plot3lb|plotind|plotrel]')
     parser.add_argument('symbol', type=str, help='The symbol to use in the action')
     args = parser.parse_args()
     if args.action == 'load':

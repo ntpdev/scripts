@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from rich.console import Console
+from rich.table import Table
 
 from tsutils import aggregate_to_time_bars, calc_vwap, day_index, load_file, load_files, load_files_as_dict, load_overlapping_files, save_df
 
@@ -205,6 +206,131 @@ def plot_hl_times(df, daily_index, start_col, end_col, period=30):
     return df2
 
 
+def calculate_interval_range(df, di):
+    """
+    Calculate ranges
+
+    Args:
+        df: DataFrame with 1 minute datetime index and OHLCV columns
+        di: Day index DataFrame with trade dates as index and timestamp columns
+
+    Returns:
+        DataFrame with daily ranges indexed by trade date
+    """
+    data = []
+ 
+    for trade_date, row in di.iterrows():
+        first = row['first']
+        last = row['last']
+        rth_first = row['rth_first']
+
+        # initialize ranges
+        gl_range = None
+        h1_range = None
+
+        # Globex range: first -> rth_first - 1min (or first -> last)
+        if pd.notna(rth_first):
+            globex_end = rth_first - pd.Timedelta(minutes=1)
+            globex_slice = df.loc[first:globex_end]
+        else:
+            globex_slice = df.loc[first:last]
+
+        if not globex_slice.empty:
+            gl_range = globex_slice['high'].max() - globex_slice['low'].min()
+
+        # First hour range: rth_first -> rth_first + 59min
+        if pd.notna(rth_first):
+            first_hour_end = rth_first + pd.Timedelta(minutes=59)
+            h1_slice = df.loc[rth_first:first_hour_end]
+
+            h1_range = h1_slice['high'].max() - h1_slice['low'].min()
+
+        data.append({
+            "date": trade_date,
+            "globex": gl_range,
+            "first_hour": h1_range
+        })
+
+    return pd.DataFrame(data).set_index('date')
+
+
+def print_range_analysis(df, di, rth_df, daily_df, trading_days=10):
+    """
+    Create a range analysis table for the last N trading days using Rich console
+
+    Args:
+        rth_df: DataFrame with 'range' column and datetime index (existing RTH data)
+        daily_df: DataFrame with 'range' column and datetime index (existing daily data)
+        minute_df: DataFrame with 1-minute OHLCV data and datetime index
+        trading_days: Number of trading days to analyze (default 10)
+    """
+    # Calculate first hour ranges from minute data
+    interval_ranges = calculate_interval_range(df, di)
+
+    # Get the last N trading days (rows) from each dataset
+    rth_recent = rth_df["range"].tail(trading_days)
+    daily_recent = daily_df["range"].tail(trading_days)
+    globex_recent = interval_ranges["globex"].tail(trading_days)
+    first_hour_recent = interval_ranges["first_hour"].tail(trading_days)
+
+    # Calculate statistics
+    def calc_stats(series):
+        if len(series) == 0:
+            return {'min': None, 'max': None, 'median': None, 'last': None}
+        return {
+            'min': series.min(),
+            'max': series.max(),
+            'median': series.median(),
+            'last': series.iloc[-1]
+        }
+
+    # Prepare period names and their stats in a list of tuples
+    periods = [
+        ("rth", calc_stats(rth_recent)),
+        ("daily", calc_stats(daily_recent)),
+        ("globex", calc_stats(globex_recent)),
+        ("1st hour", calc_stats(first_hour_recent)),
+    ]
+
+    # Create Rich table
+    table = Table(
+        title=f"{trading_days} trading day range analysis",
+        show_header=True,
+        header_style="bold magenta"
+    )
+
+    # Add columns
+    table.add_column("period", style="cyan", no_wrap=True)
+    table.add_column("min", justify="right", style="yellow")
+    table.add_column("max", justify="right", style="yellow")
+    table.add_column("median", justify="right", style="yellow")
+    table.add_column("last", justify="right", style="yellow")
+
+    # Format number function
+    def format_num(val):
+        return f"{val:.2f}" if val is not None else "N/A"
+
+    # Add rows in a loop
+    for period_name, stats in periods:
+        table.add_row(
+            period_name,
+            format_num(stats['min']),
+            format_num(stats['max']),
+            format_num(stats['median']),
+            format_num(stats['last'])
+        )
+
+    # Print the table
+    console.print(table)
+
+    # Print additional info
+    console.print(f"\nAnalysis period: Last {trading_days} trading days")
+    console.print(f"First hour period: 14:30-15:29 (inclusive)")
+    console.print(f"First hour trading days available: {len(first_hour_recent)}")
+
+    return table   
+
+
 def print_summary(df):
     di = day_index(df)
     console.print("\n--- Day index ---", style="yellow")
@@ -212,12 +338,14 @@ def print_summary(df):
 
     console.print("\n--- Daily bars ---", style="yellow")
     daily = aggregate_to_time_bars(df, di, "first", "last")
-    console.print(daily, style="cyan")
+    console.print(daily.iloc[-15:], style="cyan")
     console.print(f"range min,median,max = {daily['range'].min():.2f} {daily['range'].median():.2f} {daily['range'].max():.2f}", style="green")
 
     console.print("\n--- RTH bars ---", style="yellow")
     rth = aggregate_to_time_bars(df, di, "rth_first", "rth_last")
-    console.print(rth, style="cyan")
+    console.print(rth.iloc[-15:], style="cyan")
+    # range analysis
+    print_range_analysis(df, di, rth, daily)
     console.print(f"range min,median,max = {rth['range'].min():.2f} {rth['range'].median():.2f} {rth['range'].max():.2f}", style="green")
     if rth.shape[0] > 10:
         console.print("last 10 days only", style="yellow")
@@ -271,6 +399,7 @@ class Fileinfo:
 
 
 def check_overlap(p, spec):
+    console.print("\n--- checking overlap", style="yellow")
     dfs = load_files_as_dict(p, spec)
     xs = []
     for p, df in dfs.items():
@@ -288,10 +417,10 @@ def check_overlap(p, spec):
 if __name__ == "__main__":
     # whole_day_concat(Path("c:/temp/ultra"), 'ztick-nyse*.csv', 'ztick-nyse')
     # test_tick()
-    # check_overlap(Path.home() / "Documents" / "data", "esh5*.csv")
-    check_overlap(Path("c:/temp/ultra"), "zesm5*.csv")
-    # df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesm5*.csv")
-    df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esm5*.csv")
+    check_overlap(Path.home() / "Documents" / "data", "esu5*.csv")
+    # check_overlap(Path("c:/temp/ultra"), "zesu5*.csv")
+    # df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesu5*.csv")
+    df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esu5*.csv")
     print_summary(df_es)
     # compare_emas()
     # df_tick = simple_concat('ztick-nyse*.csv', 'x')

@@ -45,4 +45,5 @@ line-length = 256
 extend-select = ["E", "F", "N", "R", "I", "UP"]
 
 [tool.mypy]
+python_version = 3.13
 plugins = ["pydantic.mypy"]
