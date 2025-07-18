@@ -36,7 +36,7 @@ def fibm(maxn):
     return impl
 
 
-def fib_iter(n: int) -> Iterator[int]:
+def fib_iter(n):
     """return a generator iterator"""
     a, b = 0, 1
     for _ in range(n):
@@ -139,11 +139,11 @@ def parsing_text():
     p = filter(lambda e: not e.strip().startswith("#"), StringIO(s))
     # note parse lines is stateful so cant use map()
     p1 = parse_lines(p)
-    Pipeline = map(as_typed_values, p1)
+    p2 = map(as_typed_values, p1)
     # can use pipeline in a aggregration function
     # sum(e['price'] for e in pipeline)
     # or just iterating
-    for x in Pipeline:
+    for x in p2:
         console.print(x, style="green")
 
 

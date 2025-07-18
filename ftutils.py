@@ -544,11 +544,12 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
 
     links = []
     # accept cookies
-    if button := page.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
+    banner = page.wait_for_selector("#fides-banner", timeout=9000)
+    if button := banner.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
         button.click()
 
-    if close := page.wait_for_selector('[data-testid="close-modal"]', state='visible', timeout=3000):
-        close.click()
+#    if close := page.wait_for_selector('[data-testid="close-modal"]', state='visible', timeout=3000):
+#        close.click()
 
     page.wait_for_timeout(1000)
     # close sign-in with google iframe

@@ -18,6 +18,7 @@ dependencies = [
     "langchain-core>=0.3.40",
     "langchain-google-vertexai>=2.0.14",
     "langchain-openai>=0.3.7",
+    "lightweight-charts>=2.1",
     "numpy>=2.2.3",
     "openai>=1.76.2",
     "pandas>=2.2.3",
