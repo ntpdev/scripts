@@ -218,11 +218,11 @@ def calculate_interval_range(df, di):
         DataFrame with daily ranges indexed by trade date
     """
     data = []
- 
+
     for trade_date, row in di.iterrows():
-        first = row['first']
-        last = row['last']
-        rth_first = row['rth_first']
+        first = row["first"]
+        last = row["last"]
+        rth_first = row["rth_first"]
 
         # initialize ranges
         gl_range = None
@@ -236,22 +236,18 @@ def calculate_interval_range(df, di):
             globex_slice = df.loc[first:last]
 
         if not globex_slice.empty:
-            gl_range = globex_slice['high'].max() - globex_slice['low'].min()
+            gl_range = globex_slice["high"].max() - globex_slice["low"].min()
 
         # First hour range: rth_first -> rth_first + 59min
         if pd.notna(rth_first):
             first_hour_end = rth_first + pd.Timedelta(minutes=59)
             h1_slice = df.loc[rth_first:first_hour_end]
 
-            h1_range = h1_slice['high'].max() - h1_slice['low'].min()
+            h1_range = h1_slice["high"].max() - h1_slice["low"].min()
 
-        data.append({
-            "date": trade_date,
-            "globex": gl_range,
-            "first_hour": h1_range
-        })
+        data.append({"date": trade_date, "globex": gl_range, "first_hour": h1_range})
 
-    return pd.DataFrame(data).set_index('date')
+    return pd.DataFrame(data).set_index("date")
 
 
 def print_range_analysis(df, di, rth_df, daily_df, trading_days=10):
@@ -276,13 +272,8 @@ def print_range_analysis(df, di, rth_df, daily_df, trading_days=10):
     # Calculate statistics
     def calc_stats(series):
         if len(series) == 0:
-            return {'min': None, 'max': None, 'median': None, 'last': None}
-        return {
-            'min': series.min(),
-            'max': series.max(),
-            'median': series.median(),
-            'last': series.iloc[-1]
-        }
+            return {"min": None, "max": None, "median": None, "last": None}
+        return {"min": series.min(), "max": series.max(), "median": series.median(), "last": series.iloc[-1]}
 
     # Prepare period names and their stats in a list of tuples
     periods = [
@@ -293,11 +284,7 @@ def print_range_analysis(df, di, rth_df, daily_df, trading_days=10):
     ]
 
     # Create Rich table
-    table = Table(
-        title=f"{trading_days} trading day range analysis",
-        show_header=True,
-        header_style="bold magenta"
-    )
+    table = Table(title=f"{trading_days} trading day range analysis", show_header=True, header_style="bold magenta")
 
     # Add columns
     table.add_column("period", style="cyan", no_wrap=True)
@@ -312,13 +299,7 @@ def print_range_analysis(df, di, rth_df, daily_df, trading_days=10):
 
     # Add rows in a loop
     for period_name, stats in periods:
-        table.add_row(
-            period_name,
-            format_num(stats['min']),
-            format_num(stats['max']),
-            format_num(stats['median']),
-            format_num(stats['last'])
-        )
+        table.add_row(period_name, format_num(stats["min"]), format_num(stats["max"]), format_num(stats["median"]), format_num(stats["last"]))
 
     # Print the table
     console.print(table)
@@ -328,7 +309,7 @@ def print_range_analysis(df, di, rth_df, daily_df, trading_days=10):
     console.print(f"First hour period: 14:30-15:29 (inclusive)")
     console.print(f"First hour trading days available: {len(first_hour_recent)}")
 
-    return table   
+    return table
 
 
 def print_summary(df):
@@ -383,9 +364,10 @@ def whole_day_concat(path: Path, fspec: str, fnout: str):
 
     if comb is not None:
         save_df(comb, fnout)
-        comb['Date'] = pd.to_datetime(comb['Date'])
+        comb["Date"] = pd.to_datetime(comb["Date"])
         comb2 = comb.set_index(comb["Date"])
         print_summary(comb2)
+
 
 @dataclass
 class Fileinfo:
@@ -406,12 +388,12 @@ def check_overlap(p, spec):
         di = day_index(df)
         xs.append(Fileinfo(p.name, len(di), di.iloc[0]["first"], di.iloc[-1]["last"]))
     console.print(xs)
-    for i in range(len(xs)-1):
-        if xs[i].end >= xs[i+1].start:
-            console.print(f"overlap found fileinfo {i} {xs[i].fname} and {i+1} {xs[i+1].fname}", style="red")
-            console.print(f"from {xs[i+1].start} to {xs[i].end}")
-            if xs[i+1].end <= xs[i].end:
-                console.print(f"file {i+1} {xs[i+1].fname} not needed as contained", style="red")
+    for i in range(len(xs) - 1):
+        if xs[i].end >= xs[i + 1].start:
+            console.print(f"overlap found fileinfo {i} {xs[i].fname} and {i + 1} {xs[i + 1].fname}", style="red")
+            console.print(f"from {xs[i + 1].start} to {xs[i].end}")
+            if xs[i + 1].end <= xs[i].end:
+                console.print(f"file {i + 1} {xs[i + 1].fname} not needed as contained", style="red")
 
 
 if __name__ == "__main__":

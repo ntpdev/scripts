@@ -82,5 +82,6 @@ class TestDataFrame(unittest.TestCase):
         # functools.reduce(lambda acc, e : acc + e if e > 0 else acc, xs, 0)
         self.assertEqual(foldr1(lambda x, y: x + y, input), 9)
 
+
 if __name__ == "__main__":
     unittest.main()

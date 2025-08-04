@@ -15,6 +15,7 @@ from mdbutils import load_price_history
 
 STRAT_BAR_COLOUR: str = "strat"
 
+
 @dataclass
 class MinVolDay:
     trade_dt: date
@@ -68,6 +69,7 @@ def draw_daily_lines(df, fig, tms, idxs):
 
 def high_lows(df: pd.DataFrame, window: int) -> tuple[pd.Series, pd.Series]:
     """Return tuple of (local highs, local lows) as Series of original values with local extrema."""
+
     def find_extrema(values, rolling) -> pd.Series:
         local_extreme = values[values == rolling]
         non_adjacent = local_extreme.diff().ne(0)
@@ -196,7 +198,7 @@ def plot_cumulative_volume():
     df_pivot = ts.pivot_cum_vol_avg_by_day(df, di)
     fig = plot_cumulative_volume_by_day(df_pivot)
     fig.show()
-    
+
 
 def plot_tick(days: int):
     """display the last n days"""
@@ -271,23 +273,23 @@ def plot_mongo(symbol: str, dt: str, n: int):
     for i in mvds[1:] if skip_first else mvds:
         eu_open = df_min_vol.at[df_min_vol.index[i.eu_start_bar], "open"]
         add_h_line(tm[i.eu_start_bar], tm[i.eu_end_bar], eu_open, "", color="LightSeaGreen")
-        
+
         xstart = tm[i.start_bar]
         xend = tm[i.rth_end_bar]
-        
+
         if i.rth_start_bar > 0:
             xstart_rth = tm[i.rth_start_bar]
             fig.add_vline(x=xstart_rth, line_width=1, line_dash="dash", line_color="blue")
-            
+
             if i.rth_end_bar > 0:
                 fig.add_vline(x=xend, line_width=1, line_dash="dash", line_color="blue")
-            
+
             rth_open = day_summary_df.at[i.trade_dt, "rth_open"]
             add_h_line(xstart_rth, xend, rth_open, "open", color="LightSeaGreen")
-            
+
             glbx_hi = day_summary_df.at[i.trade_dt, "glbx_high"]
             add_h_line(xstart_rth, xend, glbx_hi, "glbx hi")
-            
+
             glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
             add_h_line(xstart_rth, xend, glbx_lo, "glbx lo")
 
@@ -296,7 +298,7 @@ def plot_mongo(symbol: str, dt: str, n: int):
         if pd.notna(h1_hi):
             xstart_rth = tm[i.rth_start_bar]
             add_h_line(xstart_rth, xend, h1_hi, "h1 h")
-            
+
             h1_lo = day_summary_df.at[i.trade_dt, "rth_h1_low"]
             add_h_line(xstart_rth, xend, h1_lo, "h1 l")
 
@@ -304,7 +306,7 @@ def plot_mongo(symbol: str, dt: str, n: int):
         ix = day_summary_df.index.searchsorted(i.trade_dt)
         if ix > 0:
             prev_day = day_summary_df.iloc[ix - 1]
-            
+
             add_h_line(xstart, xend, prev_day.rth_low, "yl", color="chocolate")
             add_h_line(xstart, xend, prev_day.rth_high, "yh", color="chocolate")
             add_h_line(xstart, xend, prev_day.close, "cl", color="cyan")
@@ -352,116 +354,86 @@ def plot_cumulative_volume_by_day(pivot_df: pd.DataFrame) -> go.Figure:
     """
     Plot cumulative volume percentage lines for each trading day.
     Highlights the most recent day's points for easy identification.
-    
+
     Args:
         pivot_df: DataFrame with time as index, trading dates as columns, cum_vol_avg as values
-        
+
     Returns:
         Plotly figure object
     """
     fig = go.Figure()
-    
+
     # Get column names (trading dates) and sort them
     trading_dates = sorted(pivot_df.columns)
-    
+
     # Get the most recent date (rightmost column)
     most_recent_date = trading_dates[-1] if trading_dates else None
-    
+
     # Define colors - use a color scale for better distinction
     colors = px.colors.qualitative.Prism
     if len(trading_dates) > len(colors):
         # If we have more days than colors, cycle through them
         colors = colors * (len(trading_dates) // len(colors) + 1)
-    
+
     # Plot each trading day
     for i, date in enumerate(trading_dates):
         # Get data for this day, drop NaN values
         day_data = pivot_df[date].dropna()
-        
+
         if len(day_data) == 0:
             continue
-            
+
         # Determine if this is the most recent day
-        is_most_recent = (date == most_recent_date)
-        
+        is_most_recent = date == most_recent_date
+
         # Format date for legend
-        date_str = date.strftime('%Y-%m-%d')
-        
+        date_str = date.strftime("%Y-%m-%d")
+
         # Add line trace
-        fig.add_trace(go.Scatter(
-            x=day_data.index,  # Time values
-            y=day_data.values,  # cum_vol_avg values
-            mode='lines+markers' if is_most_recent else 'lines',
-            name=date_str,
-            line=dict(
-                color=colors[i % len(colors)],
-                width=3 if is_most_recent else 2
-            ),
-            marker=dict(
-                size=8 if is_most_recent else 4,
-                color=colors[i % len(colors)],
-                symbol='circle'
-            ) if is_most_recent else dict(size=4),
-            hovertemplate=f'<b>{date_str}</b><br>' +
-                         'Time: %{x}<br>' +
-                         'Cum Vol %: %{y:.1f}%<br>' +
-                         '<extra></extra>'
-        ))
-    
+        fig.add_trace(
+            go.Scatter(
+                x=day_data.index,  # Time values
+                y=day_data.values,  # cum_vol_avg values
+                mode="lines+markers" if is_most_recent else "lines",
+                name=date_str,
+                line=dict(color=colors[i % len(colors)], width=3 if is_most_recent else 2),
+                marker=dict(size=8 if is_most_recent else 4, color=colors[i % len(colors)], symbol="circle") if is_most_recent else dict(size=4),
+                hovertemplate=f"<b>{date_str}</b><br>" + "Time: %{x}<br>" + "Cum Vol %: %{y:.1f}%<br>" + "<extra></extra>",
+            )
+        )
+
     # Update layout
     fig.update_layout(
-        title={
-            'text': 'Cumulative Volume Percentage by Trading Day',
-            'x': 0.5,
-            'xanchor': 'center',
-            'font': {'size': 18}
-        },
-        xaxis_title='Time',
-        yaxis_title='Cumulative Volume (%)',
-        hovermode='x unified',
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.02
-        ),
+        title={"text": "Cumulative Volume Percentage by Trading Day", "x": 0.5, "xanchor": "center", "font": {"size": 18}},
+        xaxis_title="Time",
+        yaxis_title="Cumulative Volume (%)",
+        hovermode="x unified",
+        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
         width=1000,
         height=600,
-        template='plotly_white'
+        template="plotly_white",
     )
 
     # Add horizontal reference lines at 75%, 100%, 125%
     for level in [90, 110]:
-        fig.add_hline(
-            y=level,
-            line_dash="dash",
-            line_color="gray",
-            line_width=1,
-            opacity=0.7,
-            annotation_text=f"{level}%",
-            annotation_position="right",
-            annotation_font_size=10,
-            annotation_font_color="gray"
-        )
-    
+        fig.add_hline(y=level, line_dash="dash", line_color="gray", line_width=1, opacity=0.7, annotation_text=f"{level}%", annotation_position="right", annotation_font_size=10, annotation_font_color="gray")
+
     # Format x-axis to show times nicely
     fig.update_xaxes(
         tickangle=45,
-        tickmode='array',
-        tickvals=pivot_df.index[::max(1, len(pivot_df.index)//10)],  # Show every nth tick to avoid crowding
+        tickmode="array",
+        tickvals=pivot_df.index[:: max(1, len(pivot_df.index) // 10)],  # Show every nth tick to avoid crowding
         showgrid=True,
-        gridcolor='lightgray'
+        gridcolor="lightgray",
     )
-    
 
     # Format y-axis with fixed range
     fig.update_yaxes(
         showgrid=True,
-        gridcolor='blue',
-        ticksuffix='%',
+        gridcolor="blue",
+        ticksuffix="%",
         range=[50, 175],  # Fixed y-axis range from 50% to 150%
-        dtick=25  # Show ticks every 25%
+        dtick=25,  # Show ticks every 25%
     )
     return fig
 

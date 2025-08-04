@@ -3,8 +3,11 @@ import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from rich.console import Console
 
 import chatutils as cu
+
+console = Console()
 
 
 @dataclass
@@ -29,91 +32,90 @@ class EditItem:
 
 
 class VirtualFile:
-    def __init__(path: Path, read_only: bool = False):
-        self.name: str = path.name
-        self.path: Path = path
-        self.lines: list[str] | None = None # Using Python 3.10 type hint
-        self.modified: bool = False
-        self.read_only: bool = read_only
+    def __init__(self, path: Path | None = None, name: str | None = None, content: str | None = None, read_only: bool = False) -> None:
+        if name and content:
+            self.name = name
+            self.path = None
+            self.lines = content.splitlines()
+            self.read_only = True
+        else:
+            self.name = path.name
+            self.path = path
+            self.lines = None
+            self.read_only = read_only
+        self.modified = False
 
-    def _ensure_loaded(self):
-        if self.lines is None:
+    def _ensure_loaded(self) -> None:
+        if self.path and self.lines is None:
             self.lines = self.path.read_text(encoding="utf-8").splitlines()
-            console.print(f"VirtualFile.read_text {self.path}", style="yellow")
+            console.print(f"VirtualFile.read_text {self.path} lines {len(self.lines)}", style="yellow")
 
-    def read_text(self) -> list[str]:
-        """Reads underlying file if not already loaded."""
+    def read_text(self, line_number: int = 1, window_size: int = 99, show_line_numbers: bool = False) -> list[str]:
+        """
+        Returns a subset of lines centered around a given line number. Line numbers are a 1-based index.
+        """
         self._ensure_loaded()
-        return self.lines if self.lines is not None else []
+        n = len(self.lines)
+        if window_size < 1:
+            window_size = n
+
+        # If input has window_size or fewer lines, return all lines
+        if n <= window_size:
+            start_idx = 0
+            result = self.lines[:]
+        else:
+            # Convert 1-based line_number to 0-based index
+            center_idx = line_number - 1
+
+            # Try to center around the target line
+            start_idx = center_idx - window_size // 2
+            end_idx = start_idx + window_size
+
+            if start_idx < 0:
+                start_idx = 0
+                end_idx = window_size
+            elif end_idx > n:
+                end_idx = n
+                start_idx = n - window_size
+
+            result = self.lines[start_idx:end_idx]
+
+        if show_line_numbers:
+            start_line = start_idx + 1
+            width = len(str(n))
+            result = [f"{start_line + i:>{width}}: {line}" for i, line in enumerate(result)]
+
+        return result
 
     def write_text(self) -> str:
         """Writes the current content back to the underlying file if not read-only."""
-        if self.read_only:
-            return f"Cannot write: '{self.name}' is read-only."
-
-        if self.lines is None:
-            return f"Cannot write: Content of '{self.name}' is not loaded."
+        if self.read_only or not self.modified:
+            return f"SUCCESS: no changes written to {self.name}"
 
         try:
-            self.path.write_text('\n'.join(self.lines) + '\n', encoding="utf-8") # Add newline back at the end of the file
-            self.modified = False # Mark as not modified after successful write
-            return f"Successfully wrote '{self.name}' to {self.path}."
+            self.path.write_text("\n".join(self.lines) + "\n", encoding="utf-8")  # Add newline back at the end of the file
+            self.modified = False
+            return f"SUCCESS: saved '{self.name}' to {self.path}."
         except Exception as e:
-            return f"Error writing '{self.name}' to {self.path}: {e}"
+            return f"ERROR: {e} writing '{self.name}' to {self.path}"
 
     def edit(self, edits: list[EditItem]) -> str:
         """
         Applies a list of EditItem objects to the file lines.
-        (Unimplemented)
-        """
-        self._ensure_loaded()
-        if self.read_only:
-             return f"Cannot edit: '{self.name}' is read-only."
-
-        # Implementation for applying edits goes here
-        # This would involve iterating through edits,
-        # finding search patterns within self.lines (respecting start/end_position),
-        # and replacing them with replace patterns.
-        # After successful edits, set self.modified = True
-
-        console.print(f"Edit function for '{self.name}' is not yet implemented.", style="info")
-        return "Edit function not implemented." # Placeholder return value
-
-    def read_file_content(self, line_number: int, show_line_numbers: bool = False, window_size: int = 50) -> list[str]:
-        """
-        Reads and returns a section of the file content around a given line number.
-        Optionally shows line numbers.
         """
         self._ensure_loaded()
 
-        total_lines = len(self.lines)
-        if total_lines == 0:
-            return [f"File '{self.name}' is empty."]
+        xs = self.lines
+        for e in edits:
+            xs = edit_file_impl(xs, e)
 
-        # Adjust line_number to be 0-based index
-        target_index = line_number - 1
-
-        if not (0 <= target_index < total_lines):
-            return [f"Error: Line number {line_number} is out of range (1-{total_lines}) for '{self.name}'."]
-
-        # Calculate the start and end indices for the window
-        start_index = max(0, target_index - window_size // 2)
-        end_index = min(total_lines - 1, target_index + window_size // 2)
-
-        output_lines: list[str] = []
-        for i in range(start_index, end_index + 1):
-            line_content = self.lines[i]
-            if show_line_numbers:
-                # Format line number with padding
-                output_lines.append(f"{i + 1:>{len(str(total_lines))}}: {line_content}")
-            else:
-                output_lines.append(line_content)
-
-        return output_lines
-
+        self.lines = xs
+        self.modified = True
+        return f"SUCCESS: applied {len(edits)} edit"
 
     def __repr__(self):
         return f"VirtualFile(name='{self.name}', path='{self.path}', modified={self.modified}, read_only={self.read_only}, loaded={self.lines is not None})"
+
 
 class VirtualFileSystem:
     def __init__(self):
@@ -125,39 +127,48 @@ class VirtualFileSystem:
             self.file_mapping[fn.name] = VirtualFile(path=fn)
             return True
         return False
+    
+    def create_unmapped(self, fname: str, contents: str) -> bool:
+        self.file_mapping[fname] = VirtualFile(name=fname, content=contents)
+        return True
 
     def get_file(self, fname: str | Path) -> VirtualFile:
-            """
-            Retrieves a VirtualFile by name or path.
-            Raises ValueError if no mapping is found.
-            """
-            p = fname if isinstance(fname, Path) else Path(fname)
+        """
+        Retrieves a VirtualFile by name or path.
+        Raises ValueError if no mapping is found.
+        """
+        p = fname if isinstance(fname, Path) else Path(fname)
 
-            vf = self.file_mapping.get(p.name)
+        vf = self.file_mapping.get(p.name)
 
-            if vf is None:
-                err = f"Error: File not found {fname}"
-                console.print(err, style="red")
-                raise ValueError(err)
+        if vf is None:
+            err = f"Error: File not found {fname}"
+            console.print(err, style="red")
+            raise ValueError(err)
 
-            return vf
+        return vf
 
-    def read_file(self, filename: str | Path, line_number: int, show_line_numbers: bool = False, window_size: int = 50) -> list[str]:
+    def read_text(self, fn: str | Path, line_number: int = 1, window_size: int = 50, show_line_numbers: bool = False) -> list[str]:
         """
         Reads and returns a section of a file's content around a given line number.
         """
-        return self.get_file(filename).read_file_content(line_number, show_line_numbers, window_size)
+        return self.get_file(fn).read_text(line_number=line_number, window_size=window_size, show_line_numbers=show_line_numbers)
 
-
-    def edit_file(self, fname: str | Path, edits: list[EditItem]) -> str:
+    def edit(self, fn: str | Path, edits: list[EditItem]) -> str:
         """Finds a file by name and applies edits to it."""
-        return self.get_file(fname).edit(edits)
+        return self.get_file(fn).edit(edits)
+
+
+    def apply_edits(self, fn: str | Path, diff: str) -> str:
+        if edits := parse_edits(diff):
+            return self.edit(fn, edits)
+        return "SUCCESS: no edit blocks found"
 
 
     def save_all(self) -> dict[str, str]:
         """Saves all modified, non-read-only files."""
         save_results: dict[str, str] = {}
-        console.print("\n[bold]Saving all modified files:[/bold]", style="info")
+        console.print("\nSaving all modified files:", style="yellow")
         for file_name, virtual_file in self.file_mapping.items():
             if virtual_file.modified and not virtual_file.read_only:
                 save_results[file_name] = virtual_file.write_text()
@@ -195,13 +206,11 @@ def update_edit_position(source: list[str], edit: EditItem) -> None:
     """
     matches = find_block(source, edit.search)
     if (count := len(matches)) == 0:
-            raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
+        raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
 
     if count > 1:
         xs = [start for start, _ in matches]
         raise ValueError(f"Multiple ({count}) matches found at line numbers {xs}. Search pattern: {edit.search!r}")
-        raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
-
 
     edit.start_position, edit.end_position = matches[0]
 
@@ -242,6 +251,54 @@ def edit_file(filename: Path, edits: list[EditItem]) -> str:
     filename.write_text("\n".join(lines), encoding="utf-8")
     xs = [e.start_position + 1 for e in edits]
     return f"success: applied {len(edits)} edits at line numbers {xs} to {filename.name}"
+
+
+def parse_edits(input: str) -> list[EditItem]:
+    """
+    Parse a multi-line string into a list of EditItems
+    """
+    lines = input.split('\n')
+    edit_items = []
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Look for start of edit block
+        if line.startswith("<<<<<<<"):
+            search_lines = []
+            replace_lines = []
+            i += 1
+            
+            # Collect search lines until we hit the separator
+            while i < len(lines) and lines[i].strip() != "=======":
+                search_lines.append(lines[i])
+                i += 1
+            
+            # Skip the separator line
+            if i < len(lines) and lines[i].strip() == "=======":
+                i += 1
+            
+            # Collect replace lines until we hit the end marker
+            while i < len(lines) and not lines[i].strip().startswith(">>>>>>>"):
+                replace_lines.append(lines[i])
+                i += 1
+            
+            # Skip the end marker
+            if i < len(lines) and lines[i].strip().startswith(">>>>>>>"):
+                i += 1
+            
+            # Create EditItem with the collected lines
+            edit_items.append(EditItem(
+                search=search_lines,
+                replace=replace_lines,
+                start_position=-1,
+                end_position=-1
+            ))
+        else:
+            i += 1
+    
+    return edit_items
 
 
 def expand_to_blank_lines(lines: list[str], start: int, end: int) -> list[str]:
@@ -288,7 +345,9 @@ def get_source_code(
             return expand_to_blank_lines(source_lines, start, end)
     return []
 
+
 ERROR_LOCATION_REGEX = re.compile(r'^\s*File "(.*?)", line (\d+), in (.*)$')
+
 
 def extract_error_locations(message: str) -> list[ErrorLocation]:
     """

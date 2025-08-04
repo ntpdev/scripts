@@ -1,8 +1,11 @@
 **instructions**
-- clone repo
-- uv sync
-- .venv\Scripts\activate.ps1
-- python -m unittest tests.test_fib
+clone repo
+uv sync
+.venv\Scripts\activate.ps1
+python -m unittest tests.test_fib
+
+# on ubuntu
+source .venv/bin/activate 
 
 **common commands**
 

@@ -281,8 +281,12 @@ def run_python_unittest(fn: Path, func_name: str | None = None) -> tuple[bool, s
 
     test_module = f"tests.test_{fn.stem}.{make_test_cls_name(func_name)}" if func_name else f"tests.test_{fn.stem}"
 
-    code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uv run python -m unittest -v {test_module}"])
-    out, err = save_and_execute_powershell(code)
+    if sys.platform == "win32":
+        code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uv run python -m unittest -v {test_module}"])
+        out, err = save_and_execute_powershell(code)
+    else:
+        code = CodeBlock("bash", [f"cd '{fn.parent}' && uv run python -m unittest -v {test_module}"])
+        out, err = save_and_execute_bash(code)
     failed_tests = "FAIL" in err
 
     # unittest sends the test output to stderr
@@ -298,6 +302,7 @@ def run_python_unittest(fn: Path, func_name: str | None = None) -> tuple[bool, s
         + err
     )
     return not failed_tests, s
+
 
 def run_mypy(fn: Path) -> tuple[bool, str]:
     code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uvx --with pydantic mypy --pretty --ignore-missing-imports --follow-imports=skip --strict-optional {fn.name}"])

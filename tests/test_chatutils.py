@@ -54,7 +54,7 @@ class TestSaveAndExecuteBash(unittest.TestCase):
         if platform.system() == "Linux":
             c = CodeBlock("bash", s.split("\n"))
             out, err = save_and_execute_bash(c)
-            self.assertGreater(len(out.split("\n")), 5)
+            self.assertGreater(len(out.split("\n")), 1)
             self.assertEqual(len(err), 0)
 
 

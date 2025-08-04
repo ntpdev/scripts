@@ -119,13 +119,7 @@ def hilo(df: pd.DataFrame, rev: float) -> None:
                 sys.exit(0)
 
 
-def find_local_minima_with_threshold(
-    data: pd.DataFrame,
-    value_column: str,
-    n: int,
-    alpha: float,
-    start_time: str = "14:30:00",
-    end_time: str = "21:00:00" ) -> np.ndarray:
+def find_local_minima_with_threshold(data: pd.DataFrame, value_column: str, n: int, alpha: float, start_time: str = "14:30:00", end_time: str = "21:00:00") -> np.ndarray:
     """
     Identify local minima in a time series DataFrame with additional threshold criteria,
     only within a specified daily time window.
@@ -156,7 +150,7 @@ def find_local_minima_with_threshold(
     rolling_min = values.rolling(window=2 * n + 1, center=True).min()
 
     # Candidate minima where rolling min equals center value
-    candidates = (values == rolling_min)
+    candidates = values == rolling_min
 
     # Exclude edges without full window
     candidates[:n] = False
@@ -167,7 +161,7 @@ def find_local_minima_with_threshold(
     results = []
 
     # filter out candidate indices outside time range
-    time_mask = ((data.index.time >= pd.to_datetime(start_time).time()) & (data.index.time < pd.to_datetime(end_time).time()))
+    time_mask = (data.index.time >= pd.to_datetime(start_time).time()) & (data.index.time < pd.to_datetime(end_time).time())
     candidate_indices = candidate_indices[time_mask[candidate_indices]]
 
     for i in candidate_indices:
@@ -241,7 +235,7 @@ def select_with_gap(df: pd.DataFrame, xs: list[pd.Timestamp], n: int) -> pd.Data
 
 # standardise but use *100 so +1 std is 100
 def normalise_as_perc(v, n=20):
-    return (100 * (v - v.rolling(window=n).mean())/v.rolling(window=n).std()).fillna(0).round(0).astype(int)
+    return (100 * (v - v.rolling(window=n).mean()) / v.rolling(window=n).std()).fillna(0).round(0).astype(int)
 
 
 def test_find(df: pd.DataFrame, dt: str, n: int):
@@ -265,7 +259,7 @@ def test() -> None:
 if __name__ == "__main__":
     # test()
     # p = Path("c:/temp/ultra")
-    p = Path.home() / 'Documents' / 'data'
+    p = Path.home() / "Documents" / "data"
     df = load_overlapping_files(p, "esu5*.csv")
     print_summary(df)
     di = day_index(df)
@@ -282,13 +276,13 @@ if __name__ == "__main__":
     minima = find_local_minima_with_threshold(df, "low", 15, 0.5)
     console.print("\n--- local minima", style="yellow")
     console.print(df.loc[minima])
-    df['voln'] = normalise_as_perc(df['volume'])
-    df['strat'] = calc_strat(df)
-    df['rng'] = ((df['high'] - df['low']) * 4).astype(int)
+    df["voln"] = normalise_as_perc(df["volume"])
+    df["strat"] = calc_strat(df)
+    df["rng"] = ((df["high"] - df["low"]) * 4).astype(int)
     # print minima with rows before and after
     delta = pd.Timedelta(minutes=10)
     for p in range(-9, 0):
-        df2 = df.loc[minima[p] - delta:minima[p] + delta]
+        df2 = df.loc[minima[p] - delta : minima[p] + delta]
         console.print(df2)
         input("Press Enter to continue...")
 

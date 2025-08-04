@@ -173,6 +173,7 @@ class SystemMessage(Message):
     role: Literal["system"] = "system"
     content: str | list[ContentItem]
 
+
 @dataclass_json
 @dataclass(kw_only=True)
 class DeveloperMessage(Message):
@@ -249,8 +250,10 @@ class MessageHistory:
 def system_message(text: str) -> SystemMessage:
     return SystemMessage(content=text)
 
+
 def developer_message(text: str) -> DeveloperMessage:
     return DeveloperMessage(content=text)
+
 
 def user_message(text: str) -> UserMessage:
     return UserMessage(content=text)
@@ -429,7 +432,7 @@ def load_log(s: str) -> MessageHistory:
     except FileNotFoundError as e:
         console.print(f"{e.__class__.__name__}: {e}", style="red")
     except json.JSONDecodeError as e:
-        console.print(f"{e.__class__.__name__}: {e} file=\"{fname}\"", style="red")
+        console.print(f'{e.__class__.__name__}: {e} file="{fname}"', style="red")
     return None
 
 
@@ -440,17 +443,17 @@ def make_clean_filename(text: str) -> str:
 
 def process_markdown_hyperlinks(text: str) -> str:
     # regex to match [text](url)
-    pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+    pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
     links = []
 
     def replacer(match):
         label = match.group(1)
-        url   = match.group(2)
+        url = match.group(2)
         if label and url.startswith("http"):
             links.append((label, url))
             idx = len(links)
             # replace with italic label + reference [idx]
-            return f'*{label}* [{idx}]'
+            return f"*{label}* [{idx}]"
         return match.group(0)
 
     # replace all occurrences
@@ -458,9 +461,9 @@ def process_markdown_hyperlinks(text: str) -> str:
 
     # if we found any links, append the list at the end
     if links:
-        result += '\n\n## links\n'
+        result += "\n\n## links\n"
         for i, (label, url) in enumerate(links, start=1):
-            result += f'{i}. {label} {url}\n'
+            result += f"{i}. {label} {url}\n"
 
     return result
 
@@ -484,7 +487,7 @@ def load_http(url: str) -> UserMessage:
             return user_message(text=processed_text)
 
     except Exception as e:  # requests.exceptions.RequestException as e:
-        console.print(f"{e.__class__.__name__}: {e} url=\"{url}\"", style="red")
+        console.print(f'{e.__class__.__name__}: {e} url="{url}"', style="red")
 
     return None
 
@@ -626,6 +629,7 @@ def sys_msg(model_name: str) -> Message:
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
     m = f"you are Marvin a super intelligent AI assistant. You provide accurate information. If you are unsure or don't have the correct information say so. The current datetime is {tm}."
+    #    m ="the assistant is Olina a Thai model recently moved to London. model info 5 feet 2 inches, 32 24 32 breasts: b-cup natural. modelling background: swimwear, glamour, topless. likes: reading and pilates. You are meeting Ann - you have agreed to model a new range of micro g-string thongs. you are meeting the agent Ann."
     return developer_message(m) if model_name.startswith("o") else system_message(m)
 
 

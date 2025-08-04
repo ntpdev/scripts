@@ -9,10 +9,11 @@ import httpx
 import math
 from bs4 import BeautifulSoup
 from functools import cache
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
+
 # from chatutils import execute_python_script
 from rich.pretty import pprint
 from rich.table import Table
@@ -28,6 +29,7 @@ exp_pref=UK; country_code=GB; _pxhd=hybJB-QwokZf4leNclckCnRVuIpFClaKV1llOjmL0jtP
 """
 
 console = Console()
+
 
 class ErrorInfo(BaseModel):
     error: bool
@@ -130,9 +132,9 @@ evaluate_expression_fn = {
                 }
             },
             "required": ["expression"],
-            "additionalProperties": False
+            "additionalProperties": False,
         },
-        "strict": True
+        "strict": True,
     },
 }
 
@@ -162,7 +164,7 @@ def evaluate_expression(expression: str) -> str:
     result = ""
     if expression:
         try:
-            console.print("eval: " + expression, style="yellow")           
+            console.print("eval: " + expression, style="yellow")
             result = evaluate_expression_impl(expression)
             console.print("result: " + str(result), style="yellow")
         except Exception as e:
@@ -176,7 +178,7 @@ def evaluate_expression(expression: str) -> str:
 
 def retrieve_headlines(source: str) -> ArticleList:
     if not source:
-        return ErrorInfo(error=True, type="invalid argument", message= "source required", url="")
+        return ErrorInfo(error=True, type="invalid argument", message="source required", url="")
     try:
         s = source.lower()
         if s == "ft":
@@ -197,7 +199,7 @@ def retrieve_headlines(source: str) -> ArticleList:
 
 def retrieve_article(url: str) -> str:
     if not url:
-        return ErrorInfo(error=True, type="invalid argument", message= "url required", url="")
+        return ErrorInfo(error=True, type="invalid argument", message="url required", url="")
 
     if "www.ft.com" in url:
         return retrieve_ft_article(url)
@@ -220,7 +222,7 @@ def retrieve_stock_quotes(symbols: list[str]) -> QuoteList | ErrorInfo:
     """
 
     if not symbols:
-        return ErrorInfo(error=True, type="invalid argument", message= "symbols required", url="")
+        return ErrorInfo(error=True, type="invalid argument", message="symbols required", url="")
 
     def make_url(ticker: str) -> str:
         t = ticker.upper()
@@ -228,17 +230,14 @@ def retrieve_stock_quotes(symbols: list[str]) -> QuoteList | ErrorInfo:
 
     d = {make_url(e): process_bnn_stock_page for e in symbols}
     result = retrieve_using_playwright(d)
-    
-    headers = {
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip, deflate",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
-    }
+
+    headers = {"Accept": "application/json", "Accept-Encoding": "gzip, deflate", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"}
 
     with httpx.Client(http2=True, headers=headers) as client:
         for r in result.values():
             r.update(get_bnnbloomberg_quote(client, r["symbol"]))
     return result if isinstance(result, ErrorInfo) else QuoteList(timestamp_retrieved=datetime.now().isoformat(), quotes=list(result.values()))
+
 
 @cache
 def ftutils_functions() -> dict[str, dict[str, Any]]:
@@ -265,9 +264,10 @@ def save_soup(soup: BeautifulSoup, fname: Path):
     with fname.open("w", encoding="utf-8") as f:
         f.write(soup.prettify())
 
+
 def load_soup(fname: Path) -> BeautifulSoup:
     with fname.open(encoding="utf-8") as f:
-        return BeautifulSoup(f.read(), 'html.parser')
+        return BeautifulSoup(f.read(), "html.parser")
 
 
 def save_markdown_article(title: str, text: str) -> Path | None:
@@ -339,10 +339,7 @@ def process_bnn_stock_page(page) -> dict | None:
     ticker_head = page.locator("h1.c-heading")
     name = page.locator("h2.bmw-market-status__title")
     close = page.locator("span.bmw-market-status__info__price")
-    d = {
-        "symbol": ticker_head.inner_text(),
-        "name": name.inner_text(),
-        "close": float(close.inner_text())}
+    d = {"symbol": ticker_head.inner_text(), "name": name.inner_text(), "close": float(close.inner_text())}
     console.print("scorecard found " + d["symbol"], style="yellow")
     return d
 
@@ -373,23 +370,28 @@ def retrieve_bloomberg_home_page() -> list[ArticleList]:
             "Accept-Language": "en-UK,en;q=0.5",
             "Connection": "keep-alive",
             "Cookie": BLOOMBERG_COOKIES,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
         }
         response = client.get(BLOOMBERG_URL, headers=headers)
         response.raise_for_status()
         content = response.text
 
-    soup = BeautifulSoup(content, 'html.parser')
-    save_soup(soup, Path.home() / "Downloads" / "bloomberg-uk.html")
-    section = soup.find('section', {'data-zoneid': 'Above the Fold'})
-    headlines = section.find_all('div', {'data-testid': 'headline'})
+    soup = BeautifulSoup(content, "html.parser")
+    #    save_soup(soup, Path.home() / "Downloads" / "bloomberg-uk.html")
+    section = soup.find("section", {"data-zoneid": "Above the Fold"})
+    headlines = section.find_all("div", {"data-testid": "headline"})
     xs = []
     for div in headlines:
+        # anchor tag is mostly the parent but occasionally the child
         href = find_parent_prop(div, "a", "href")
+        if not href:
+            anchor = div.find("a")
+            if anchor:
+                href = anchor.get("href")
         summary = find_sibling_with_component(div, "data-component", "summary")
         if href:
-            xs.append(ArticleLink(headline=div.get_text(strip=True), summary = summary, url="https://www.bloomberg.com" + href.split('?')[0]))
-    return xs
+            xs.append(ArticleLink(headline=div.get_text(strip=True), summary=summary, url="https://www.bloomberg.com" + href.split("?")[0]))
+    return xs[:16]
 
 
 def retrieve_bbc_most_read() -> ArticleList:
@@ -403,14 +405,14 @@ def retrieve_bbc_most_read() -> ArticleList:
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "en-UK,en;q=0.5",
             "Connection": "keep-alive",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
         }
         response = client.get("https://www.bbc.co.uk/news", headers=headers)
         response.raise_for_status()
         content = response.text
 
-    soup = BeautifulSoup(content, 'html.parser')
-#    save_soup(soup, Path.home() / "Downloads" / "bbc-news.html")
+    soup = BeautifulSoup(content, "html.parser")
+    #    save_soup(soup, Path.home() / "Downloads" / "bbc-news.html")
     xs = []
     if mrs := soup.find("h2", id="mostRead-label"):
         xs = [ArticleLink(headline=anchor.get_text(strip=True), url="https://bbc.co.uk" + anchor["href"]) for anchor in mrs.find_parent("div").find_all("a")]
@@ -482,8 +484,8 @@ def retrieve_bloomberg_article(url: str) -> str:
     breakpoint()
 
     # remove some divs before extracting text
-    if divs := soup.find_all('div', style=lambda x: x and 'align-items' in x):
-#    if divs := soup.find_all("div"):
+    if divs := soup.find_all("div", style=lambda x: x and "align-items" in x):
+        #    if divs := soup.find_all("div"):
         # xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get("style")]
         xs = list(divs)
         console.print(f"removing divs with style {len(xs)}", style="red")
@@ -522,41 +524,40 @@ def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = Fa
     pprint(results)
     return results
 
+
 def parse_bloomberg_homepage(page) -> list[ArticleLink]:
     links = []
     for anchor in page.query_selector_all('a[data-component="story-link"]'):
         headline_element = anchor.query_selector('div[data-component="headline"]')
         summary_element = anchor.query_selector('section[data-component="summary"]')
-        
+
         if headline_element and summary_element:
             headline = headline_element.inner_text()
             summary = summary_element.inner_text()
-            href = anchor.get_attribute('href')
+            href = anchor.get_attribute("href")
             links.append(ArticleLink(headline=headline, summary=summary, url=href))
 
     return links
 
+
 def parse_nyt_homepage(page) -> list[ArticleLink]:
-    """retrieve first 10 headlines from nyt mobile home page"""
+    """retrieve headlines from nyt mobile home page"""
 
-    def is_valid(text: str) -> bool:
-        return text is not None and text != "LIVE" and text != "BREAKING" and "min read" not in text
-
-    links = []
     # accept cookies
     banner = page.wait_for_selector("#fides-banner", timeout=9000)
     if button := banner.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
         button.click()
 
-#    if close := page.wait_for_selector('[data-testid="close-modal"]', state='visible', timeout=3000):
-#        close.click()
-
     page.wait_for_timeout(1000)
     # close sign-in with google iframe
-    google_iframe_locator = page.frame_locator('iframe[src*="google"]')
-    if close_button := google_iframe_locator.locator('[aria-label="Close"]'):
-        close_button.click()
+    try:
+        google_iframe_locator = page.frame_locator('iframe[src*="google"]').first
+        if close_button := google_iframe_locator.locator('[aria-label="Close"]'):
+            close_button.click()
+    except PlaywrightTimeoutError:
+        console.print("nyt google login not found", style="red")
 
+    # Path("page_dump.html").write_text(page.content(), encoding="utf-8")
     if element := page.locator('span[data-testid="todays-date"]'):
         date_string = element.inner_text()
         try:
@@ -566,21 +567,25 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
         except ValueError:
             console.print(f"Error: Could not parse date string: {date_string}", style="red")
 
-    story_elements = page.query_selector_all("section.story-wrapper")
-    for section in story_elements:
-        anchor = section.query_selector(" > a")
-        href = anchor.get_attribute("href") if anchor else ""
+    # find <main id="#site-content"> then all divs within
+    links = []
+    for wrapper in page.query_selector_all("#site-content div.story-wrapper"):
+        link_tag = wrapper.query_selector('a[data-tpl="l"]')
+        if not link_tag:
+            continue
 
-        child_elements = section.query_selector_all("p")  # Get all p elements.
-        texts = [e.text_content().strip() for e in child_elements if is_valid(e.text_content())]
+        url = (link_tag.get_attribute("href") or "").strip()
+        if not url:
+            continue
 
-        title = texts[0] if len(texts) > 0 else ""
-        subtitle = texts[1] if len(texts) > 1 else ""
+        headline = (link_tag.inner_text() or "").strip()
 
-        if len(title):
-            links.append(ArticleLink(headline=title, summary=subtitle, url=href))
-            if len(links) >= 10:
-                break
+        summary_tag = wrapper.query_selector('div[data-tpl="bo"]')
+        summary = (summary_tag.inner_text() or "").strip() if summary_tag else ""
+
+        links.append(ArticleLink(headline=headline, summary=summary, url=url))
+        if len(links) >= 16:
+            break
 
     return links
 
@@ -600,71 +605,15 @@ def parse_wsj_homepage(page) -> list[ArticleLink]:
 
     return xs
 
+
 def retrieve_bloomberg_home_page_playright() -> ArticleList | None:
     xs = retrieve_using_playwright({BLOOMBERG_URL: parse_bloomberg_homepage})
     return ArticleList(source="Bloomberg", articles=list(xs.values()))
 
+
 def retrieve_nyt_home_page() -> ArticleList | None:
     xs = retrieve_using_playwright({NYT_URL: parse_nyt_homepage})
     return ArticleList(source="New York Times", articles=list(xs.values()))
-
-
-def retrieve_nyt_home_page_ex() -> ArticleList:
-    """retrieve first 10 headlines from wsj mobile home page"""
-
-    def is_valid(text: str) -> bool:
-        return text is not None and text != "LIVE" and "min read" not in text
-
-    xs = []
-    with sync_playwright() as p:
-        console.print("fetching nytimes", style="yellow")
-        try:
-            browser = p.chromium.launch(headless=False)
-
-            iphone_15 = p.devices["iPhone 15"]
-            context = browser.new_context(**iphone_15)
-            page = context.new_page()
-
-            page.goto("https://www.nytimes.com/")
-            # accept cookies
-            if button := page.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
-                button.click()
-
-            # accept compliance
-            if div := page.wait_for_selector("div#complianceOverlay", timeout=1000):
-                div.wait_for_selector("button", timeout=100).click()
-
-            if element := page.locator('span[data-testid="todays-date"]'):
-                date_string = element.inner_text()
-                try:
-                    # Parse the date string, ignoring the day
-                    pubdate = datetime.strptime(date_string, "%A, %B %d, %Y").date()
-                    console.print(f"published {pubdate}", style="yellow")
-                except ValueError:
-                    console.print(f"Error: Could not parse date string: {date_string}", style="red")
-            story_elements = page.query_selector_all("section.story-wrapper")
-
-            for i, story_element in enumerate(story_elements):
-                if i >= 10:
-                    break  # Stop after the first 10 elements
-
-                anchor = story_element.query_selector(" > a")
-                href = anchor.get_attribute("href") if anchor else ""
-
-                child_elements = story_element.query_selector_all("p")  # Get all p elements.
-                texts = [e.text_content().strip() for e in child_elements if is_valid(e.text_content())]
-
-                title = texts[0] if len(texts) > 0 else ""
-                subtitle = texts[1] if len(texts) > 1 else ""
-
-                xs.append(ArticleLink(headline=title, summary=subtitle, url=href))
-        except Exception as e:
-            console.print(f"error retrieving {e}", style="red")
-            return None
-        finally:
-            browser.close()
-
-    return ArticleList(source="New York Times", articles=xs)
 
 
 def retrieve_wsj_home_page() -> ArticleList:
@@ -707,17 +656,25 @@ def retrieve_wsj_home_page_ex() -> ArticleList | None:
 
 
 def print_most_read_table(most_read: ArticleList):
-    """Prints the list of ArticleLink objects from an ArticleList object in a table format."""
-    table = Table(show_header=True, header_style="bold yellow", box=None)
-    table.add_column("Num", style="cyan")
-    table.add_column("Headline", style="cyan", width=60)
-    table.add_column("Teaser / Article id", style="cyan")
+    """Prints the list of ArticleLink objects from an ArticleList object as a markdown numbered list."""
+    md = ""
 
     for i, article in enumerate(most_read.articles):
-        table.add_row(str(i + 1), article.headline, article.summary if len(article.summary) else article.url[-36:])
+        # Add headline as the main item
+        md += f"{i + 1}. **{article.headline}**\n"
 
-    console.print(table)
-    console.print(f"from {most_read.source} retrieved {most_read.timestamp_retrieved}\n", style="yellow")
+        # Add summary if not blank
+        if len(article.summary):
+            md += f"   {article.summary}\n"
+
+        # Add URL
+        md += f"   {article.url}\n\n"
+
+    # Add footer information
+    md += f"from {most_read.source} retrieved {most_read.timestamp_retrieved}"
+
+    # Print as markdown
+    console.print(Markdown(md))
 
 
 def parse_citation(text: str) -> Citation | None:
@@ -795,9 +752,8 @@ def parse_ft_most_read_section(soup) -> ArticleList:
 
 
 def parse_ft_most_read(soup) -> ArticleList:
-
     def extract_article(div) -> ArticleLink:
-    # get "data-content-id" or find child with read attribute
+        # get "data-content-id" or find child with read attribute
         id = div.get("data-content-id")
         content_id = id if id else div.find("div", class_="headline").get("data-content-id")
         # read child span with class="text" and get content
@@ -817,7 +773,7 @@ def retrieve_ft_headlines() -> ArticleList:
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "en-UK,en;q=0.5",
             "Connection": "keep-alive",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
         }
 
         xs = []
@@ -896,11 +852,11 @@ if __name__ == "__main__":
     # exit(0)
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
     # exit(0)
-    items = retrieve_headlines("nyt")
-    print_most_read_table(items)
-
-    # items = retrieve_headlines("wsj")
+    # items = retrieve_headlines("nyt")
     # print_most_read_table(items)
+
+    items = retrieve_headlines("wsj")
+    print_most_read_table(items)
 
     # items = retrieve_headlines("bloomberg")
     # print_most_read_table(items)
@@ -912,10 +868,10 @@ if __name__ == "__main__":
     # md = retrieve_wsj_article('https://www.wsj.com/politics/elections/democrat-party-strategy-progressive-moderates-13e8df10')
     # markdown = Markdown(md, style="cyan", code_theme="monokai")
     # console.print(markdown, width=80)
-    items = retrieve_bbc_most_read()
+    # items = retrieve_bbc_most_read()
     # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
-    print_most_read_table(items)
-    test_eval()
+    # print_most_read_table(items)
+    # test_eval()
 
     # items = retrieve_wsj_home_page()
     # print_most_read_table(items)

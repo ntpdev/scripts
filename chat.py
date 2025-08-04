@@ -2,6 +2,7 @@ import base64
 import inspect
 import json
 import re
+import os
 from datetime import datetime
 from enum import StrEnum
 from functools import cache
@@ -31,15 +32,17 @@ class FunctionDef(TypedDict, total=False):
     parameters: dict[str, Any]
     strict: bool
 
+
 # ---
 # chat using OpenAI responses API
 # ---
 
 console = Console()
 client = OpenAI()
+vfs = tu.VirtualFileSystem()
 PYLINE_SPLIT = re.compile(r"; |\n")
 role_to_color = {"system": "white", "developer": "white", "user": "green", "assistant": "cyan", "tool": "yellow"}
-external_file_map: dict[str, Path] = {} # controls which files are visible to the LLM
+# external_file_map: dict[str, Path] = {}  # controls which files are visible to the LLM
 
 # types for message construction
 
@@ -100,6 +103,7 @@ class OpenAIModel(StrEnum):
     GPT = "gpt-4.1"
     GPT_MINI = "gpt-4.1-mini"
     O4 = "o4-mini"
+
 
 # Costs are per million tokens (input / output)
 PRICING = {
@@ -285,13 +289,8 @@ class Usage(BaseModel):
         return input_cost + output_cost
 
     def __str__(self) -> str:
-        return (
-            f"Usage:\n"
-            f"  Input Tokens: {self.input_tokens}\n"
-            f"  Output Tokens: {self.output_tokens}\n"
-            f"  Reasoning Tokens: {self.reasoning_tokens}\n"
-            f"  Estimated Cost: ${self.calculate_cost():.5f}"
-        )
+        return f"Usage:\n  Input Tokens: {self.input_tokens}\n  Output Tokens: {self.output_tokens}\n  Reasoning Tokens: {self.reasoning_tokens}\n  Estimated Cost: ${self.calculate_cost():.5f}"
+
 
 class LLM:
     """a stateful model which maintains a conversation thread using the response_id"""
@@ -368,12 +367,12 @@ eval_fn: FunctionDef = {
 execute_script_fn: FunctionDef = {
     "type": "function",
     "name": "execute_script",
-    "description": "execute a PowerShell or Python script on the local computer. Include print statements to see output. Text written to stdout and stderr will be returned",
+    "description": "execute a Bash, PowerShell or Python script on the local computer. For python code add print statements to see output. Text written to stdout and stderr will be returned",
     "parameters": {
         "type": "object",
         "required": ["language", "script_lines"],
         "properties": {
-            "language": {"type": "string", "enum": ["PowerShell", "Python"], "description": "the name of the scripting language either PowerShell or Python"},
+            "language": {"type": "string", "enum": ["Bash", "PowerShell", "Python"], "description": "the name of the scripting language either Bash or PowerShell or Python"},
             "script_lines": {"type": "array", "description": "The list of lines", "items": {"type": "string", "description": "a line"}},
         },
         "additionalProperties": False,
@@ -412,23 +411,6 @@ mark_task_complete_fn: FunctionDef = {
     "strict": True,
 }
 
-read_file_fn: FunctionDef = {
-    "type": "function",
-    "name": "read_file",
-    "description": "read the contents of a file on the local computer.",
-    "parameters": {
-        "type": "object",
-        "required": ["filename", "line_number", "show_line_numbers", "window_size"],
-        "properties": {
-            "filename": {"type": "string", "description": "the file name"},
-            "line_number": {"type": "integer", "description": "the center of the block of lines to show"},
-            "show_line_numbers": {"type": "boolean", "description": "include line numbers in the output. each line will be prefixed 'nnn '"},
-            "window_size": {"type": "integer", "description": "number of lines to show before and after the line number"},
-        },
-        "additionalProperties": False,
-    },
-    "strict": True,
-}
 
 apply_diff_fn: FunctionDef = {
     "type": "function",
@@ -458,32 +440,35 @@ apply_diff_fn: FunctionDef = {
     },
 }
 
-edit_file_fn: FunctionDef = {
-  "type": "function",
-  "name": "edit_file",
-  "description": "Edits a specified file based on search and replace instructions. The search and replace instructions are applied in order. Each search block should include at least 1 unchanged context line.",
-  "strict": True,
-  "parameters": {
-    "type": "object",
-    "required": ["filename", "edits"],
-    "properties": {
-      "filename": {"type": "string", "description": "The name of the file to edit"},
-      "edits": {
-        "type": "array",
-        "description": "A list of edits to perform on the file",
-        "items": {
-          "type": "object",
-          "properties": {
-            "search": {"type": "string", "description": "The lines to find in the source"},
-            "replace": {"type": "string", "description": "Replacement lines for the found lines"}
-          },
-          "required": ["search", "replace"],
-          "additionalProperties": False,
-        }
-      }
+read_text_fn: FunctionDef = {
+    "type": "function",
+    "name": "read_text",
+    "description": "Read a window of lines from a file centered around a specified line number.",
+    "strict": True,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "filename": {"type": "string", "description": "a file name"},
+            "line_number": {"type": "integer", "description": "1-based center line number"},
+            "window_size": {"type": "integer", "description": "Number of lines to return"},
+            "show_line_numbers": {"type": "boolean", "description": "Whether to prefix lines with their line numbers"},
+        },
+        "required": ["filename", "line_number", "window_size", "show_line_numbers"],
+        "additionalProperties": False,
     },
-    "additionalProperties": False,
-  }
+}
+
+apply_edits_fn: FunctionDef = {
+    "type": "function",
+    "name": "apply_edits",
+    "description": "apply a series of edits defined as search-replace blocks. Each block is delimited by `<<<<<<<` `=======`  `>>>>>>> .",
+    "strict": True,
+    "parameters": {
+        "type": "object",
+        "properties": {"filename": {"type": "string", "description": "a filename"}, "edits": {"type": "string", "description": "A multi-line string containing 1 or more search-replace blocks."}},
+        "required": ["filename", "edits"],
+        "additionalProperties": False,
+    },
 }
 
 
@@ -559,8 +544,8 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         execute_script_fn["name"].lower(): {"defn": execute_script_fn, "fn": execute_script},
         create_tasklist_fn["name"].lower(): {"defn": create_tasklist_fn, "fn": create_tasklist},
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
-        read_file_fn["name"].lower(): {"defn": read_file_fn, "fn": read_file},
-        edit_file_fn["name"].lower(): {"defn": edit_file_fn, "fn": edit_file},
+        read_text_fn["name"].lower(): {"defn": read_text_fn, "fn": read_text},
+        apply_edits_fn["name"].lower(): {"defn": apply_edits_fn, "fn": apply_edits},
         # apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
     }
 
@@ -675,11 +660,11 @@ def execute_script(language: str, script_lines: list[str]) -> Any:
     return cu.execute_script(code)
 
 
-def read_file(filename: str, line_number: int, show_line_numbers: bool = False, window_size: int = 50) -> str:
+def read_text(filename: str, line_number: int = 1, window_size: int = 50, show_line_numbers: bool = False) -> list[str]:
     """
     Read lines from a file centered around a specified line number.
 
-    Args:
+    Parameters:
         filename: Path to the file to read
         line_number: Center line number (1-based)
         show_line_numbers: Prefix lines with numbers
@@ -688,29 +673,44 @@ def read_file(filename: str, line_number: int, show_line_numbers: bool = False, 
     Returns:
         List of lines around the specified position
     """
-    fn = external_file_map[filename]
-    lines = fn.read_text(encoding="utf-8").splitlines()
-    adjusted_pos = max(0, line_number - 1)  # Convert to 0-based index
-    window_size = max(50, window_size)
-
-    n = len(lines)
-    if n <= window_size:
-        start_idx, selected = 0, lines
-    else:
-        start_idx = max(0, min(adjusted_pos - window_size // 2, n - window_size))
-        selected = lines[start_idx : start_idx + window_size]
-
-    console.print(f"read_file {fn.name} {show_line_numbers} lines {start_idx + 1} to {start_idx + len(selected) + 1}", style="yellow")
-    if show_line_numbers:
-        width = len(str(start_idx + window_size))
-        selected = [f"{i:>{width}} {line}" for i, line in enumerate(selected, start=start_idx + 1)]
-
-    return "\n".join(selected)
-
-
-def edit_file(filename: str, edits: list[dict]) -> str:
     try:
-        return tu.edit_file(external_file_map[filename], [tu.EditItem(search=e["search"].splitlines(), replace=e["replace"].splitlines()) for e in edits])
+        return vfs.read_text(filename, line_number, window_size, show_line_numbers)
+    except Exception as e:
+        return f"ERROR: {type(e).__name__}: {e}"
+
+
+def apply_edits(filename: str, edits: str) -> str:
+    """
+    Apply search-and-replace edits to the contents of a file using diff-like markers.
+
+    The `edits` string should contain one or more edit sections in the following format:
+
+        <<<<<<< search
+        line1_to_search
+        line2_to_search
+        =======
+        replacement_line1
+        replacement_line2
+        >>>>>>> replace
+
+    For each edit section:
+      The block of text in the file that exactly matches the lines
+      between `<<<<<<< search` and `=======` is replaced by
+      the block with the lines between `=======` and `>>>>>>> replace`.
+
+    Parameters:
+        filename (str):
+            Path to the file whose contents will be edited.
+        edits (str):
+            Multiline string containing one or more edit sections. Each section
+            uses the markers `<<<<<<< search`, `=======`, and `>>>>>>> replace`.
+
+    Returns:
+        str:
+            SUCCESS or ERROR.
+    """
+    try:
+        return vfs.apply_edits(filename, edits)
     except Exception as e:
         return f"ERROR: {type(e).__name__}: {e}"
 
@@ -970,12 +970,13 @@ def test_function_calling_powershell():
 
 
 def git_workflow():
+    shell = "bash" if os.name == "posix" else "powershell"
     dev_inst = dedent(f"""\
         The assistant is Marvin an expert at using Git version control.
         You are an agent. Keep going until the task is completed, before ending your turn.
         You have access to 4 tools:
         - eval: use the eval tool to evaluate a mathematical or Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
-        - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
+        - execute_script: use execute_script tool to run a {shell} script or Python program on the local computer. Remember to add print statements to Python code. The output from stdout and stderr will be return to you.
         - create_tasklist: use the create_tasklist tool to create an ordered list of steps that need to be completed. use this to keep track of multi-step plans
         - mark_task_complete: use the mark_task_complete tool to mark a step as complete and get a reminder of the next step
         the current datetime is {datetime.now().isoformat()}
@@ -986,9 +987,8 @@ def git_workflow():
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
 
-    prompt = (
-        "## task\ncommit the modified files in the directory /code/scripts with the message 'updates by Marvin'. Do not commit any untracked files.\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome. Use powershell to execute git commands"
-    )
+    p = "~/code/scripts" if os.name == "posix" else "/code/scripts"
+    prompt = f"## task\ncommit the modified files in the directory {p} with the message 'updates by Marvin'. Do not commit any untracked files.\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome. Use {shell} to execute git commands"
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
@@ -1111,52 +1111,114 @@ def mypy_workflow(fname: Path):
 
 def test_code_edit():
     dev_inst = dedent(f"""\
-        The assistant is Marvin an expert Python programmer. 
-        You have access to 2 tools:
-        - read_file: use the read_file tool to read a file.
-        - edit_file: use edit_file tool to makes edits to a file. each edit consists of a search block of lines and a replacement block of lines. Attempt to include at least 1 unchange context line in the search block.
+    ## Role
+    Expert Python coding assistant. You work autonomously to complete the user requests using the tools provided. Limit your changes to only those explicitly needed for the task.
+                
+    ## Available Tools
+    
+    - read_text(filename, line_number, window_size, show_line_numbers)  
+    Reads a window of *window_size* lines centered on *line_number* (1-based).
+    Set *window_size* = 0 to read entire file
+    Set *show_line_numbers* = True to prefix each line with its line number.
 
-        the current datetime is {datetime.now().isoformat()}
-        """)
+    - apply_edits(filename, edits)  
+    Applies one or more multi line changes to a file.
+    Each patch block consists of search and replace lines surrounded by the delimiters <<<<<<< ======= >>>>>>>
+    The lines exactly matching the source block are replaced with the replace block. Leading spaces are ignored and the tool will automatically match the indentation of the source.
+    The search block should contain at least 1 unmodified line to establish the context.
+    If an error occurs no edits are applied and an error message is returned.
+    A common error is that the search lines do not identify a unique block of code which can be fixed by including more context.
+    Another error is adding prefixes " " or "-" or "+" to each line. This is unnecessary.
+
+    <<<<<<< SEARCH
+    context line
+    line to change
+    =======
+    context line
+    replacement line
+    >>>>>>> REPLACE
+
+    the current datetime is {datetime.now().isoformat()}
+    """)
     llm = LLM(OpenAIModel.O4, "", True)
     llm.instructions = dev_inst
     history = MessageHistory()
-    # dev_msg = developer_message(dev_inst)
-    # history.append(dev_msg)
+    dev_msg = developer_message(dev_inst)
+    history.append(dev_msg)
+    contents = dedent("""\
+        #!/usr/bin/python3
+        from rich.console import Console
+            
+        def fib(n):
+            return n if n < 2 else fib(n - 1) + fib(n - 2)
 
-    fname = Path("/code/scripts/chat.py")
-    external_file_map[fname.name] = fname
+        def collatz(n):
+            while n > 1:
+                yield n
+                n = n // 2 if n % 2 == 0 else 3 * n + 1
+            yield n
+        """)
+    vfs.create_unmapped("temp.py", contents)
 
     prompt = dedent(f"""\
         ## task
-        modify the Python code in the file {fname.name}. The code should target Python 3.12
+        modify the Python code temp.py. The code should target Python 3.12.
         
         ## instructions
-        - the file contains a number of dictionaries eval_fn, read_file_fn, edit_file_fn which define OpenAI functions.
-        - create a class FunctionDef(TypedDict) that provides types for the top level fields. Edit the dics to use this class.
+        - add type annotations
+        - optimise by adding caching
+        - add a main method with examples on how to use each function
+        - make the changes directly to the file
+        - summarise the changes for the user. do not repeat the entire code
         """)
-        
-    code = cu.load_textfile(cu.make_fullpath(fname))
-    prompt += "\n\n" + code
+    # vfs.create_mapping(Path("~/Documents/chats/temp.py").expanduser())
+    vfs.create_unmapped("temp.py", contents)
+
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
     response = llm.create(history)
     print_response(response)
+    cu.print_block(vfs.read_text("temp.py"), line_numbers=True)
+    vfs.save_all()
+    console.print(f"{llm.usage}" )
+
 
 def unittest_workflow(fname: Path):
     testname = fname.parent / f"tests/test_{fname.name}"
-    external_file_map[fname.name] = fname
-    external_file_map[f"tests/test_{fname.name}"] = testname
+    vfs.create_mapping(fname)
+    vfs.create_mapping(testname)
     success, output = cu.run_python_unittest(fname)
     if success:
         return
 
     dev_inst = dedent(f"""\
-        The assistant is Marvin an expert Python programmer. 
-        You have access to 2 tools:
-        - read_file: use the read_file tool to read a file.
-        - edit_file: use edit_file tool to makes edits to a file. each edit consists of a search block of lines and a replacement block of lines. Attempt to include at least 1 unchange context line in the search block.
+        ## Role
+        Expert Python coding assistant. You work autonomously to complete the users requests using the tools provided. Limit your changes to only those explicitly mentioned.
+                    
+        ## Available Tools
+        
+        - read_text(filename, line_number, window_size, show_line_numbers)  
+        Reads a window of *window_size* lines centered on *line_number* (1-based).
+        use *window_size* = 0 to read entire file
+        use *show_line_numbers* = True to prefix each line with its line number.
+
+        - apply_edits(filename, edits)  
+        Applies one or more multi line changes to a file.
+        Each change consists of search and replace lines surrounded by the delimiters <<<<<<< ======= >>>>>>>
+        The search lines are matched in the file and replaced with the replace block. Leading spaces are ignored and the tool will automatically match the indentation of the source.
+        The search block should contain at least 1 unmodified line to establish the context.
+        If an error occurs no changes are applied and an error message is returned.
+        A common error is that the search lines do not identify a unique block of code which can be fixed by including more context.
+        Another error is adding prefixes " " or "-" or "+" to each line. This is unnecessary.
+
+        <<<<<<< SEARCH
+        context line
+        line to change
+        =======
+        context line
+        replacement line
+        >>>>>>> REPLACE
 
         the current datetime is {datetime.now().isoformat()}
         """)
@@ -1165,17 +1227,17 @@ def unittest_workflow(fname: Path):
     history = MessageHistory()
 
     prompt = dedent(f"""\
-        task: fix unittest errors. the user is following TDD and has added the test test_error_multiple_matches
+        task: fix unittest errors. The code is fib2.py and associated test test_fib2.py
 
         instructions: 
         - understand the error message.
-        - check the test code to understand the purpose of the test
-        - read relevant source code and fix error
-        - summarise the change for the user
+        - read the test code to understand the purpose of the test
+        - read relevant source code
+        - do not assume the test is correct
+        - fix the source or test or both
+        - summarise the change for the user. do not repeat the code changes.
 
         ## unittest output
-
-        > python -m unittest tests.{testname.name}
 
         ```
         __output__
@@ -1186,23 +1248,18 @@ def unittest_workflow(fname: Path):
     prompt = prompt.replace("__output__", output)
     errors = tu.extract_error_locations(output)
     for e in errors:
-        s = f"\n## {e.file_path}:{e.line_number}\n\n```{''.join(e.get_source())}\n```"
+        s = f"\n## {e.file_path}:{e.line_number}\n\n```python\n{''.join(e.get_source())}\n```\n\n"
         prompt += s
+    prompt += cu.load_textfile(fname)
     msg = user_message(prompt)
+    cu.save_content(prompt)
     history.append(msg)
     print_message(msg)
     response = llm.create(history)
     print_response(response)
-    console.print(model.usage, style="green")
-    # if "failed" in prompt.lower():
-    #     history.append(msg)
-    #     response = llm.create(history)
-    #     print_response(response)
-
-        # - add type hints to functions. use python 3.10 e.g. list | tuple and types from collections.abc
-        # - current_diff is a dictionary of (search, replace) line tuples. replace with a dataclass
-        # - summarise the changes for the user. do not repeat the code
-        # - explain the purpose and logic of the code
+    vfs.save_all()
+    cu.print_block(vfs.read_text(fname.name, line_number=1, window_size=0), line_numbers=True)
+    console.print(f"{llm.usage}", style="green")
 
 
 def test_code_edit_unified():
@@ -1487,7 +1544,7 @@ def main():
     git_workflow()
     # lint_workflow(Path("/code/scripts/chat.py"))
     # mypy_workflow(Path("/code/scripts/toolutils.py"))
-    # unittest_workflow(Path("/code/scripts/toolutils.py"))
+    # unittest_workflow(Path("~/code/scripts/fib2.py").expanduser())
     # test_code_edit()
     # test_apply_diff()
     # test_chat_loop()

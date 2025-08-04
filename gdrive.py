@@ -25,9 +25,7 @@ console = Console()
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 # created by following https://developers.google.com/drive/api/quickstart/python
-Credentials_JSON = (
-    Path.home() / "client_secret_32374387863-e7jikh2ktb31m25l27liebbunt0nfnkv.apps.googleusercontent.com.json"
-)
+Credentials_JSON = Path.home() / "client_secret_32374387863-e7jikh2ktb31m25l27liebbunt0nfnkv.apps.googleusercontent.com.json"
 
 TOKEN_FILE = Path.home() / "Downloads" / "token.json"
 
@@ -140,13 +138,9 @@ def update_file(drive_service: Resource, file_id: str, fn: Path) -> str | None:
     return None
 
 
-def find_file(drive_service: Resource, spec:str) -> str | None:
+def find_file(drive_service: Resource, spec: str) -> str | None:
     """return file_id of highest version, not trashed file matching spec"""
-    results = (
-        drive_service.files()
-        .list(q=f"name contains '{spec}'", fields="files(id, name, kind, version, trashed)")
-        .execute()
-    )
+    results = drive_service.files().list(q=f"name contains '{spec}'", fields="files(id, name, kind, version, trashed)").execute()
     existing = results.get("files", [])
 
     if existing:
@@ -197,10 +191,10 @@ def main(cmd: str, fname: str):
         match cmd:
             case "list":
                 list_files(service)
-                
+
             case "find" if fname:
                 find_file(service, fname)
-                
+
             case "up" if fname:
                 fn = Path.home() / "Downloads" / fname
                 if fn.exists():
@@ -210,18 +204,18 @@ def main(cmd: str, fname: str):
                         create_file(service, fn)
                 else:
                     console.print(f"File not found: {fn}", style="red")
-                    
+
             case "dn" if fname:
                 if file_id := find_file(service, fname):
                     fn = Path.home() / "Downloads" / fname
                     download_file(service, file_id, fn)
-                    
+
             case "rm" if fname:
                 if file_id := find_file(service, fname):
                     delete_file(service, file_id)
                 else:
                     console.print(f"File not found: {fname}", style="red")
-                    
+
             case _:
                 console.print(f"Invalid command or missing filename: {cmd} {fname}", style="red")
 
@@ -241,10 +235,9 @@ Examples:
   %(prog)s up report.xlsx  # Upload report.xlsx from Downloads folder
   %(prog)s dn report.xlsx  # Download report.xlsx to Downloads folder
   %(prog)s rm old_file.txt # Move old_file.txt to trash
-        """)
-    parser.add_argument(
-        "cmd", choices=["list", "find", "up", "dn", "rm"], type=str, help="command [list|find|upload|download|rm]"
+        """,
     )
+    parser.add_argument("cmd", choices=["list", "find", "up", "dn", "rm"], type=str, help="command [list|find|upload|download|rm]")
     parser.add_argument("fn", type=str, nargs="?", default="", help="file name")
     args = parser.parse_args()
     main(args.cmd, args.fn)

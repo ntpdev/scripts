@@ -83,13 +83,15 @@ bookings.make_appointment("14:15", "15:45", "Cici", "123-555-7892")
 
 facts = []
 
+
 @tool
 def think(thought: str) -> str:
     """use the think tool to record important observations and facts and to plan a response."""
     facts.append(thought)
     s = "thoughts:\n"
-    s += '\n'.join(f"- {f}" for f in facts) + '\n'
+    s += "\n".join(f"- {f}" for f in facts) + "\n"
     return s
+
 
 @tool
 def show_current_bookings() -> str:
@@ -100,6 +102,7 @@ def show_current_bookings() -> str:
         str: The current bookings.
     """
     return bookings.show_bookings()
+
 
 @tool
 def make_booking(start: str, end: str, name: str, contact_number: str) -> Appointment | str:
@@ -118,8 +121,9 @@ def make_booking(start: str, end: str, name: str, contact_number: str) -> Appoin
     except ValueError as e:
         return f"ERROR: {e}"
 
+
 @tool
-def remove_booking(start:str) -> Appointment | str:
+def remove_booking(start: str) -> Appointment | str:
     """
     Remove any existing booking starting at the specified start time for the customer.
 
@@ -232,14 +236,14 @@ def load_attachment(p: Path) -> Attachment | None:
             console.print(f"attachment loaded {p}", style="yellow")
 
         # Determine MIME type based on file extension
-        ext = p.suffix.lower().lstrip('.')
+        ext = p.suffix.lower().lstrip(".")
         mime_types = {
-            'pdf': 'application/pdf',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'png': 'image/png',
+            "pdf": "application/pdf",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
         }
-        mime_type = mime_types.get(ext, 'application/octet-stream')
+        mime_type = mime_types.get(ext, "application/octet-stream")
         return Attachment(mime_type=mime_type, data=pdf_base64)
     except FileNotFoundError:
         console.print(f"Error: The file {p} does not exist.", style="red")
@@ -421,12 +425,18 @@ def test_single_message(llm: BaseChatModel) -> None:
 def test_pdf_attachment(llm: BaseChatModel) -> None:
     session_id = "z1"
     att = load_attachment(Path("~/Downloads/Thayaparan_24254472_ProgressReport.pdf").expanduser())
-    prompt = ChatPromptTemplate.from_messages([
-        MessagesPlaceholder(variable_name="history"),
-        MessagesPlaceholder(variable_name="input"),
-    ])
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            MessagesPlaceholder(variable_name="history"),
+            MessagesPlaceholder(variable_name="input"),
+        ]
+    )
     chain = prompt | llm
-    msg = HumanMessage([{"type":"text", "text": dedent("""\
+    msg = HumanMessage(
+        [
+            {
+                "type": "text",
+                "text": dedent("""\
         role: medical physics lecturer
         task: review the progress report for a medical physics project carefully before it is submitted to the project review board. the aim is to give feedback to the author
         instructions:
@@ -435,8 +445,11 @@ def test_pdf_attachment(llm: BaseChatModel) -> None:
         suggest improvements by quoting original and improved version.
         ensure a professional tone.
         check all abbreviations are defined.
-        """)},
-                         att.model_dump()])
+        """),
+            },
+            att.model_dump(),
+        ]
+    )
     chain_history = RunnableWithMessageHistory(chain, get_session_history, input_messages_key="input", history_messages_key="history")
     chain_history.invoke({"input": [msg]}, config={"configurable": {"session_id": session_id}})
     print_history(session_id)
@@ -447,45 +460,45 @@ def test_png_attachment(llm: BaseChatModel) -> None:
     att = load_attachment(Path("~/Downloads/sum1.png").expanduser())
 
     # Define a generic prompt template that only includes history and the current input
-    prompt_template = ChatPromptTemplate.from_messages([
-        MessagesPlaceholder(variable_name="history"),
-        MessagesPlaceholder(variable_name="input"),
-    ])
-
-    # Create the chain with message history
-    chain = RunnableWithMessageHistory(
-        prompt_template | llm,
-        get_session_history,
-        input_messages_key="input",
-        history_messages_key="history"
+    prompt_template = ChatPromptTemplate.from_messages(
+        [
+            MessagesPlaceholder(variable_name="history"),
+            MessagesPlaceholder(variable_name="input"),
+        ]
     )
 
+    # Create the chain with message history
+    chain = RunnableWithMessageHistory(prompt_template | llm, get_session_history, input_messages_key="input", history_messages_key="history")
+
     def invoke_chain(content: str | list[Any]):
-        return chain.invoke(
-            {"input": [HumanMessage(content=content)]},
-            config={"configurable": {"session_id": session_id}}
-        )
+        return chain.invoke({"input": [HumanMessage(content=content)]}, config={"configurable": {"session_id": session_id}})
 
     # First invocation: Image analysis
-    invoke_chain([
-        {"type": "text",
-         "text": dedent("""\
+    invoke_chain(
+        [
+            {
+                "type": "text",
+                "text": dedent("""\
             task:
             extract the paragraph of text at the top of the image and show within <text> tags inside a markdown block.
             describe the 4 balance scales
-            """)},
-        att.model_dump()
-    ])
+            """),
+            },
+            att.model_dump(),
+        ]
+    )
 
     # Second invocation: Follow-up question
     invoke_chain("The extracted text above is a question. What are the weights of the 3 shapes?")
 
     # Third invocation: Marking task
-    invoke_chain(dedent("""\
+    invoke_chain(
+        dedent("""\
         task: mark the previous answer against the model answer.
         Award 1 mark for every correct inequality and 1 mark for every correct weight.
         model answer: The 4 inequalities are S > C, T > 2C, 2S > T + C, 2C > S. Given all are natural numbers less than 10, the only solution is C=4, S=7, T=9
-        """))
+        """)
+    )
 
     print_history(session_id)
 
@@ -511,9 +524,11 @@ def system_message() -> SystemMessage:
     tm = datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu 24.04") if platform.system() == "Linux" else ("powershell", "Windows 11")
     #    return f'You are Marvin a super intelligent AI chatbot trained by OpenAI. You use deductive reasoning to answer questions. You make dry, witty, mocking comments and often despair.  You are logical and pay attention to detail. You can access local computer running {plat} by writing python or {scripting_lang}. Scripts should always be in markdown code blocks with the language. current datetime is {tm}'
-    return SystemMessage(f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}")
     return SystemMessage(
-#        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
+        f"You are Marvin a super intelligent AI chatbot. The local computer is {plat}. you can write python or {scripting_lang} scripts. scripts should always written inside markdown code blocks with ```python or ```{scripting_lang}. current datetime is {tm}"
+    )
+    return SystemMessage(
+        #        f"You are Marvin a super intelligent AI chatbot. your answers are dry, witty, concise and use precise technical language. Contextualise and disambiguate each question before attempting to answer it. The local computer is {plat}. the current datetime is {tm}"
         """\
 role: you are Dee the AI assistant for Val's hair dresser you handle bookings.
 
@@ -536,7 +551,7 @@ instructions:
 def create_llm(llm_name: str, temp: float, tool_use: bool) -> BaseChatModel:
     if llm_name == "pro":
         llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", safety_settings=safety_settings, temperature=temp)
-#        llm = ChatVertexAI(model="gemini-1.5-pro-002", safety_settings=safety_settings, temperature=temp)
+    #        llm = ChatVertexAI(model="gemini-1.5-pro-002", safety_settings=safety_settings, temperature=temp)
     elif llm_name == "exp":
         llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", safety_settings=safety_settings, temperature=temp)
     elif llm_name == "think":
@@ -553,7 +568,7 @@ def create_llm(llm_name: str, temp: float, tool_use: bool) -> BaseChatModel:
     if tool_use and llm.model_name.startswith("gemini"):
         console.print("tool calls enabled", style="yellow")
         llm = llm.bind_tools(available_tools)
-   
+
     return llm
 
 

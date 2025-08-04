@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 console = Console()
 
+
 @dataclass
 class anchor_tag:
     text: str
@@ -30,8 +31,9 @@ headers = {
     "Accept-Language": "en-UK,en;q=0.5",
     "Connection": "keep-alive",
     "Cookie": ck,
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
 }
+
 
 def test_get():
     try:
@@ -41,7 +43,7 @@ def test_get():
             response.raise_for_status()
 
             # Parse with BeautifulSoup
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, "html.parser")
             save_soup(soup, Path.home() / "Downloads" / "bloom-uk.html")
             test_parse(soup)
 
@@ -61,17 +63,19 @@ def test():
         soup = load_soup(Path.home() / "Downloads" / "bloom-uk.html")
         test_parse(soup)
     except Exception as e:
-        console.print(f"Error reading or parsing the file: {e}", style='red')
+        console.print(f"Error reading or parsing the file: {e}", style="red")
+
 
 def test_parse(soup):
-    section = soup.find('section', {'data-zoneid': 'Above the Fold'})
-    headlines = section.find_all('div', {'data-testid': 'headline'})
+    section = soup.find("section", {"data-zoneid": "Above the Fold"})
+    headlines = section.find_all("div", {"data-testid": "headline"})
     for div in headlines:
         text = div.get_text(strip=True)
         href = get_parent_prop(div, "a", "href")
         summary = find_sibling_with_component(div, "data-component", "summary")
         if href:
             console.print(f"{text} {summary}\n[yellow]{href}[/yellow]")
+
 
 def get_parent_prop(element, tagname, attr):
     """Traverse up the DOM tree to find the nearest parent <a> tag and return its href."""
@@ -81,6 +85,7 @@ def get_parent_prop(element, tagname, attr):
             return elem[attr]
     return None
 
+
 def find_sibling_with_component(element, prop, component_value):
     """Find the nearest sibling element with the specified data-component attribute."""
     sibling = element
@@ -88,6 +93,7 @@ def find_sibling_with_component(element, prop, component_value):
         if sibling.has_attr(prop) and sibling[prop] == component_value:
             return sibling.get_text(strip=True)
     return None
+
 
 def get_bnnbloomberg_quote(symbol: str) -> dict:
     """
@@ -109,41 +115,41 @@ def get_bnnbloomberg_quote(symbol: str) -> dict:
         print(f"Error decoding JSON: {e}")
         return None
     except Exception as e:
-        print(f"An unexpected error occurred: {e}") #catch any other errors
+        print(f"An unexpected error occurred: {e}")  # catch any other errors
         return None
 
 
 def get_wsj_html(url: str) -> str | None:
-    console.print(f'retrieve {url}', style='yellow')
+    console.print(f"retrieve {url}", style="yellow")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
 
         page = browser.new_page()
         try:
             # search on archive for url
-            page.goto('https://archive.is/')
-            page.fill('#q', url)
+            page.goto("https://archive.is/")
+            page.fill("#q", url)
             page.click('input[type="submit"][value="search"]')
 
             # click which version of archived page we want
-            anchor = page.locator('div.TEXT-BLOCK').locator('a').first
+            anchor = page.locator("div.TEXT-BLOCK").locator("a").first
             anchor.click()
-            page.wait_for_load_state('domcontentloaded')
-            with Path('c://temp/z.htm').open('w', encoding='utf-8') as f:
+            page.wait_for_load_state("domcontentloaded")
+            with Path("c://temp/z.htm").open("w", encoding="utf-8") as f:
                 f.write(page.content())
 
-            main_tag = page.locator('main')
-            h1_tag = page.locator('h1')
+            main_tag = page.locator("main")
+            h1_tag = page.locator("h1")
             return h1_tag.text_content(), main_tag.inner_html()
         except Exception as e:
-            console.print(f"error retrieving {e}", style='red')
+            console.print(f"error retrieving {e}", style="red")
             return None
         finally:
             browser.close()
 
 
 def get_html_playwright(url: str) -> BeautifulSoup | None:
-    console.print(f'navigate {url}', style='yellow')
+    console.print(f"navigate {url}", style="yellow")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         iphone_15 = p.devices["iPhone 15"]
@@ -152,18 +158,18 @@ def get_html_playwright(url: str) -> BeautifulSoup | None:
         page = context.new_page()
         try:
             page.goto(url)
-            page.wait_for_load_state('domcontentloaded')
+            page.wait_for_load_state("domcontentloaded")
             # page.click('button[aria-label="Yes, I Accept"]')
 
             results = []
             for anchor in page.query_selector_all('a[data-component="story-link"]'):
                 headline_element = anchor.query_selector('div[data-component="headline"]')
                 summary_element = anchor.query_selector('section[data-component="summary"]')
-                
+
                 if headline_element and summary_element:
                     headline = headline_element.inner_text()
                     summary = summary_element.inner_text()
-                    href = anchor.get_attribute('href')
+                    href = anchor.get_attribute("href")
                     results.append((headline, summary, href))
 
             pprint(results)
@@ -173,7 +179,7 @@ def get_html_playwright(url: str) -> BeautifulSoup | None:
             # save_soup(soup, Path('c://temp/z.htm'))
             return results
         except Exception as e:
-            console.print(f"error retrieving {e}", style='red')
+            console.print(f"error retrieving {e}", style="red")
             return None
         finally:
             browser.close()
@@ -183,14 +189,14 @@ def html_to_markdown(url=None, html_content=None, soup=None, href_base=None):
     """
     Convert HTML to Markdown, preserving document structure and formatting. Anchors are replaced
     with bold and repeated as links at the end
-    
+
     Args:
         url (str, optional): URL of the webpage to extract text from.
         html_content (str, optional): HTML content as a string.
-        
+
     Returns:
         str: Markdown-formatted text from the webpage with preserved structure.
-    
+
     Raises:
         ValueError: If neither url nor html_content is provided.
         RuntimeError: If there's an issue fetching the URL.
@@ -201,25 +207,25 @@ def html_to_markdown(url=None, html_content=None, soup=None, href_base=None):
             with httpx.Client(http2=True) as client:
                 response = client.get(url, headers=headers)
                 response.raise_for_status()
-                soup = BeautifulSoup(response.content, 'html.parser')
+                soup = BeautifulSoup(response.content, "html.parser")
         except Exception as e:
             raise RuntimeError(f"Failed to fetch URL: {str(e)}")
     elif html_content:
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(html_content, "html.parser")
     # else:
     #     raise ValueError("Either url or html_content must be provided")
-    
+
     # Remove non-content elements
-    for tag in ['script', 'style', 'meta', 'noscript', 'head', 'iframe', 'svg', 'nav', 'footer', 'header']:
+    for tag in ["script", "style", "meta", "noscript", "head", "iframe", "svg", "nav", "footer", "header"]:
         for element in soup.find_all(tag):
             element.decompose()
-    
+
     # Remove comments using proper Comment class
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
         comment.extract()
-    
+
     anchors = []
-    
+
     def process_children(node):
         """Recursively process all child nodes, preserving their structure."""
         result = ""
@@ -231,171 +237,171 @@ def html_to_markdown(url=None, html_content=None, soup=None, href_base=None):
             else:
                 result += node_to_markdown(child)
         return result
-    
+
     def node_to_markdown(node):
         """Convert an HTML node to markdown with proper formatting."""
         if isinstance(node, NavigableString):
             return str(node)
-        
+
         tag_name = node.name.lower() if node.name else ""
-        
+
         # Skip empty nodes and newlines
         if not tag_name or not node.contents:
             return ""
-        
+
         # Process contents recursively to maintain formatting in child elements
         children_md = process_children(node)
-        
+
         # Handle block elements
-        if tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+        if tag_name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
             level = int(tag_name[1])
             return f"\n\n{'#' * level} {children_md.strip()}\n\n"
-        
-        elif tag_name == 'p':
+
+        elif tag_name == "p":
             return f"\n\n{children_md.strip()}\n\n"
-        
-        elif tag_name in ['div', 'section', 'article']:
+
+        elif tag_name in ["div", "section", "article"]:
             return f"\n{children_md.strip()}\n"
-        
-        elif tag_name == 'blockquote':
+
+        elif tag_name == "blockquote":
             # Add > prefix to each line
             lines = children_md.strip().split("\n")
             blockquote_text = "\n".join(f"> {line}" for line in lines)
             return f"\n\n{blockquote_text}\n\n"
-        
-        elif tag_name == 'pre':
+
+        elif tag_name == "pre":
             # For code blocks with pre tags
             code_content = children_md.strip()
-            code_tag = node.find('code')
-            language = code_tag.get('class', [''])[0].replace('language-', '') if code_tag else ''
+            code_tag = node.find("code")
+            language = code_tag.get("class", [""])[0].replace("language-", "") if code_tag else ""
             return f"\n\n```{language}\n{code_content}\n```\n\n"
-        
-        elif tag_name == 'br':
+
+        elif tag_name == "br":
             return "\n"
-        
-        elif tag_name == 'hr':
+
+        elif tag_name == "hr":
             return "\n\n---\n\n"
-        
+
         # Handle lists with proper nesting
-        elif tag_name == 'ul':
+        elif tag_name == "ul":
             list_items = []
-            for li in node.find_all('li', recursive=False):
+            for li in node.find_all("li", recursive=False):
                 # Process li contents recursively
                 item_content = process_children(li).strip()
                 # Handle nested lists - indent by 2 spaces
-                item_content = item_content.replace('\n', '\n  ')
+                item_content = item_content.replace("\n", "\n  ")
                 list_items.append(f"* {item_content}")
             return "\n" + "\n".join(list_items) + "\n\n"
-        
-        elif tag_name == 'ol':
+
+        elif tag_name == "ol":
             list_items = []
-            for i, li in enumerate(node.find_all('li', recursive=False), 1):
+            for i, li in enumerate(node.find_all("li", recursive=False), 1):
                 # Process li contents recursively
                 item_content = process_children(li).strip()
                 # Handle nested lists - indent by 3 spaces (for number alignment)
-                item_content = item_content.replace('\n', '\n   ')
+                item_content = item_content.replace("\n", "\n   ")
                 list_items.append(f"{i}. {item_content}")
             return "\n" + "\n".join(list_items) + "\n\n"
-        
+
         # Handle tables
-        elif tag_name == 'table':
+        elif tag_name == "table":
             # Extract headers
             headers = []
-            header_row = node.find('tr')
-            if header_row and header_row.find('th'):
-                headers = [process_children(th).strip() for th in header_row.find_all('th')]
-            
+            header_row = node.find("tr")
+            if header_row and header_row.find("th"):
+                headers = [process_children(th).strip() for th in header_row.find_all("th")]
+
             # Extract rows
             rows = []
-            for tr in node.find_all('tr'):
+            for tr in node.find_all("tr"):
                 # Skip rows that are header rows
-                if tr.find('th'):
+                if tr.find("th"):
                     continue
-                
+
                 # Process cells
-                cells = [process_children(td).strip().replace('\n', ' ') for td in tr.find_all('td')]
+                cells = [process_children(td).strip().replace("\n", " ") for td in tr.find_all("td")]
                 if cells:
                     rows.append(cells)
-            
+
             # Build markdown table
             if headers or rows:
                 table_md = []
-                
+
                 # Handle case with no explicit headers but has rows
                 if not headers and rows:
-                    headers = [''] * len(rows[0])
-                
+                    headers = [""] * len(rows[0])
+
                 # Add header row
                 if headers:
                     table_md.append(f"| {' | '.join(headers)} |")
                     table_md.append(f"| {' | '.join(['---'] * len(headers))} |")
-                
+
                 # Add data rows
                 for row in rows:
                     # Ensure row has same number of cells as headers
                     while len(row) < len(headers):
-                        row.append('')
+                        row.append("")
                     table_md.append(f"| {' | '.join(row)} |")
-                
+
                 return f"\n\n{chr(10).join(table_md)}\n\n"
             return ""
-        
+
         # Handle inline elements
-        elif tag_name in ['b', 'strong']:
+        elif tag_name in ["b", "strong"]:
             return f"**{children_md.strip()}**"
-        
-        elif tag_name in ['i', 'em']:
+
+        elif tag_name in ["i", "em"]:
             return f"*{children_md.strip()}*"
-        
-        elif tag_name == 'code' and node.parent.name != 'pre':
+
+        elif tag_name == "code" and node.parent.name != "pre":
             # Inline code (not inside a pre block)
             return f"`{children_md}`"
-        
-        elif tag_name == 'a':
-            href = node.get('href', '')
+
+        elif tag_name == "a":
+            href = node.get("href", "")
             if href:
-                text = re.sub('\n', '', children_md.strip())
-                if 'archive.is' in href:
-                    href = href[href.find('https', 5):]
+                text = re.sub("\n", "", children_md.strip())
+                if "archive.is" in href:
+                    href = href[href.find("https", 5) :]
                 anchors.append(anchor_tag(text, href))
                 return f"*{text}*"
             return children_md
-        
-        elif tag_name == 'img':
-            alt = node.get('alt', 'image')
-            src = node.get('src', '')
+
+        elif tag_name == "img":
+            alt = node.get("alt", "image")
+            src = node.get("src", "")
             if src:
                 return f"![{alt}]({src})"
             return alt
-        
+
         # Default case - just return the processed contents
         return children_md
-    
+
     # Process the body recursively to maintain order
     # body = soup.body or soup
     # mn = body.find('main', id='main-content')
     markdown_text = process_children(soup)
-    xs = [f"{str(i+1)}. {a.text} {a.href if a.href.startswith("http") else href_base + a.href}" for i,a in enumerate(anchors)]
+    xs = [f"{str(i + 1)}. {a.text} {a.href if a.href.startswith('http') else href_base + a.href}" for i, a in enumerate(anchors)]
     markdown_text += "\n### links\n\n" + "\n\n".join(xs)
-    
-    
+
     # Clean up whitespace
-    #markdown_text = re.sub(r'\n{3,}', '\n\n', markdown_text)
-    #markdown_text = re.sub(r'^\s+|\s+$', '', markdown_text, flags=re.MULTILINE)
-    
+    # markdown_text = re.sub(r'\n{3,}', '\n\n', markdown_text)
+    # markdown_text = re.sub(r'^\s+|\s+$', '', markdown_text, flags=re.MULTILINE)
+
     return markdown_text.strip()
+
 
 def test_soup(soup):
     # directly walk tree NB because soup treats any name that is not a method as a selector
     # soup.tag => soup.find['tag'] and soup['attr'] => soup.get('attr')
     e = soup.body.h1.get_text()
     # find find_all to search
-    e = soup.find(id="list") # find by id
+    e = soup.find(id="list")  # find by id
     xs = [e.name for e in soup.find_all(class_="list-item")]
     pprint(xs)
-    xs = list(soup.find(id="list").stripped_strings) # retrieve all text under id=list
+    xs = list(soup.find(id="list").stripped_strings)  # retrieve all text under id=list
     pprint(xs)
-    xs = [e['href'] for e in soup.find_all("a")]
+    xs = [e["href"] for e in soup.find_all("a")]
     pprint(xs)
     if e := soup.find("div", attrs={"data-id": "animal"}):
         pprint(e)
@@ -403,13 +409,13 @@ def test_soup(soup):
     # select to find by css selectors which is slower but more powerful
     # soup.select -> list
     # soup.css.iselect -> generator
-    xs = [e.name for e in  soup.select("li.list-item")]
+    xs = [e.name for e in soup.select("li.list-item")]
     pprint(xs)
-    xs = list(soup.select("li > a")) # directly inside
+    xs = list(soup.select("li > a"))  # directly inside
     pprint(xs)
-    xs = list(soup.select("ul a")) # contained anywhere
+    xs = list(soup.select("ul a"))  # contained anywhere
     pprint(xs)
-    xs = [e.name for e in soup.css.iselect("#list li")] # contained anywhere
+    xs = [e.name for e in soup.css.iselect("#list li")]  # contained anywhere
     pprint(xs)
 
 
@@ -464,12 +470,12 @@ def hello_world():
         </body>
     </html>
     """
-    test_soup(BeautifulSoup(html_content, 'html.parser'))
+    test_soup(BeautifulSoup(html_content, "html.parser"))
 
     markdown_output = html_to_markdown(html_content=html_content)
     markdown = Markdown(markdown_output, style="cyan", code_theme="monokai")
     # console.print(markdown, width=80)
-    
+
     # Example with URL
     try:
         # url = "https://www.bbc.co.uk/news/articles/c3w14gw3wwlo"
@@ -477,10 +483,10 @@ def hello_world():
         # content = html_to_markdown(html_content= content, title= title)
         # markdown = Markdown(content, style="cyan", code_theme="monokai")
         # console.print(markdown, width=80)
-        title, content = get_wsj_html('https://www.wsj.com/politics/elections/democrat-party-strategy-progressive-moderates-13e8df10')
+        title, content = get_wsj_html("https://www.wsj.com/politics/elections/democrat-party-strategy-progressive-moderates-13e8df10")
         # 'https://www.wsj.com/world/china/china-trump-trade-war-worries-0c2fa146')
         #'https://www.wsj.com/world/middle-east/trump-slams-door-on-arab-plan-for-gaza-with-resorts-8cb744a1')
-        p = Path('c://temp/z.htm')
+        p = Path("c://temp/z.htm")
         # soup = BeautifulSoup(content, 'html.parser')
         # breakpoint()
         # section = soup.find('main')
@@ -488,15 +494,15 @@ def hello_world():
         soup = load_soup(p)
 
         # remove some divs before extracting text
-        divs = soup.find_all('div')
+        divs = soup.find_all("div")
         if divs:
-            xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get('style')]
-            console.print(f'removing divs with style {len(xs)}', style="red")
+            xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get("style")]
+            console.print(f"removing divs with style {len(xs)}", style="red")
             for d in xs:
                 d.decompose()
 
-        md = html_to_markdown(soup = soup.find('section'), title= soup.find('h1').get_text().strip(), subtitle= soup.find('h2').get_text().strip())
-        with Path('c://temp/z.md').open('w', encoding='utf-8') as f:
+        md = html_to_markdown(soup=soup.find("section"), title=soup.find("h1").get_text().strip(), subtitle=soup.find("h2").get_text().strip())
+        with Path("c://temp/z.md").open("w", encoding="utf-8") as f:
             f.write(md)
         markdown = Markdown(md, style="cyan", code_theme="monokai")
         console.print(markdown, width=80)
@@ -506,18 +512,20 @@ def hello_world():
 
 
 def save_soup(soup: BeautifulSoup, fname: Path):
-        with fname.open('w', encoding='utf-8') as f:
-            f.write(soup.prettify())
+    with fname.open("w", encoding="utf-8") as f:
+        f.write(soup.prettify())
+
 
 def load_soup(fname: Path) -> BeautifulSoup:
-    with fname.open('r', encoding='utf-8') as f:
-        return BeautifulSoup(f.read(), 'html.parser')
+    with fname.open("r", encoding="utf-8") as f:
+        return BeautifulSoup(f.read(), "html.parser")
+
 
 def print_markdown(fname: Path):
     # it seems rich-cli is not using utf-8 decoding and fails to parse the right double quote character \xe2\x80\x9d
     # there is an unreleased fix with it in
     # well below market expectations “This reflects the payback from earlier exports front-loading and Trump’s faster and broad-based tariff hikes,” economists at Barclays said in a note.
-    with fname.open('r', encoding='utf-8') as f:
+    with fname.open("r", encoding="utf-8") as f:
         console.print(Markdown(f.read(), style="cyan"), width=80)
 
 
@@ -536,4 +544,4 @@ if __name__ == "__main__":
     # console.print(Markdown(md, style="cyan"), width=80)
     # scrape_stock_data(["SPY:UN", "XOM:UN", "TLT:UN", "JNK:UN"])
 
-    #print_markdown(Path.home() / 'Documents' / 'chats' / 'china_struggles_to_shake_off.md')
+    # print_markdown(Path.home() / 'Documents' / 'chats' / 'china_struggles_to_shake_off.md')
