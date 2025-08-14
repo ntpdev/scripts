@@ -5,10 +5,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from textwrap import dedent, shorten
+from textwrap import shorten
 
 from rich.console import Console
 
+IS_LINUX = sys.platform.startswith("linux")
 console = Console()
 THINK_PATTERN = re.compile("(.*?)<think>(.*?)</think>(.*)", re.DOTALL)
 latex_to_unicode = {
@@ -191,6 +192,8 @@ def execute_python_script(code: str) -> str:
 
 def execute_script(code: CodeBlock):
     print_block(code.lines, True)
+    if code.language == "shell":
+        code.language = "bash" if IS_LINUX else "powershell"
 
     msg = ""
     if code.language == "python":
@@ -256,42 +259,31 @@ def load_textfile(fname: Path, line_numbers: bool = False) -> str | None:
 
 
 def run_linter(fn: Path) -> tuple[bool, str]:
-    code = CodeBlock("powershell", [f"uvx ruff check --fix {fn}"])
-    out, err = save_and_execute_powershell(code)
+    code = CodeBlock("shell", [f"uvx ruff check --fix {fn}"])
+    out, err = execute_script(code)
     return ("error" not in out, out)
 
 
-def make_test_cls_name(s: str) -> str:
-    return "Test" + "".join(word.capitalize() for word in s.split("_"))
+def run_python_unittest(fname: Path, func_name: str | None = None) -> tuple[bool, str]:
+    """run the test associated with python file fname in folder ./tests. return True if all tests pass."""
 
+    def make_test_cls_name(s: str) -> str:
+        return "Test" + "".join(word.capitalize() for word in s.split("_"))
 
-def run_python_unittest(fn: Path, func_name: str | None = None) -> tuple[bool, str]:
-    """given a python file, run the test with filename test_x in folder ./tests"""
-    if not fn.is_file():
-        raise ValueError(f"file {fn} does not exist")
+    if not fname.is_file():
+        raise ValueError(f"file {fname} does not exist")
 
-    test_module = f"tests.test_{fn.stem}.{make_test_cls_name(func_name)}" if func_name else f"tests.test_{fn.stem}"
+    test_module = f"tests.test_{fname.stem}.{make_test_cls_name(func_name)}" if func_name else f"tests.test_{fname.stem}"
 
-    if sys.platform == "win32":
-        code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uv run python -m unittest -v {test_module}"])
-        out, err = save_and_execute_powershell(code)
-    else:
-        code = CodeBlock("bash", [f"cd '{fn.parent}' && uv run python -m unittest -v {test_module}"])
-        out, err = save_and_execute_bash(code)
+    # bash && is like ; on powershell but in this case powershell && works fine
+    code = CodeBlock("shell", [f"cd '{fname.parent}' && uv run python -m unittest -v {test_module}"])
+    err = execute_script(code)
     failed_tests = "FAIL" in err
 
     # unittest sends the test output to stderr
     # print_block(out, True)
     # print_block(err, True)
-    s = (
-        dedent(f"""\
-            running module test
-
-            > python -m unittest {test_module}
-        """)
-        + "\n\n"
-        + err
-    )
+    s = f"python -m unittest {test_module}\n\n" + err
     return not failed_tests, s
 
 

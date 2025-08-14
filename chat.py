@@ -2,7 +2,7 @@ import base64
 import inspect
 import json
 import re
-import os
+import sys
 from datetime import datetime
 from enum import StrEnum
 from functools import cache
@@ -13,6 +13,7 @@ from typing import Any, Literal, TypedDict
 from openai import OpenAI
 from openai.types.responses.response import Response
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from pydantic import BaseModel, Field, SerializeAsAny, field_validator
 from rich.console import Console
@@ -41,6 +42,7 @@ console = Console()
 client = OpenAI()
 vfs = tu.VirtualFileSystem()
 PYLINE_SPLIT = re.compile(r"; |\n")
+IS_LINUX = sys.platform.startswith("linux")
 role_to_color = {"system": "white", "developer": "white", "user": "green", "assistant": "cyan", "tool": "yellow"}
 # external_file_map: dict[str, Path] = {}  # controls which files are visible to the LLM
 
@@ -100,15 +102,15 @@ class InputFile(InputItem):
 
 
 class OpenAIModel(StrEnum):
-    GPT = "gpt-4.1"
-    GPT_MINI = "gpt-4.1-mini"
+    GPT = "gpt-5"
+    GPT_MINI = "gpt-5-mini"
     O4 = "o4-mini"
 
 
 # Costs are per million tokens (input / output)
 PRICING = {
-    OpenAIModel.GPT: (2.00, 8.00),
-    OpenAIModel.GPT_MINI: (0.40, 1.60),
+    OpenAIModel.GPT: (1.25, 10.00),
+    OpenAIModel.GPT_MINI: (0.25, 2.00),
     OpenAIModel.O4: (1.10, 4.40),
 }
 
@@ -318,6 +320,9 @@ class LLM:
     def create(self, history: MessageHistory) -> Response:
         """create a message based on existing conversation context. update history msg with assistant response"""
 
+        def is_tool_call(e):
+            return e.type in ["function_call", "custom_tool_call"]
+
         args = {"model": self.model, "input": history.dump()}
         assert args["input"], "no input"
         if self.instructions:
@@ -327,15 +332,19 @@ class LLM:
             args["reasoning"] = {"effort": "low"}
             args["max_output_tokens"] = 8192
         else:
+            # GPT-5 allow minimal reasoning and verbosity for agentic tasks
+            args["reasoning"] = {"effort": "minimal"}
+            args["text"] = {"verbosity": "low"}
             args["max_output_tokens"] = 4096
         if self.use_tools:
             args["tools"] = [v["defn"] for v in fn_mapping().values()]
-            if not is_reasoning:
-                args["temperature"] = 0.6
+            # gpt-5 models do not support temperature or top-p
+            # if not is_reasoning:
+            #     args["temperature"] = 0.6
         response = self._create(args)
 
         max_tool_calls = 15
-        while max_tool_calls and any(e.type == "function_call" for e in response.output):
+        while max_tool_calls and any(is_tool_call(e) for e in response.output):
             process_function_calls(history, response)
             console.print(f"{10 - max_tool_calls}: returning function call results", style="yellow")
             # send results of function calls back to model
@@ -345,7 +354,6 @@ class LLM:
 
         if max_tool_calls == 0:
             console.print("tool call limit exceeded", style="red")
-
         history.append(assistant_message(response))
         return response
 
@@ -471,6 +479,8 @@ apply_edits_fn: FunctionDef = {
     },
 }
 
+edit_text_fn = {"type": "custom", "name": "apply_edits", "description": "Applies one or more changes to a text file. Write as many changes as necessary. Format each change as a search replace block using the delimiters ---search ---replace ---end"}
+
 
 # lifted from agents SDK
 def function_to_json(func) -> dict:
@@ -545,7 +555,8 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         create_tasklist_fn["name"].lower(): {"defn": create_tasklist_fn, "fn": create_tasklist},
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
         read_text_fn["name"].lower(): {"defn": read_text_fn, "fn": read_text},
-        apply_edits_fn["name"].lower(): {"defn": apply_edits_fn, "fn": apply_edits},
+        # apply_edits_fn["name"].lower(): {"defn": apply_edits_fn, "fn": apply_edits},
+        edit_text_fn["name"].lower(): {"defn": edit_text_fn, "fn": edit_text},
         # apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
     }
 
@@ -584,11 +595,21 @@ def process_function_call(tool_call: ResponseFunctionToolCall, history: MessageH
     history.append(function_call_response(tool_call, result))
 
 
+def process_custom_tool_call(tool_call: ResponseOutputMessage, history: MessageHistory) -> None:
+    """process the custom tool call and append response to history"""
+    input = getattr(tool_call, "input", "")
+    console.print(f"{tool_call.type}: {tool_call.name} with {len(input)} chars", style="yellow")
+    result = dispatch(tool_call.name, {"input": input})
+    history.append(function_call_response(tool_call, result))
+
+
 def process_function_calls(history: MessageHistory, response: Response) -> None:
     """execute all function calls and append to message history. echo reason items back"""
     message_printed = False
     for output in response.output:
         match output.type:
+            case "custom_tool_call":
+                process_custom_tool_call(output, history)
             case "function_call":
                 process_function_call(output, history)
             case "reasoning":
@@ -715,6 +736,14 @@ def apply_edits(filename: str, edits: str) -> str:
         return f"ERROR: {type(e).__name__}: {e}"
 
 
+def edit_text(input: str) -> str:
+    """
+    Custom tool implementation
+    """
+    cu.print_block(input, line_numbers=True)
+    return "SUCCESS"
+
+
 def evaluate_expression_impl(expression: str) -> Any:
     # Split into individual parts removing blank lines but preserving indents
     parts = [e for e in PYLINE_SPLIT.split(expression) if e.strip()]
@@ -809,20 +838,15 @@ def evaluate_expression(expression: str) -> Any:
 
 def simple_message():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
-    prompts = [
-        "list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?",
-        "does the answer correctly express uncertainty. When will the next UK general election be held.",
-        "review your last answers and check for logical and factual consistency. are you confident that Rishi Sunak is UK Prime Minister today",
-    ]
+    prompts = ["list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?", "which of these were elected."]
 
-    dev_inst = f"The assistant is Marvin an AI chatbot. The assistant gives concise answers and expresses uncertainty when needed. The current date is {datetime.now().isoformat()}"
-    # models can confidently say that Rishi Sunak is PM in 2025
+    dev_inst = f"The assistant is Marvin an AI chatbot. Give concise answers and expresses uncertainty when needed. The current date is {datetime.now().isoformat()}"
     console.print(Markdown(dev_inst), style="white")
     response_id = None
     for prompt in prompts:
         console.print(Markdown(f"user:\n\n{prompt}\n"), style="green")
         response = client.responses.create(
-            model=OpenAIModel.GPT,
+            model=OpenAIModel.GPT_MINI,
             instructions=dev_inst,
             previous_response_id=response_id,
             input=prompt,
@@ -894,7 +918,7 @@ def test_function_calling():
         "a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.",
         r"find the roots of \(2x^{2}-5x-6\). express to 3 dp",
         "how many days since the first moon landing",
-        "which has more letter 'r' in it Strawberry or Raspberry",
+        "which word has more letters 'r' in it - Strawberry or Raspberry",
     ]
     for prompt in prompts:
         msg = user_message(prompt)
@@ -935,12 +959,13 @@ def test_function_calling_python():
     print_response(response)
 
 
-def test_function_calling_powershell():
+def test_function_calling_shell():
+    lang = "Bash" if IS_LINUX else "Powershell"
     dev_inst = dedent(f"""\
         You are Marvin an AI assistant.
         You have access to two tools:
         - eval: use the eval tool to evaluate any Python expression. Use it for more complex mathematical operations, counting, searching, sorting and date calculations.
-        - execute_script: use execute_script tool to run a PowerShell script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
+        - execute_script: use execute_script tool to run a {lang} script or Python program on the local computer. Remeber to add print statements to Python code. The output from stdout and stderr will be return to you.
         the current datetime is {datetime.now().isoformat()}
         """)
     llm = LLM(OpenAIModel.GPT_MINI, "", True)
@@ -970,7 +995,7 @@ def test_function_calling_powershell():
 
 
 def git_workflow():
-    shell = "bash" if os.name == "posix" else "powershell"
+    shell = "bash" if IS_LINUX else "powershell"
     dev_inst = dedent(f"""\
         The assistant is Marvin an expert at using Git version control.
         You are an agent. Keep going until the task is completed, before ending your turn.
@@ -981,14 +1006,19 @@ def git_workflow():
         - mark_task_complete: use the mark_task_complete tool to mark a step as complete and get a reminder of the next step
         the current datetime is {datetime.now().isoformat()}
         """)
-    llm = LLM(OpenAIModel.GPT, "", True)
-    # llm = LLM(OpenAIModel.GPT_MINI, "use the eval tool as needed", True)
+    llm = LLM(OpenAIModel.GPT_MINI, "", True)
     history = MessageHistory()
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
 
-    p = "~/code/scripts" if os.name == "posix" else "/code/scripts"
-    prompt = f"## task\ncommit the modified files in the directory {p} with the message 'updates by Marvin'. Do not commit any untracked files.\n\n## instructions\nfirst write out a plan and confirm with user.\nif the user agrees complete the entire plan and summarise outcome. Use {shell} to execute git commands"
+    p = "~/code/scripts" if IS_LINUX else "/code/scripts"
+    prompt = dedent(f"""\
+        ## task
+        commit the modified files in the directory {p} with the message 'updates by Marvin'. Do not commit any untracked files.
+        
+        ## instructions
+        first write out a plan and confirm with user.
+        if the user agrees complete the entire plan and summarise outcome. Use {shell} to execute git commands""")
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
@@ -1000,6 +1030,7 @@ def git_workflow():
     history.append(msg)
     response = llm.create(history)
     print_response(response)
+    console.print(llm.usage)
 
 
 def test_apply_diff():
@@ -1121,26 +1152,29 @@ def test_code_edit():
     Set *window_size* = 0 to read entire file
     Set *show_line_numbers* = True to prefix each line with its line number.
 
-    - apply_edits(filename, edits)  
-    Applies one or more multi line changes to a file.
-    Each patch block consists of search and replace lines surrounded by the delimiters <<<<<<< ======= >>>>>>>
-    The lines exactly matching the source block are replaced with the replace block. Leading spaces are ignored and the tool will automatically match the indentation of the source.
-    The search block should contain at least 1 unmodified line to establish the context.
-    If an error occurs no edits are applied and an error message is returned.
-    A common error is that the search lines do not identify a unique block of code which can be fixed by including more context.
-    Another error is adding prefixes " " or "-" or "+" to each line. This is unnecessary.
+    - apply_edits(str) - the set of changes to be applied to a text file. The changes are written as one or more search-replace blocks
 
-    <<<<<<< SEARCH
-    context line
-    line to change
-    =======
-    context line
-    replacement line
-    >>>>>>> REPLACE
+    ## How to use the apply_edits tool
+    Output structured edits in this exact format:
+                      
+    ---search filename
+    context line 1
+    line 2
+    ---replace
+    context line 1
+    inserted line
+    ---end
+    
+    Rules:
+    - All edit blocks are delimited by the lines ---search, ---replace, ---end
+    - Multiple edit blocks may be passed in a single tool call
+    - The first edit block must include the filename in the '---search filename' . filename can be omitted for subsequent blocks for the same file
+    - Search block: Include enough contiguous lines to uniquely identify the source location. Avoid repeating large blocks of unchanged lines.
+    - Replace block: Provide complete replacement content
 
     the current datetime is {datetime.now().isoformat()}
     """)
-    llm = LLM(OpenAIModel.O4, "", True)
+    llm = LLM(OpenAIModel.GPT, "", True)
     llm.instructions = dev_inst
     history = MessageHistory()
     dev_msg = developer_message(dev_inst)
@@ -1165,10 +1199,8 @@ def test_code_edit():
         modify the Python code temp.py. The code should target Python 3.12.
         
         ## instructions
-        - add type annotations
-        - optimise by adding caching
-        - add a main method with examples on how to use each function
-        - make the changes directly to the file
+        - add type annotations for python 3.12
+        - make targetted changes directly to the file
         - summarise the changes for the user. do not repeat the entire code
         """)
     # vfs.create_mapping(Path("~/Documents/chats/temp.py").expanduser())
@@ -1181,7 +1213,7 @@ def test_code_edit():
     print_response(response)
     cu.print_block(vfs.read_text("temp.py"), line_numbers=True)
     vfs.save_all()
-    console.print(f"{llm.usage}" )
+    console.print(f"{llm.usage}")
 
 
 def unittest_workflow(fname: Path):
@@ -1409,7 +1441,7 @@ def structured_output_message():
 
         # First parse: retrieve response from model "o4-mini" with low reasoning effort
         # response_first = client.responses.parse(model="o4-mini", reasoning={"effort": "low"}, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
-        response_first = client.responses.parse(model=OpenAIModel.GPT, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
+        response_first = client.responses.parse(model=OpenAIModel.GPT_MINI, input=[user_message(InputText(text=question)).model_dump()], text_format=AnswerSheet)
 
         # Convert returned json to YAML format using process_response_output
         yaml_ans = process_response_output(response_first.output)
@@ -1537,14 +1569,14 @@ def main():
     # test_file_inputs()
     # test_function_calling()
     # test_function_calling_python()
-    # test_function_calling_powershell()
+    # test_function_calling_shell()
     # test_image_analysis()
     # test_solve_visual_maths_problem()
     # structured_output_message()
     git_workflow()
     # lint_workflow(Path("/code/scripts/chat.py"))
     # mypy_workflow(Path("/code/scripts/toolutils.py"))
-    # unittest_workflow(Path("~/code/scripts/fib2.py").expanduser())
+    # unittest_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # test_code_edit()
     # test_apply_diff()
     # test_chat_loop()
