@@ -258,9 +258,9 @@ def load_textfile(fname: Path, line_numbers: bool = False) -> str | None:
     return None
 
 
-def run_linter(fn: Path) -> tuple[bool, str]:
-    code = CodeBlock("shell", [f"uvx ruff check --fix {fn}"])
-    out, err = execute_script(code)
+def run_linter(fname: Path) -> tuple[bool, str]:
+    code = CodeBlock("shell", [f"cd '{fname.parent}' && uvx ruff check --fix {fname.name}"])
+    out = execute_script(code)
     return ("error" not in out, out)
 
 
@@ -288,6 +288,6 @@ def run_python_unittest(fname: Path, func_name: str | None = None) -> tuple[bool
 
 
 def run_mypy(fn: Path) -> tuple[bool, str]:
-    code = CodeBlock("powershell", [f"Set-Location -Path '{fn.parent}'", f"uvx --with pydantic mypy --pretty --ignore-missing-imports --follow-imports=skip --strict-optional {fn.name}"])
-    out, err = save_and_execute_powershell(code)
+    code = CodeBlock("shell", [f"cd '{fn.parent}' && uvx --with pydantic mypy --pretty --ignore-missing-imports --follow-imports=skip --strict-optional {fn.name}"])
+    out = execute_script(code)
     return ("error" not in out, out)

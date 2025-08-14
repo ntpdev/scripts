@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import ast
 import re
-import itertools
-from dataclasses import dataclass
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
+
 from rich.console import Console
 
 import chatutils as cu
@@ -33,16 +33,16 @@ class EditItem:
     start_position: int = -1
     end_position: int = -1
 
-    def asDiffBlock(self) -> str:
+    def as_diff_block(self) -> str:
         """
         Convert the EditItem back to a diff block string.
         """
         lines = []
-        lines.append("```diff\n<<<<<<<")
+        lines.append(f"```\n--- search {self.filename}")
         lines.extend(self.search)
-        lines.append("=======")
+        lines.append("--- replace")
         lines.extend(self.replace)
-        lines.append(">>>>>>>>\n```\n")
+        lines.append("--- end\n```\n")
         return "\n".join(lines)
 
 
@@ -53,15 +53,17 @@ class VirtualFile:
             self.path = None
             self.lines = content.splitlines()
             self.read_only = True
-        else:
+        elif path:
             self.name = path.name
             self.path = path
-            self.lines = None
+            self.lines = []
             self.read_only = read_only
+        else:
+            raise ValueError("Either 'path' or both 'name' and 'content' must be provided")
         self.modified = False
 
     def _ensure_loaded(self) -> None:
-        if self.path and self.lines is None:
+        if self.path and not self.lines:
             self.lines = self.path.read_text(encoding="utf-8").splitlines()
             console.print(f"VirtualFile.read_text {self.path} lines {len(self.lines)}", style="yellow")
 
@@ -131,6 +133,10 @@ class VirtualFile:
         except Exception as e:
             return f"ERROR: failed to apply patch to '{self.name}'. No changes have been made to the file.\n{e}"
 
+    def as_markdown(self) -> str:
+        x = "\n".join(self.read_text(window_size=0))
+        return f"## {self.name}\n\n```\n{x}\n```\n\n"
+
     def __repr__(self):
         return f"VirtualFile(name='{self.name}', path='{self.path}', modified={self.modified}, read_only={self.read_only}, loaded={self.lines is not None})"
 
@@ -181,9 +187,7 @@ class VirtualFileSystem:
 
     def apply_edits(self, blocks: list[cu.CodeBlock]) -> str:
         """extract markdown blocks, extract edit instructions and apply to files"""
-        xs = (parse_edits(b.lines) for b in blocks if b.language == "diff")
-        edits = [y for ys in xs for y in ys]
-        if edits:
+        if edits := parse_edits([s for b in blocks for s in b.lines]):
             if any(not self.file_mapping.get(e.filename) for e in edits):
                 return "ERROR: patch does not contain a filename. No changes applied."
             grouped = defaultdict(list)
@@ -236,11 +240,11 @@ def update_edit_position(source: list[str], edit: EditItem) -> None:
     """
     matches = find_block(source, edit.search)
     if (count := len(matches)) == 0:
-        raise ValueError(f"No occurrences of search block found. Failed patch\n\n{edit.asDiffBlock()}")
+        raise ValueError(f"No occurrences of search block found. Failed patch\n\n{edit.as_diff_block()}")
 
     if count > 1:
         xs = [start for start, _ in matches]
-        raise ValueError(f"Multiple ({count}) matches found at line numbers {xs}. Add more context lines to search block. Failed patch\n\n{edit.asDiffBlock()}")
+        raise ValueError(f"Multiple ({count}) matches found at line numbers {xs}. Add more context lines to search block. Failed patch\n\n{edit.as_diff_block()}")
 
     edit.start_position, edit.end_position = matches[0]
 
@@ -284,22 +288,6 @@ def edit_file(filename: Path, edits: list[EditItem]) -> str:
     return f"success: applied {len(edits)} edits at line numbers {xs} to {filename.name}"
 
 
-# def extract_content_markdown_blocks(input: str | list[str], format: str = "diff") -> list[str]:
-#     lines = input.splitlines() if isinstance(input, str) else input
-#     block = []
-#     inside = False
-#     start_token = "```" + format
-#     for s in lines:
-#         if s.strip() == start_token:
-#             inside = True
-#         elif inside and s.strip() == "```":
-#             inside = False
-#         else:
-#             if inside:
-#                 block.append(s)
-#     return block
-
-
 def parse_edits(input: str | list[str]) -> list[EditItem]:
     """
     Parse a multi-line string into a list of EditItems
@@ -309,35 +297,36 @@ def parse_edits(input: str | list[str]) -> list[EditItem]:
         collected = []
         i = start_idx
 
-        while i < N and not lines[i].strip().startswith(stop_prefix):
+        while i < n_lines and not lines[i].strip().startswith(stop_prefix):
             collected.append(lines[i])
             i += 1
 
         # Skip the stop line if we found it
-        if i < N and lines[i].strip().startswith(stop_prefix):
+        if i < n_lines and lines[i].strip().startswith(stop_prefix):
             i += 1
 
         return collected, i
 
     lines = input.splitlines() if isinstance(input, str) else input
-    N = len(lines)
+    n_lines = len(lines)
     edit_items = []
     i = 0
     filename = ""
 
-    while i < N:
+    while i < n_lines:
         # Look for start of edit block
         s = lines[i].strip()
-        if s.startswith("<<<<<<<"):
+        if s.startswith("--- search"):
+            parts = s.split()
+            if len(parts) > 2:
+                filename = filename or parts[2]
             i += 1
-            search_lines, i = collect_lines_until(i, "=======")
-            replace_lines, i = collect_lines_until(i, ">>>>>>>")
+            search_lines, i = collect_lines_until(i, "--- replace")
+            replace_lines, i = collect_lines_until(i, "--- end")
 
             # Create EditItem with the collected lines
             edit_items.append(EditItem(search=search_lines, replace=replace_lines, filename=filename))
         else:
-            if not filename and s:
-                filename = s
             i += 1
 
     return edit_items

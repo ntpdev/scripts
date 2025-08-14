@@ -333,7 +333,7 @@ class LLM:
             args["max_output_tokens"] = 8192
         else:
             # GPT-5 allow minimal reasoning and verbosity for agentic tasks
-            args["reasoning"] = {"effort": "minimal"}
+            args["reasoning"] = {"effort": "medium"}
             args["text"] = {"verbosity": "low"}
             args["max_output_tokens"] = 4096
         if self.use_tools:
@@ -556,7 +556,7 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
         read_text_fn["name"].lower(): {"defn": read_text_fn, "fn": read_text},
         # apply_edits_fn["name"].lower(): {"defn": apply_edits_fn, "fn": apply_edits},
-        edit_text_fn["name"].lower(): {"defn": edit_text_fn, "fn": edit_text},
+        # edit_text_fn["name"].lower(): {"defn": edit_text_fn, "fn": edit_text},
         # apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
     }
 
@@ -838,7 +838,8 @@ def evaluate_expression(expression: str) -> Any:
 
 def simple_message():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
-    prompts = ["list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?", "which of these were elected."]
+    prompts = ["list the last 3 UK prime ministers give the month and year they became PM. Who is PM today?",
+                "which of these were elected."]
 
     dev_inst = f"The assistant is Marvin an AI chatbot. Give concise answers and expresses uncertainty when needed. The current date is {datetime.now().isoformat()}"
     console.print(Markdown(dev_inst), style="white")
@@ -1058,49 +1059,88 @@ def test_apply_diff():
 
 
 def lint_workflow(fname: Path):
-    external_file_map[fname.name] = fname
+    vfs.create_mapping(fname)
     success, lint_output = cu.run_linter(fname)
-    # cu.print_block(s, True)
     if success:
         return
 
     dev_inst = dedent(f"""\
-        The assistant is Marvin a senior Python developer. 
-        You have access to 2 tools:
+        The assistant is a senior Python developer.
+        You are an agent. Keep going until the task is completed, before ending your turn.
+        You have access to 1 tool:
         - read_file: use the read_file tool to read a file.
-        - apply_diff: use apply_diff tool to makes edits to sections of a text file line by line. Do not include line numbers in the diff as they are not part of the source text.
 
         the current datetime is {datetime.now().isoformat()}
         """)
     msg = dedent(f"""\
         task: fix lint errors
 
-        instructions: 
+        instructions:
+        - the environment is Python 3.12
         - understand the lint errors
         - edit the file to fix the lint errors
         - minimize the number of individual edits by grouping changes to nearby lines into a single operation
-        - summarise the changes for the user. do not repeat the code
 
-        ## lint output
+        ## How to write changes
 
-        > ruff check {fname.name}
+        Output structured edits in this exact format:
+
+        ```
+        --- search filename
+        context line 1
+        line 2
+        --- replace
+        context line 1
+        new line
+        --- end
+        ```
+
+        Rules:
+        - All edit blocks must appear within a markdown block.
+        - Create targeted changes and avoid repeating large blocks of unchanged lines.
+        - The first edit block must include the filename in the '--- search filename' line. Subsequent blocks for the same file can use '--- search' without the filename.
+        - Search block: Include enough contiguous lines to uniquely identify the source context.
+        - Replace block: Provide complete replacement content
+        - Output only edit blocks. Do not add line numbers these are not part of the text of the file.
+
+        ## ruff check output
+        
+        ruff check {fname.name}
 
         ```
         __output__
         ```
         """)
     msg = msg.replace("__output__", lint_output)
+    msg += vfs.get_file(fname).as_markdown()
+
     # msg = msg.replace("__code__", fname.read_text(encoding="utf-8"))
     console.print(Markdown(msg))
-    llm = LLM(OpenAIModel.O4, dev_inst, True)
+    llm = LLM(OpenAIModel.GPT, dev_inst, True)
     history = MessageHistory()
     history.append(user_message(msg))
     response = llm.create(history)
     print_response(response)
+    r, content, typ = extract_text_content(response)
+    blocks = cu.extract_markdown_blocks(content)
+    if blocks:
+        msg2 = vfs.apply_edits(blocks)
+        vfs.save_all()
+        success, lint_output = cu.run_linter(fname)
+        if success:
+            msg2 += "\n\nsummarise the changes. do not repeat the code."
+            history.append(user_message(msg2))
+            response = llm.create(history)
+            print_response(response)
+        else:
+            console.print(lint_output, style="red")
+    else:
+        console.print("no markdown blocks found", style="red")
+    console.print(llm.usage)
 
 
 def mypy_workflow(fname: Path):
-    external_file_map[fname.name] = fname
+    vfs.create_mapping(fname)
     success, output = cu.run_mypy(fname)
     # cu.print_block(s, True)
     if success:
@@ -1110,29 +1150,29 @@ def mypy_workflow(fname: Path):
     The assistant is Marvin a senior Python developer. 
     You have access to 2 tools:
     - read_file: use the read_file tool to read a file.
-    - apply_diff: use apply_diff tool to makes edits to sections of a text file line by line. Do not include line numbers in the diff as they are not part of the source text.
 
     the current datetime is {datetime.now().isoformat()}
     """)
     msg = dedent(f"""\
-        task: fix mypy errors
+        task: review mypy errors
 
-        instructions: 
-        - understand the root cause of the error
-        - edit the file to fix the errors
-        - minimize the number of individual edits by grouping changes to nearby lines into a single operation
-        - summarise the changes for the user. do not repeat the code
+        instructions:
+        - for each error understand the root cause of the error
+        - decide whether the error can be ignored
+        - if it is possible to fix the error propose a code change.
 
         ## mypy output
 
-        > mypy {fname.name}
+        mypy {fname.name}
 
         ```
         __output__
         ```
         """)
     msg = msg.replace("__output__", output)
+    msg += vfs.get_file(fname).as_markdown()
     console.print(Markdown(msg))
+
     llm = LLM(OpenAIModel.GPT, dev_inst, True)
     history = MessageHistory()
     history.append(user_message(msg))
@@ -1143,7 +1183,7 @@ def mypy_workflow(fname: Path):
 def test_code_edit():
     dev_inst = dedent(f"""\
     ## Role
-    Expert Python coding assistant. You work autonomously to complete the user requests using the tools provided. Limit your changes to only those explicitly needed for the task.
+    The assistant is a web design assistant. You work autonomously to complete the user requests using the tools provided. Limit your changes to only those explicitly needed for the task.
                 
     ## Available Tools
     
@@ -1152,67 +1192,75 @@ def test_code_edit():
     Set *window_size* = 0 to read entire file
     Set *show_line_numbers* = True to prefix each line with its line number.
 
-    - apply_edits(str) - the set of changes to be applied to a text file. The changes are written as one or more search-replace blocks
-
-    ## How to use the apply_edits tool
+    ## How to format edits
     Output structured edits in this exact format:
                       
-    ---search filename
+    ```
+    --- search filename
     context line 1
     line 2
-    ---replace
+    --- replace
     context line 1
     inserted line
-    ---end
+    --- end
+    ```
     
     Rules:
-    - All edit blocks are delimited by the lines ---search, ---replace, ---end
-    - Multiple edit blocks may be passed in a single tool call
-    - The first edit block must include the filename in the '---search filename' . filename can be omitted for subsequent blocks for the same file
-    - Search block: Include enough contiguous lines to uniquely identify the source location. Avoid repeating large blocks of unchanged lines.
+    - All edit blocks must appear within a markdown block.
+    - Create targeted changes and avoid repeating large blocks of unchanged lines.
+    - The first edit block must include the filename in the '--- search filename' line. Subsequent blocks for the same file can use '--- search' without the filename.
+    - Search block: Include enough contiguous lines to uniquely identify the source context.
     - Replace block: Provide complete replacement content
 
     the current datetime is {datetime.now().isoformat()}
     """)
-    llm = LLM(OpenAIModel.GPT, "", True)
-    llm.instructions = dev_inst
     history = MessageHistory()
     dev_msg = developer_message(dev_inst)
     history.append(dev_msg)
     contents = dedent("""\
-        #!/usr/bin/python3
-        from rich.console import Console
-            
-        def fib(n):
-            return n if n < 2 else fib(n - 1) + fib(n - 2)
-
-        def collatz(n):
-            while n > 1:
-                yield n
-                n = n // 2 if n % 2 == 0 else 3 * n + 1
-            yield n
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title></title>
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+          </head>
+          <body>
+            <main>
+            </main>
+          </body>
+        </html>
         """)
-    vfs.create_unmapped("temp.py", contents)
 
     prompt = dedent(f"""\
         ## task
-        modify the Python code temp.py. The code should target Python 3.12.
+        edit the file template.html to make the text colour #586e75 and background #fdf6e3
+        add some page content about the planet Mercury.
+        Identify all the places in the source file where changes are necessary. Remember to update the title.
         
-        ## instructions
-        - add type annotations for python 3.12
-        - make targetted changes directly to the file
-        - summarise the changes for the user. do not repeat the entire code
+        ## output format
+        Output the changes as structured edit blocks. Avoid repeating unchanged lines
         """)
+    vfs.create_unmapped("template.html", contents)
+    prompt += vfs.get_file("template.html").as_markdown()
     # vfs.create_mapping(Path("~/Documents/chats/temp.py").expanduser())
-    vfs.create_unmapped("temp.py", contents)
 
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
+
+    llm = LLM(OpenAIModel.GPT_MINI, "", True)
+    llm.instructions = dev_inst
     response = llm.create(history)
     print_response(response)
-    cu.print_block(vfs.read_text("temp.py"), line_numbers=True)
     vfs.save_all()
+    r, t, typ = extract_text_content(response)
+    if blocks := cu.extract_markdown_blocks(t):
+        s = vfs.apply_edits(blocks)
+        cu.print_block(vfs.read_text("template.html"), line_numbers=True)
+        console.print(s, style="yellow")
+
     console.print(f"{llm.usage}")
 
 
@@ -1287,6 +1335,7 @@ def unittest_workflow(fname: Path):
     cu.save_content(prompt)
     history.append(msg)
     print_message(msg)
+    exit()
     response = llm.create(history)
     print_response(response)
     vfs.save_all()
@@ -1574,8 +1623,8 @@ def main():
     # test_solve_visual_maths_problem()
     # structured_output_message()
     git_workflow()
-    # lint_workflow(Path("/code/scripts/chat.py"))
-    # mypy_workflow(Path("/code/scripts/toolutils.py"))
+    # lint_workflow(Path("~/code/scripts/toolutils.py").expanduser())
+    # mypy_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # unittest_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # test_code_edit()
     # test_apply_diff()

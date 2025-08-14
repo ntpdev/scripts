@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import unittest
-from textwrap import dedent
 from pathlib import Path
+from textwrap import dedent
 
+from chatutils import extract_markdown_blocks
 from toolutils import EditItem, VirtualFile, VirtualFileSystem, edit_file_impl, parse_edits
 
 
@@ -210,151 +211,149 @@ class TestVirtualFileSystem(unittest.TestCase):
             print(s)
 
     def test_apply_edits_not_inside_a_block(self):
-        FNAME = "test"
+        fname = "test"
         vfs = VirtualFileSystem()
-        vfs.create_unmapped(FNAME, "pear\napple\nbanana")
+        vfs.create_unmapped(fname, "pear\napple\nbanana")
 
         input_text = dedent("""\
-            <<<<<<<
+            --- search
             apple
-            =======
+            --- replace
             APPLE
-            >>>>>>>
+            --- end
             """)
-        s = vfs.apply_edits(input_text)
+        blocks = extract_markdown_blocks(input_text)
+        s = vfs.apply_edits(blocks)
+
         self.assertTrue(s.startswith("ERROR:"))
 
     def test_apply_edits_no_diff(self):
-        FNAME = "test"
+        fname = "test"
         vfs = VirtualFileSystem()
-        vfs.create_unmapped(FNAME, "pear\napple\nbanana")
+        vfs.create_unmapped(fname, "pear\napple\nbanana")
 
         input_text = dedent("""\
             ```
-            <<<<<<<
+            --- search
             apple
-            =======
+            --- replace
             APPLE
-            >>>>>>>
+            --- end
             ```
             """)
-        s = vfs.apply_edits(input_text)
+        blocks = extract_markdown_blocks(input_text)
+        s = vfs.apply_edits(blocks)
         self.assertTrue(s.startswith("ERROR:"))
 
     def test_apply_edits_single(self):
-        FNAME = "test"
+        fname = "test"
         vfs = VirtualFileSystem()
-        vfs.create_unmapped(FNAME, "pear\napple\nbanana")
+        vfs.create_unmapped(fname, "pear\napple\nbanana")
 
         input_text = dedent("""\
             ```diff
-            test
-            <<<<<<<
+            --- search test
             apple
-            =======
+            --- replace
             APPLE
-            >>>>>>>
+            --- end
             ```
             """)
-        s = vfs.apply_edits(input_text)
+        blocks = extract_markdown_blocks(input_text)
+        s = vfs.apply_edits(blocks)
         self.assertTrue(s.startswith("SUCCESS:"))
 
-        xs = vfs.read_text(FNAME)
+        xs = vfs.read_text(fname)
         self.assertEqual(xs, ["pear", "APPLE", "banana"])
 
     def test_apply_edits_multiple(self):
-        FNAME = "foo.py"
-        FNAME2 = "bar.py"
+        fname = "foo.py"
+        fname2 = "bar.py"
         vfs = VirtualFileSystem()
-        vfs.create_unmapped(FNAME, "pear\napple\nbanana")
-        vfs.create_unmapped(FNAME2, "pear\napple\nbanana")
+        vfs.create_unmapped(fname, "pear\napple\nbanana")
+        vfs.create_unmapped(fname2, "pear\napple\nbanana")
 
         input_text = dedent("""\
-            ```diff
-            foo.py
-            <<<<<<<
+            ```
+            --- search foo.py
             apple
-            =======
+            --- replace
             APPLE
-            >>>>>>>
+            --- end
             ```
                             
-            ```diff
-            bar.py
-            <<<<<<<
+            ```
+            --- search bar.py
             apple
-            =======
+            --- replace
             banana
               apple
-            >>>>>>>
+            --- end
             ```
 
             ```diff
-            foo.py
-            <<<<<<<
+            --- search foo.py
             APPLE
-            =======
+            --- replace
             APPLES
-            >>>>>>>
+            --- end
             ```
             """)
-        s = vfs.apply_edits(input_text)
+        blocks = extract_markdown_blocks(input_text)
+        s = vfs.apply_edits(blocks)
         self.assertTrue(s.startswith("SUCCESS:"))
 
-        xs = vfs.read_text(FNAME)
+        xs = vfs.read_text(fname)
         self.assertEqual(xs, ["pear", "APPLES", "banana"])
 
-        ys = vfs.read_text(FNAME2)
+        ys = vfs.read_text(fname2)
         self.assertEqual(ys, ["pear", "banana", "  apple", "banana"])
 
 
 class TestParseEdits(unittest.TestCase):
     def test_filename_extraction(self):
         input_str = dedent("""
-            file1.txt
-            <<<<<<<
+            --- search file1.txt
             old line 1
             old line 2
-            =======
+            --- replace
             new line 1
             new line 2
-            >>>>>>>
-        """).strip()
+            --- end
+            """).strip()
         edits = parse_edits(input_str)
         self.assertEqual(len(edits), 1)
         self.assertEqual(edits[0].filename, "file1.txt")
 
     def test_search_and_replace_blocks(self):
         input_str = dedent("""
-            file2.txt
-            <<<<<<<
+            --- search file2.txt
             foo
             bar
-            =======
+            --- replace
             baz
             qux
-            >>>>>>>
-        """).strip()
+            --- end
+            """).strip()
         edits = parse_edits(input_str)
         self.assertEqual(edits[0].search, ["foo", "bar"])
         self.assertEqual(edits[0].replace, ["baz", "qux"])
 
     def test_multiple_edits(self):
         input_str = dedent("""
-            file3.txt
-            <<<<<<<
+            --- search file3.txt
             a
-            =======
+            --- replace
             b
-            >>>>>>>
+            --- end
             ignore
-            <<<<<<<
+            --- search
             x
             y
-            =======
+            --- replace
             z
-            >>>>>>>
-        """).strip()
+            --- end
+            """).strip()
         edits = parse_edits(input_str)
         self.assertEqual(len(edits), 2)
         self.assertEqual(edits[0].search, ["a"])
@@ -364,22 +363,23 @@ class TestParseEdits(unittest.TestCase):
 
     def test_no_filename(self):
         input_str = dedent("""
-            <<<<<<<
+            --- search
             foo
-            =======
+            --- replace
             bar
-            >>>>>>>
-        """).strip()
+            --- end
+            """).strip()
         edits = parse_edits(input_str)
         self.assertEqual(edits[0].filename, "")
 
     def test_list_input(self):
-        input_list = ["file4.txt", "<<<<<<<", "old", "=======", "new", ">>>>>>>>"]
+        input_list = ["--- search file4.txt", "old", "--- replace", "new", "--- end"]
         edits = parse_edits(input_list)
         self.assertEqual(len(edits), 1)
-        self.assertEqual(edits[0].filename, "file4.txt")
-        self.assertEqual(edits[0].search, ["old"])
-        self.assertEqual(edits[0].replace, ["new"])
+        e = edits[0]
+        self.assertEqual(e.filename, "file4.txt")
+        self.assertEqual(e.search, ["old"])
+        self.assertEqual(e.replace, ["new"])
 
 
 class TestExtractErrorLocations(unittest.TestCase):
@@ -388,7 +388,7 @@ class TestExtractErrorLocations(unittest.TestCase):
         # error_message = r"""
         # ERROR
 
-        # ======================================================================
+        # --- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace
         # ERROR: test_simple_replacement (tests.test_toolutils.TestEditFileImpl.test_simple_replacement)
         # ----------------------------------------------------------------------
         # Traceback (most recent call last):
