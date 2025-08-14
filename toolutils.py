@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import ast
 import re
+import itertools
 from dataclasses import dataclass
+from collections import defaultdict
 from pathlib import Path
 from rich.console import Console
 
@@ -27,8 +29,21 @@ class ErrorLocation:
 class EditItem:
     search: list[str]
     replace: list[str]
+    filename: str = ""
     start_position: int = -1
     end_position: int = -1
+
+    def asDiffBlock(self) -> str:
+        """
+        Convert the EditItem back to a diff block string.
+        """
+        lines = []
+        lines.append("```diff\n<<<<<<<")
+        lines.extend(self.search)
+        lines.append("=======")
+        lines.extend(self.replace)
+        lines.append(">>>>>>>>\n```\n")
+        return "\n".join(lines)
 
 
 class VirtualFile:
@@ -90,7 +105,7 @@ class VirtualFile:
     def write_text(self) -> str:
         """Writes the current content back to the underlying file if not read-only."""
         if self.read_only or not self.modified:
-            return f"SUCCESS: no changes written to {self.name}"
+            return f"SUCCESS: file was not modified '{self.name}'"
 
         try:
             self.path.write_text("\n".join(self.lines) + "\n", encoding="utf-8")  # Add newline back at the end of the file
@@ -101,17 +116,20 @@ class VirtualFile:
 
     def edit(self, edits: list[EditItem]) -> str:
         """
-        Applies a list of EditItem objects to the file lines.
+        Applies patches to the file. returns SUCCESS or ERROR.
         """
-        self._ensure_loaded()
+        try:
+            self._ensure_loaded()
 
-        xs = self.lines
-        for e in edits:
-            xs = edit_file_impl(xs, e)
+            xs = self.lines.copy()
+            for e in edits:
+                xs = edit_file_impl(xs, e)
 
-        self.lines = xs
-        self.modified = True
-        return f"SUCCESS: applied {len(edits)} edit"
+            self.lines = xs
+            self.modified = True
+            return f"SUCCESS: applied {len(edits)} patches to '{self.name}'."
+        except Exception as e:
+            return f"ERROR: failed to apply patch to '{self.name}'. No changes have been made to the file.\n{e}"
 
     def __repr__(self):
         return f"VirtualFile(name='{self.name}', path='{self.path}', modified={self.modified}, read_only={self.read_only}, loaded={self.lines is not None})"
@@ -127,7 +145,7 @@ class VirtualFileSystem:
             self.file_mapping[fn.name] = VirtualFile(path=fn)
             return True
         return False
-    
+
     def create_unmapped(self, fname: str, contents: str) -> bool:
         self.file_mapping[fname] = VirtualFile(name=fname, content=contents)
         return True
@@ -158,12 +176,24 @@ class VirtualFileSystem:
         """Finds a file by name and applies edits to it."""
         return self.get_file(fn).edit(edits)
 
+    def _apply_edits(self, fn: str | Path, edits: list[EditItem]) -> str:
+        return self.get_file(fn).edit(edits)
 
-    def apply_edits(self, fn: str | Path, diff: str) -> str:
-        if edits := parse_edits(diff):
-            return self.edit(fn, edits)
-        return "SUCCESS: no edit blocks found"
-
+    def apply_edits(self, blocks: list[cu.CodeBlock]) -> str:
+        """extract markdown blocks, extract edit instructions and apply to files"""
+        xs = (parse_edits(b.lines) for b in blocks if b.language == "diff")
+        edits = [y for ys in xs for y in ys]
+        if edits:
+            if any(not self.file_mapping.get(e.filename) for e in edits):
+                return "ERROR: patch does not contain a filename. No changes applied."
+            grouped = defaultdict(list)
+            for e in edits:
+                grouped[e.filename].append(e)
+            msgs = []
+            for filename, file_patches in grouped.items():
+                msgs.append(self._apply_edits(filename, file_patches))
+            return "\n".join(msgs)
+        return "ERROR: no edit blocks found. Check blocks are marked as diff"
 
     def save_all(self) -> dict[str, str]:
         """Saves all modified, non-read-only files."""
@@ -173,9 +203,9 @@ class VirtualFileSystem:
             if virtual_file.modified and not virtual_file.read_only:
                 save_results[file_name] = virtual_file.write_text()
             elif virtual_file.modified and virtual_file.read_only:
-                save_results[file_name] = f"Skipped saving '{file_name}': Read-only file."
+                save_results[file_name] = f"File '{file_name}' not saved as it is read-only."
             else:
-                save_results[file_name] = f"Skipped saving '{file_name}': Not modified."
+                save_results[file_name] = f"File '{file_name}' not saved as it has not been modified."
         return save_results
 
     def __repr__(self):
@@ -206,11 +236,11 @@ def update_edit_position(source: list[str], edit: EditItem) -> None:
     """
     matches = find_block(source, edit.search)
     if (count := len(matches)) == 0:
-        raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
+        raise ValueError(f"No occurrences of search block found. Failed patch\n\n{edit.asDiffBlock()}")
 
     if count > 1:
         xs = [start for start, _ in matches]
-        raise ValueError(f"Multiple ({count}) matches found at line numbers {xs}. Search pattern: {edit.search!r}")
+        raise ValueError(f"Multiple ({count}) matches found at line numbers {xs}. Add more context lines to search block. Failed patch\n\n{edit.asDiffBlock()}")
 
     edit.start_position, edit.end_position = matches[0]
 
@@ -245,6 +275,7 @@ def edit_file_impl(source: list[str], edit: EditItem) -> list[str]:
 
 
 def edit_file(filename: Path, edits: list[EditItem]) -> str:
+    """apply edits ignoring filename in edits"""
     lines = filename.read_text(encoding="utf-8").splitlines()
     for e in edits:
         lines = edit_file_impl(lines, e)
@@ -253,51 +284,62 @@ def edit_file(filename: Path, edits: list[EditItem]) -> str:
     return f"success: applied {len(edits)} edits at line numbers {xs} to {filename.name}"
 
 
-def parse_edits(input: str) -> list[EditItem]:
+# def extract_content_markdown_blocks(input: str | list[str], format: str = "diff") -> list[str]:
+#     lines = input.splitlines() if isinstance(input, str) else input
+#     block = []
+#     inside = False
+#     start_token = "```" + format
+#     for s in lines:
+#         if s.strip() == start_token:
+#             inside = True
+#         elif inside and s.strip() == "```":
+#             inside = False
+#         else:
+#             if inside:
+#                 block.append(s)
+#     return block
+
+
+def parse_edits(input: str | list[str]) -> list[EditItem]:
     """
     Parse a multi-line string into a list of EditItems
     """
-    lines = input.split('\n')
+
+    def collect_lines_until(start_idx: int, stop_prefix: str) -> tuple[list[str], int]:
+        collected = []
+        i = start_idx
+
+        while i < N and not lines[i].strip().startswith(stop_prefix):
+            collected.append(lines[i])
+            i += 1
+
+        # Skip the stop line if we found it
+        if i < N and lines[i].strip().startswith(stop_prefix):
+            i += 1
+
+        return collected, i
+
+    lines = input.splitlines() if isinstance(input, str) else input
+    N = len(lines)
     edit_items = []
     i = 0
-    
-    while i < len(lines):
-        line = lines[i].strip()
-        
+    filename = ""
+
+    while i < N:
         # Look for start of edit block
-        if line.startswith("<<<<<<<"):
-            search_lines = []
-            replace_lines = []
+        s = lines[i].strip()
+        if s.startswith("<<<<<<<"):
             i += 1
-            
-            # Collect search lines until we hit the separator
-            while i < len(lines) and lines[i].strip() != "=======":
-                search_lines.append(lines[i])
-                i += 1
-            
-            # Skip the separator line
-            if i < len(lines) and lines[i].strip() == "=======":
-                i += 1
-            
-            # Collect replace lines until we hit the end marker
-            while i < len(lines) and not lines[i].strip().startswith(">>>>>>>"):
-                replace_lines.append(lines[i])
-                i += 1
-            
-            # Skip the end marker
-            if i < len(lines) and lines[i].strip().startswith(">>>>>>>"):
-                i += 1
-            
+            search_lines, i = collect_lines_until(i, "=======")
+            replace_lines, i = collect_lines_until(i, ">>>>>>>")
+
             # Create EditItem with the collected lines
-            edit_items.append(EditItem(
-                search=search_lines,
-                replace=replace_lines,
-                start_position=-1,
-                end_position=-1
-            ))
+            edit_items.append(EditItem(search=search_lines, replace=replace_lines, filename=filename))
         else:
+            if not filename and s:
+                filename = s
             i += 1
-    
+
     return edit_items
 
 

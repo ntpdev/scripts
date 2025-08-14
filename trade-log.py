@@ -59,7 +59,7 @@ class Blotter:
         trade["Net"] = prf - 1.24
         self.trades.append(trade)
 
-    def find_matching(self, symbol: str, action: str):
+    def find_matching(self, symbol: str, action: str) -> int:
         """FIFO match on open positions"""
         opening_action = "SLD" if action == "BOT" else "BOT"
         found = -1

@@ -397,12 +397,12 @@ def check_overlap(p, spec):
 
 
 if __name__ == "__main__":
-    # whole_day_concat(Path("c:/temp/ultra"), 'ztick-nyse*.csv', 'ztick-nyse')
+    # whole_day_concat(Path("c:/temp/z"), 'esu5*.csv', 'zesu5')
     # test_tick()
-    # check_overlap(Path.home() / "Documents" / "data", "esu5*.csv")
-    check_overlap(Path("c:/temp/ultra"), "zesu5*.csv")
-    df_es = load_overlapping_files(Path("c:/temp/ultra"), "zesu5*.csv")
-    # df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esu5*.csv")
+    check_overlap(Path.home() / "Documents" / "data", "nqu5*.csv")
+    # check_overlap(Path("c:/temp/z"), "esu5*.csv")
+    # df_es = load_overlapping_files(Path("c:/temp/ultra"), "esu5*.csv")
+    df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esu5*.csv")
     print_summary(df_es)
     # compare_emas()
     # df_tick = simple_concat('ztick-nyse*.csv', 'x')

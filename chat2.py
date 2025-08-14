@@ -27,7 +27,8 @@ from rich.pretty import pprint
 
 from chatutils import (
     execute_script,
-    extract_code_block,
+    extract_markdown_blocks,
+    extract_first_code_block,
     load_textfile,
     input_multi_line,
     make_fullpath,
@@ -35,6 +36,9 @@ from chatutils import (
     translate_latex,
     translate_thinking,
 )
+
+from toolutils import (VirtualFileSystem)
+
 from ftutils import ftutils_functions  # retrieve_headlines, retrieve_article, retrieve_stock_quotes, get_function_map
 
 LOG_FILE = make_fullpath("chat-log.json")
@@ -565,7 +569,7 @@ def check_and_process_tool_call(client: LLM, history: MessageHistory, response: 
 def check_and_process_code_block(history: MessageHistory) -> bool:
     """check for a code block, execute it and add output as user msg"""
     if msg := next(e for e in reversed(history.messages) if e.role == "assistant"):
-        code = extract_code_block(msg.get_content(), "```")
+        code = extract_first_code_block(msg.get_content())
         if code and code.language:
             if output := execute_script(code):
                 msg2 = user_message(text="## output from running script\n" + output + "\n")
@@ -573,6 +577,32 @@ def check_and_process_code_block(history: MessageHistory) -> bool:
                 prt(msg2)
                 return True
     return False
+
+
+def check_and_process_diff_blocks(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
+    for choice in response.choices:
+        blocks = extract_markdown_blocks(choice.message.content)
+        if any(b for b in blocks if b.language == "diff"):
+            vfs = VirtualFileSystem()
+            p = Path("/code/scripts/fib2.py")
+            vfs.create_mapping(p)
+            r = vfs.apply_edits(blocks)
+    #           gpt-oss on groq returns reasoning trace in choice.message.reasoning:
+            console.print(r)
+            if r.startswith("SUCCESS:"):
+                vfs.save_all()
+                msg = user_message(r + "\n\nSummarise the changes made. Do not repeat the source code.")
+                prt(msg)
+                history.append(msg)
+            else:
+                msg = user_message(r)
+                prt(msg)
+                history.append(user_message(r))
+            # process the original response before generating a new one
+            update_usage(response.usage)
+            prt(msg, response.model)
+            response = client.chat(history)
+    return response
 
 
 def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -> bool:
@@ -633,6 +663,11 @@ def sys_msg(model_name: str) -> Message:
     return developer_message(m) if model_name.startswith("o") else system_message(m)
 
 
+def update_usage(ru):
+    tokens.update(ru.prompt_tokens, ru.completion_tokens)
+    print(f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}")
+
+
 def chat(llm_name, use_tool):
     # useTool pass llm_name.startswith('gpt')
     global code1
@@ -659,6 +694,7 @@ def chat(llm_name, use_tool):
                 prt(msg)
             response = client.chat(history)
             response = check_and_process_tool_call(client, history, response)
+            response = check_and_process_diff_blocks(client, history, response)
             reason = response.choices[0].finish_reason
             if reason != "stop":
                 console.print(f"chat completion finish_reason {reason}", style="red")
@@ -669,11 +705,7 @@ def chat(llm_name, use_tool):
                 history.append(msg)
                 prt(msg, response.model)
 
-            ru = response.usage
-            tokens.update(ru.prompt_tokens, ru.completion_tokens)
-            # pprint(ru)
-            # pprint(tokens)
-            print(f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}")
+            update_usage(response.usage)
 
     if len(history.messages) > 2:
         history.save(LOG_FILE)

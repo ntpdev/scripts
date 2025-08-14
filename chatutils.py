@@ -158,44 +158,35 @@ def save_and_execute_powershell(code: CodeBlock):
         return None, str(e)
 
 
-def search_for_language(s: str) -> str:
-    s_lower = s.lower()
-    return next((lang for lang in ["python", "bash", "powershell"] if lang in s_lower), "")
-
-
-def extract_code_block(contents: str, sep: str) -> CodeBlock | None:
-    """extracts the first code block"""
-    xs = contents.splitlines()
-    inside = False
-    code = None
-    for x in xs:
-        if x.strip().startswith(sep):
-            inside = not inside
-            if inside:
-                code = CodeBlock(x.strip()[len(sep) :].lower(), [])
-            else:
-                if code is not None:
-                    if len(code.language) == 0:
-                        code.language = search_for_language(contents)
-                return code
+def extract_markdown_blocks(contents: str | list[str], sep: str = "```") -> list[CodeBlock]:
+    lines = contents.splitlines() if isinstance(contents, str) else contents
+    blocks = []
+    i = 0
+    N = len(lines)
+    while i < N:
+        line = lines[i].strip()
+        if line.startswith(sep):
+            lang = line[len(sep):].strip().lower()
+            i += 1
+            body_start = i
+            while i < N and not lines[i].strip().startswith(sep):
+                i += 1
+            blocks.append(CodeBlock(language=lang, lines=lines[body_start:i]))
+            i += 1  # skip closing sep
         else:
-            if inside and code is not None:
-                # infer language based on content
-                if (len(code.language) == 0) and ("print(" in x or "import" in x):
-                    code.language = "python"
-                # check for line with name of language why?
-                em = search_for_language(x)
-                if len(em) > 0:
-                    code.language = em
-                else:
-                    code.lines.append(x)
+            i += 1
+    return blocks    
 
-    return code
+
+def extract_first_code_block(contents: str | list[str], sep: str = "```") -> CodeBlock | None:
+    """extracts the first code block"""
+    xs = extract_markdown_blocks(contents, sep)
+    return xs[0] if xs else None
 
 
 def execute_python_script(code: str) -> str:
     r = execute_script(CodeBlock("python", code.splitlines()))
-    return r if r else "SUCCESS: script executed successfully but there was no output. include a print statement"
+    return r or "SUCCESS: script executed successfully but there was no output. include a print statement"
 
 
 def execute_script(code: CodeBlock):

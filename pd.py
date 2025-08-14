@@ -260,7 +260,7 @@ if __name__ == "__main__":
     # test()
     # p = Path("c:/temp/ultra")
     p = Path.home() / "Documents" / "data"
-    df = load_overlapping_files(p, "esu5*.csv")
+    df = load_overlapping_files(p, "nqu5*.csv")
     print_summary(df)
     di = day_index(df)
     row = di.iloc[-1]
