@@ -3,6 +3,7 @@ import ast
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 from rich.console import Console
@@ -17,12 +18,10 @@ class ErrorLocation:
     file_path: Path
     line_number: int
     function_name: str
-    source: list[str] | None = None
 
-    def get_source(self) -> list[str]:
-        if self.source is None:
-            self.source = get_source_code(self.file_path, self.function_name)
-        return self.source
+    @cached_property
+    def source_code(self) -> list[str]:
+        return get_source_code(self.file_path, self.function_name)
 
 
 @dataclass
@@ -35,7 +34,7 @@ class EditItem:
 
     def as_diff_block(self) -> str:
         """
-        Convert the EditItem back to a diff block string.
+        Convert the EditItem back to a search block string.
         """
         lines = []
         lines.append(f"```\n--- search {self.filename}")
@@ -52,14 +51,13 @@ class VirtualFile:
             self.name = name
             self.path = None
             self.lines = content.splitlines()
-            self.read_only = True
         elif path:
             self.name = path.name
             self.path = path
             self.lines = []
-            self.read_only = read_only
         else:
             raise ValueError("Either 'path' or both 'name' and 'content' must be provided")
+        self.read_only = read_only
         self.modified = False
 
     def _ensure_loaded(self) -> None:
@@ -145,6 +143,15 @@ class VirtualFileSystem:
     def __init__(self):
         self.file_mapping: dict[str, VirtualFile] = {}
 
+    def __len__(self):
+        return len(self.file_mapping)
+    
+    def __repr__(self):
+        return f"VirtualFileSystem(files={list(self.file_mapping.keys())})"
+
+    def is_empty(self) -> bool:
+        return not self.file_mapping
+
     def create_mapping(self, fn: Path) -> bool:
         """Checks if fn exists and creates a VirtualFile. Returns True if successful, False otherwise."""
         if fn.is_file():
@@ -153,7 +160,8 @@ class VirtualFileSystem:
         return False
 
     def create_unmapped(self, fname: str, contents: str) -> bool:
-        self.file_mapping[fname] = VirtualFile(name=fname, content=contents)
+        """Creates a VirtualFile with the given name and contents."""
+        self.file_mapping[fname] = VirtualFile(name=fname, content=contents, read_only=False)
         return True
 
     def get_file(self, fname: str | Path) -> VirtualFile:
@@ -161,16 +169,14 @@ class VirtualFileSystem:
         Retrieves a VirtualFile by name or path.
         Raises ValueError if no mapping is found.
         """
-        p = fname if isinstance(fname, Path) else Path(fname)
+        filename = fname.name if isinstance(fname, Path) else fname
 
-        vf = self.file_mapping.get(p.name)
-
-        if vf is None:
+        if filename not in self.file_mapping:
             err = f"Error: File not found {fname}"
             console.print(err, style="red")
             raise ValueError(err)
 
-        return vf
+        return self.file_mapping[filename]
 
     def read_text(self, fn: str | Path, line_number: int = 1, window_size: int = 50, show_line_numbers: bool = False) -> list[str]:
         """
@@ -182,38 +188,47 @@ class VirtualFileSystem:
         """Finds a file by name and applies edits to it."""
         return self.get_file(fn).edit(edits)
 
-    def _apply_edits(self, fn: str | Path, edits: list[EditItem]) -> str:
-        return self.get_file(fn).edit(edits)
+    # def _apply_edits(self, fn: str | Path, edits: list[EditItem]) -> str:
+    #     return self.get_file(fn).edit(edits)
 
     def apply_edits(self, blocks: list[cu.CodeBlock]) -> str:
-        """extract markdown blocks, extract edit instructions and apply to files"""
-        if edits := parse_edits([s for b in blocks for s in b.lines]):
-            if any(not self.file_mapping.get(e.filename) for e in edits):
-                return "ERROR: patch does not contain a filename. No changes applied."
-            grouped = defaultdict(list)
-            for e in edits:
-                grouped[e.filename].append(e)
-            msgs = []
-            for filename, file_patches in grouped.items():
-                msgs.append(self._apply_edits(filename, file_patches))
-            return "\n".join(msgs)
-        return "ERROR: no edit blocks found. Check blocks are marked as diff"
+        """Flattens text from markdown blocks and creates a list of edits. Groups edits by file and applies them."""
+        edits = parse_edits([s for b in blocks for s in b.lines])
+        if not edits:
+            return "ERROR: no edit blocks found."
+        
+        # Validate all files exist and are writable
+        for edit in edits:
+            virtual_file = self.file_mapping.get(edit.filename)
+            if not virtual_file:
+                return f"ERROR: file not found '{edit.filename}'"
+            if virtual_file.read_only:
+                return f"ERROR: file '{edit.filename}' is read only"
+        
+        # Group edits by filename and apply them
+        grouped = defaultdict(list)
+        for edit in edits:
+            grouped[edit.filename].append(edit)
+        
+        return "\n".join(self.get_file(filename).edit(file_patches) 
+                        for filename, file_patches in grouped.items())
 
     def save_all(self) -> dict[str, str]:
         """Saves all modified, non-read-only files."""
         save_results: dict[str, str] = {}
         console.print("\nSaving all modified files:", style="yellow")
         for file_name, virtual_file in self.file_mapping.items():
-            if virtual_file.modified and not virtual_file.read_only:
-                save_results[file_name] = virtual_file.write_text()
-            elif virtual_file.modified and virtual_file.read_only:
+            if not virtual_file.modified:
+                save_results[file_name] = f"File '{file_name}' not saved as it has not been modified."
+            elif virtual_file.read_only:
                 save_results[file_name] = f"File '{file_name}' not saved as it is read-only."
             else:
-                save_results[file_name] = f"File '{file_name}' not saved as it has not been modified."
+                save_results[file_name] = virtual_file.write_text()
+     
         return save_results
 
-    def __repr__(self):
-        return f"VirtualFileSystem(files={list(self.file_mapping.keys())})"
+    def as_markdown(self) -> str:
+        return "\n".join(e.as_markdown() for e in self.file_mapping.values())
 
 
 def find_block(lines: list[str], search: list[str]) -> list[tuple[int, int]]:
@@ -240,6 +255,7 @@ def update_edit_position(source: list[str], edit: EditItem) -> None:
     """
     matches = find_block(source, edit.search)
     if (count := len(matches)) == 0:
+        breakpoint()
         raise ValueError(f"No occurrences of search block found. Failed patch\n\n{edit.as_diff_block()}")
 
     if count > 1:
@@ -256,9 +272,10 @@ def edit_file_impl(source: list[str], edit: EditItem) -> list[str]:
     def count_indentation(s: str) -> int:
         return len(s) - len(s.lstrip())
 
-    cu.print_block(edit.search, True)
-    cu.print_block(edit.replace, True)
+    # cu.print_block(edit.search, True)
+    # cu.print_block(edit.replace, True)
     update_edit_position(source, edit)
+    console.print(f"edit_file_impl: found search block line {edit.start_position}:{edit.end_position} in {edit.filename}")
 
     original_indent = count_indentation(source[edit.start_position])
     replacement = []
@@ -297,29 +314,29 @@ def parse_edits(input: str | list[str]) -> list[EditItem]:
         collected = []
         i = start_idx
 
-        while i < n_lines and not lines[i].strip().startswith(stop_prefix):
+        while i < n and not lines[i].strip().startswith(stop_prefix):
             collected.append(lines[i])
             i += 1
 
         # Skip the stop line if we found it
-        if i < n_lines and lines[i].strip().startswith(stop_prefix):
+        if i < n and lines[i].strip().startswith(stop_prefix):
             i += 1
 
         return collected, i
 
     lines = input.splitlines() if isinstance(input, str) else input
-    n_lines = len(lines)
+    n = len(lines)
     edit_items = []
     i = 0
     filename = ""
 
-    while i < n_lines:
+    while i < n:
         # Look for start of edit block
         s = lines[i].strip()
         if s.startswith("--- search"):
             parts = s.split()
             if len(parts) > 2:
-                filename = filename or parts[2]
+                filename = parts[2]
             i += 1
             search_lines, i = collect_lines_until(i, "--- replace")
             replace_lines, i = collect_lines_until(i, "--- end")
@@ -404,4 +421,4 @@ def extract_error_locations(message: str) -> list[ErrorLocation]:
 
 
 if __name__ == "__main__":
-    print("hello")
+    print("success")

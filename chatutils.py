@@ -7,22 +7,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from textwrap import shorten
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 
+# on Linux clipbaord support with desktop requires xclip
+# sudo apt install xclip
+
 IS_LINUX = sys.platform.startswith("linux")
-console = Console()
 THINK_PATTERN = re.compile("(.*?)<think>(.*?)</think>(.*)", re.DOTALL)
-latex_to_unicode = {
+LATEX_TO_UNICODE = {
+    "alpha": "α",
     "approx": "≈",
+    "beta": "β",
     "dashv": "⊣",
+    "deg": "°",
     "div": "÷",
     "equiv": "≡",
     "exists": "∃",
     "forall": "∀",
+    "gamma": "γ",
     "geq": "≥",
     "iff": "⇔",
     "implies": "⇒",
     "in": "∈",
+    "infty": "∞",
     "land": "∧",
     "leftarrow": "←",
     "leftrightarrow": "↔",
@@ -30,6 +44,7 @@ latex_to_unicode = {
     "lor": "∨",
     "neg": "¬",
     "neq": "≠",
+    "pi": "π",
     "pm": "±",
     "rightarrow": "→",
     "sim": "∼",
@@ -43,6 +58,99 @@ latex_to_unicode = {
     "vdash": "⊢",
     "wedge": "∧",
 }
+
+console = Console()
+
+class ChatInput:
+    def __init__(self):
+        self.history = InMemoryHistory()
+        self.completer = self._create_completer()
+        self.key_bindings = self._create_key_bindings()
+        self.session = PromptSession(
+            completer=self.completer,
+            complete_while_typing=Condition(lambda: self._should_complete()),
+            history=self.history,
+            clipboard=PyperclipClipboard(),
+            multiline=True,
+            key_bindings=self.key_bindings,
+        )
+
+    def _should_complete(self):
+        """Only show completion when current word starts with %"""
+        buffer = get_app().current_buffer
+        word = buffer.document.get_word_before_cursor(WORD=True)
+        return word is not None and word.startswith("%")
+        cursor_pos = app.current_buffer.cursor_position
+        text = app.current_buffer.text
+
+        # Find the start of the current word
+        word_start = cursor_pos
+        while word_start > 0 and text[word_start - 1] not in " \n\t":
+            word_start -= 1
+
+        # Check if current word starts with %
+        current_word = text[word_start:cursor_pos]
+        return current_word.startswith("%")
+
+    def _create_key_bindings(self):
+        """Create key bindings for LaTeX translation"""
+        kb = KeyBindings()
+
+        @kb.add("$")
+        def handle_dollar(event):
+            buffer = event.current_buffer
+            text = buffer.text
+            cursor_pos = buffer.cursor_position
+
+            # Insert the $ character first
+            buffer.insert_text("$")
+
+            # Look for a previous $ to form a LaTeX expression
+            dollar_start = -1
+            for i in range(cursor_pos - 1, -1, -1):
+                if text[i] == "$":
+                    dollar_start = i
+                    break
+
+            if dollar_start != -1:
+                # Extract the content between the dollars
+                latex_content = text[dollar_start + 1 : cursor_pos]
+
+                # Check if it matches any LaTeX symbol
+                if latex_content in LATEX_TO_UNICODE:
+                    # Replace the entire $content$ with the unicode symbol
+                    buffer.cursor_position = dollar_start
+                    buffer.delete(len(latex_content) + 2)  # Delete $content$
+                    buffer.insert_text(LATEX_TO_UNICODE[latex_content])
+
+        return kb
+
+    def _create_completer(self):
+        """Create completer for common commands"""
+        commands = ["%attach", "%drop", "%exec", "%load", "%log", "%resp", "%reset", "%save", "%tmpl", "%tool", "%web"]
+        return WordCompleter(commands, ignore_case=True)
+
+    def get_input(self) -> str:
+        """Get multi-line input from user. Returns 'x' on exit."""
+        try:
+            return self.session.prompt()
+        except (EOFError, KeyboardInterrupt):
+            return "x"
+
+
+def input_multi_line() -> str:
+    """Enhanced input with history, multi-line editing, and command completion"""
+    global chat_input
+    if "chat_input" not in globals():
+        chat_input = ChatInput()
+
+    return chat_input.get_input()
+
+
+def translate_latex(s: str) -> str:
+    for k, v in LATEX_TO_UNICODE.items():
+        s = s.replace("\\" + k, v)
+    return s
 
 
 @dataclass
@@ -163,20 +271,20 @@ def extract_markdown_blocks(contents: str | list[str], sep: str = "```") -> list
     lines = contents.splitlines() if isinstance(contents, str) else contents
     blocks = []
     i = 0
-    N = len(lines)
-    while i < N:
+    n = len(lines)
+    while i < n:
         line = lines[i].strip()
         if line.startswith(sep):
-            lang = line[len(sep):].strip().lower()
+            lang = line[len(sep) :].strip().lower()
             i += 1
             body_start = i
-            while i < N and not lines[i].strip().startswith(sep):
+            while i < n and not lines[i].strip().startswith(sep):
                 i += 1
             blocks.append(CodeBlock(language=lang, lines=lines[body_start:i]))
             i += 1  # skip closing sep
         else:
             i += 1
-    return blocks    
+    return blocks
 
 
 def extract_first_code_block(contents: str | list[str], sep: str = "```") -> CodeBlock | None:
@@ -209,21 +317,6 @@ def execute_script(code: CodeBlock):
         console.print("unrecognised code block found")
 
     return msg.strip()
-
-
-def translate_latex(s: str) -> str:
-    for k, v in latex_to_unicode.items():
-        s = s.replace("\\" + k, v)
-    return s
-
-
-def input_multi_line() -> str:
-    if (inp := input().strip()) != "{":
-        return translate_latex(inp)
-    lines = []
-    while (line := input()) != "}":
-        lines.append(line)
-    return translate_latex("\n".join(lines))
 
 
 def translate_thinking(s: str) -> str:

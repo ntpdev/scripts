@@ -4,7 +4,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from chatutils import extract_markdown_blocks
-from toolutils import EditItem, VirtualFile, VirtualFileSystem, edit_file_impl, parse_edits
+from toolutils import EditItem, VirtualFile, VirtualFileSystem, edit_file_impl, parse_edits, extract_error_locations
 
 
 class TestEditFileImpl(unittest.TestCase):
@@ -301,6 +301,7 @@ class TestVirtualFileSystem(unittest.TestCase):
             """)
         blocks = extract_markdown_blocks(input_text)
         s = vfs.apply_edits(blocks)
+        print(s)
         self.assertTrue(s.startswith("SUCCESS:"))
 
         xs = vfs.read_text(fname)
@@ -339,7 +340,7 @@ class TestParseEdits(unittest.TestCase):
         self.assertEqual(edits[0].search, ["foo", "bar"])
         self.assertEqual(edits[0].replace, ["baz", "qux"])
 
-    def test_multiple_edits(self):
+    def test_multiple_edits_same_file(self):
         input_str = dedent("""
             --- search file3.txt
             a
@@ -358,8 +359,31 @@ class TestParseEdits(unittest.TestCase):
         self.assertEqual(len(edits), 2)
         self.assertEqual(edits[0].search, ["a"])
         self.assertEqual(edits[0].replace, ["b"])
+        self.assertEqual(edits[0].filename, "file3.txt")
         self.assertEqual(edits[1].search, ["x", "y"])
         self.assertEqual(edits[1].replace, ["z"])
+        self.assertEqual(edits[1].filename, "file3.txt")
+
+    def test_multiple_edits_diff_file(self):
+        input_str = dedent("""
+            --- search apple.txt
+            a
+            --- replace
+            b
+            --- end
+            ignore
+            --- search pear.txt
+            x
+            y
+            --- replace
+            z
+            --- end
+            """).strip()
+        edits = parse_edits(input_str)
+        self.assertEqual(len(edits), 2)
+        self.assertEqual(edits[0].filename, "apple.txt")
+        self.assertEqual(edits[1].filename, "pear.txt")
+
 
     def test_no_filename(self):
         input_str = dedent("""
@@ -384,35 +408,36 @@ class TestParseEdits(unittest.TestCase):
 
 class TestExtractErrorLocations(unittest.TestCase):
     def test_extract_error_locations(self):
-        return
-        # error_message = r"""
-        # ERROR
+        error_message = dedent(r"""
+        ERROR
 
-        # --- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace
-        # ERROR: test_simple_replacement (tests.test_toolutils.TestEditFileImpl.test_simple_replacement)
-        # ----------------------------------------------------------------------
-        # Traceback (most recent call last):
-        # File "C:\code\scripts\tests\test_toolutils.py", line 32, in test_simple_replacement
-        #     result = edit_file_impl(original, edit)
-        # File "C:\code\scripts\toolutils.py", line 60, in edit_file_impl
-        #     update_edit_position(source, edit)
-        #     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
-        # File "C:\code\scripts\toolutils.py", line 42, in update_edit_position
-        #     raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
-        # ValueError: No occurrences of search block found. Search pattern: ['line 3x']
+        --- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace--- replace
+        ERROR: test_simple_replacement (tests.test_toolutils.TestEditFileImpl.test_simple_replacement)
+        ----------------------------------------------------------------------
+        Traceback (most recent call last):
+        File "C:\code\scripts\tests\test_toolutils.py", line 32, in test_simple_replacement
+            result = edit_file_impl(original, edit)
+        File "C:\code\scripts\toolutils.py", line 60, in edit_file_impl
+            update_edit_position(source, edit)
+            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+        File "C:\code\scripts\toolutils.py", line 42, in update_edit_position
+            raise ValueError(f"No occurrences of search block found. Search pattern: {edit.search!r}")
+        ValueError: No occurrences of search block found. Search pattern: ['line 3x']
 
-        # ----------------------------------------------------------------------
-        # Ran 9 tests in 0.020s
+        ----------------------------------------------------------------------
+        Ran 9 tests in 0.020s
 
-        # FAILED (errors=1)
-        # """
+        FAILED (errors=1)
+        """)
 
-        # extracted_locations = extract_error_locations(error_message)
+        extracted_locations = extract_error_locations(error_message)
 
-        # self.assertEqual(len(extracted_locations), 3)
-        # self.assertTrue(extracted_locations[0].file_path.exists())
-        # self.assertEqual(extracted_locations[0].line_number, 32)
-        # self.assertEqual(extracted_locations[0].function_name, "test_simple_replacement")
+        self.assertEqual(len(extracted_locations), 3)
+        self.assertEqual(extracted_locations[0].file_path.name, r"C:\code\scripts\tests\test_toolutils.py")
+        self.assertEqual(extracted_locations[0].line_number, 32)
+        self.assertEqual(extracted_locations[0].function_name, "test_simple_replacement")
+        self.assertEqual(extracted_locations[1].line_number, 60)
+        self.assertEqual(extracted_locations[2].line_number, 42)
 
         # for location in extracted_locations:
         #     self.assertGreater(len(location.get_source()), 0)

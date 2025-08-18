@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
-from textwrap import dedent
+from textwrap import dedent, shorten
 from typing import Any, Literal, TypedDict
 
 from openai import OpenAI
@@ -21,7 +21,6 @@ from rich.markdown import Markdown
 from rich.pretty import pprint
 
 import chatutils as cu
-from pd import test
 import toolutils as tu
 
 
@@ -133,8 +132,7 @@ class Message(BaseModel):
             text = getattr(item, "text", None)
             parts.append(text if text is not None else str(item))
         content_str = " ".join(parts)
-        if len(content_str) > 70:
-            content_str = content_str[:67] + "..."
+        content_str = shorten(content_str, 70, placeholder="...")
         colour = role_to_color[self.role.value]
         return f"[{colour}]{self.role.value}: {content_str}[/{colour}]"
 
@@ -346,7 +344,7 @@ class LLM:
         max_tool_calls = 15
         while max_tool_calls and any(is_tool_call(e) for e in response.output):
             process_function_calls(history, response)
-            console.print(f"{10 - max_tool_calls}: returning function call results", style="yellow")
+            console.print(f"{15 - max_tool_calls}: returning function call results", style="yellow")
             # send results of function calls back to model
             args["input"] = history.dump()
             response = self._create(args)
@@ -702,36 +700,36 @@ def read_text(filename: str, line_number: int = 1, window_size: int = 50, show_l
 
 def apply_edits(filename: str, edits: str) -> str:
     """
-    Apply search-and-replace edits to the contents of a file using diff-like markers.
+    Apply search-and-replace edits to the contents of a file.
 
-    The `edits` string should contain one or more edit sections in the following format:
+    The `edits` string should contain one or more edit blocks in the following format:
 
-        <<<<<<< search
+        --- search
         line1_to_search
         line2_to_search
-        =======
+        --- replace
         replacement_line1
         replacement_line2
-        >>>>>>> replace
+        --- end
 
     For each edit section:
       The block of text in the file that exactly matches the lines
-      between `<<<<<<< search` and `=======` is replaced by
-      the block with the lines between `=======` and `>>>>>>> replace`.
+      between `--- search` and `--- replace` is replaced by
+      the block with the lines between `--- replace` and `--- end`.
 
     Parameters:
         filename (str):
             Path to the file whose contents will be edited.
         edits (str):
-            Multiline string containing one or more edit sections. Each section
-            uses the markers `<<<<<<< search`, `=======`, and `>>>>>>> replace`.
+            Multiline string containing one or more edit blocks. Each block
+            is delimited by the markers `--- search`, `--- replace` and `--- end`.
 
     Returns:
         str:
             SUCCESS or ERROR.
     """
     try:
-        return vfs.apply_edits(filename, edits)
+        return vfs.apply_edits(filename, cu.CodeBlock(language="", lines=edits.splitlines))
     except Exception as e:
         return f"ERROR: {type(e).__name__}: {e}"
 
@@ -917,7 +915,7 @@ def test_function_calling():
 
     prompts = [
         "a circle is inscribed in a square. the square has a side length of 3 m. what is the area inside the square but not in the circle.",
-        r"find the roots of \(2x^{2}-5x-6\). express to 3 dp",
+        "find the roots of x^3 - 2x^2 -8x - 35 = 0. Show real and complex roots. express to 3 dp",
         "how many days since the first moon landing",
         "which word has more letters 'r' in it - Strawberry or Raspberry",
     ]
@@ -1076,10 +1074,11 @@ def lint_workflow(fname: Path):
         task: fix lint errors
 
         instructions:
-        - the environment is Python 3.12
+        - target Python version 3.12
         - understand the lint errors
         - edit the file to fix the lint errors
         - minimize the number of individual edits by grouping changes to nearby lines into a single operation
+        - do not make any functional changes
 
         ## How to write changes
 
@@ -1123,6 +1122,8 @@ def lint_workflow(fname: Path):
     print_response(response)
     r, content, typ = extract_text_content(response)
     blocks = cu.extract_markdown_blocks(content)
+    if not blocks and content.startswith("---"):
+        blocks = [cu.CodeBlock(language="", lines=content.splitlines())]
     if blocks:
         msg2 = vfs.apply_edits(blocks)
         vfs.save_all()
@@ -1130,13 +1131,14 @@ def lint_workflow(fname: Path):
         if success:
             msg2 += "\n\nsummarise the changes. do not repeat the code."
             history.append(user_message(msg2))
+            print_message(msg2)
             response = llm.create(history)
             print_response(response)
         else:
             console.print(lint_output, style="red")
     else:
         console.print("no markdown blocks found", style="red")
-    console.print(llm.usage)
+    console.print(f"{llm.usage}")
 
 
 def mypy_workflow(fname: Path):
@@ -1233,7 +1235,7 @@ def test_code_edit():
         </html>
         """)
 
-    prompt = dedent(f"""\
+    prompt = dedent("""\
         ## task
         edit the file template.html to make the text colour #586e75 and background #fdf6e3
         add some page content about the planet Mercury.
@@ -1242,15 +1244,26 @@ def test_code_edit():
         ## output format
         Output the changes as structured edit blocks. Avoid repeating unchanged lines
         """)
-    vfs.create_unmapped("template.html", contents)
-    prompt += vfs.get_file("template.html").as_markdown()
+    prompt = dedent("""\
+        ## task
+        cli.py is a skeleton for a command line LLM chat application. The goal of this stage it to implement multi-line text entry from the user.
+        complete the Python code cli.py in the file as per the comments
+        
+        ## output format
+        Output the code changes to cli.py as structured edit blocks. Avoid repeating unchanged lines
+        """)
+
+    # vfs.create_unmapped("template.html", contents)
+    # prompt += vfs.get_file("template.html").as_markdown()
     # vfs.create_mapping(Path("~/Documents/chats/temp.py").expanduser())
+    vfs.create_mapping(Path("~/code/scripts/cli.py").expanduser())
+    prompt += vfs.get_file("cli.py").as_markdown()
 
     msg = user_message(prompt)
     print_message(msg)
     history.append(msg)
 
-    llm = LLM(OpenAIModel.GPT_MINI, "", True)
+    llm = LLM(OpenAIModel.GPT, "", True)
     llm.instructions = dev_inst
     response = llm.create(history)
     print_response(response)
@@ -1258,8 +1271,15 @@ def test_code_edit():
     r, t, typ = extract_text_content(response)
     if blocks := cu.extract_markdown_blocks(t):
         s = vfs.apply_edits(blocks)
-        cu.print_block(vfs.read_text("template.html"), line_numbers=True)
+        cu.print_block(vfs.read_text("cli.py"), line_numbers=True)
         console.print(s, style="yellow")
+        if s.startswith("SUCCESS"):
+            vfs.save_all()
+            msg = user_message(s + "\n\nSummarise the change for the user. Do not repeat the code.")
+            print_message(msg)
+            history.append(msg)
+            response = llm.create(history)
+            print_response(response)
 
     console.print(f"{llm.usage}")
 
@@ -1268,54 +1288,59 @@ def unittest_workflow(fname: Path):
     testname = fname.parent / f"tests/test_{fname.name}"
     vfs.create_mapping(fname)
     vfs.create_mapping(testname)
+    vfs.create_mapping(Path("~/code/scripts/chatutils.py").expanduser())
     success, output = cu.run_python_unittest(fname)
     if success:
         return
 
     dev_inst = dedent(f"""\
-        ## Role
-        Expert Python coding assistant. You work autonomously to complete the users requests using the tools provided. Limit your changes to only those explicitly mentioned.
-                    
-        ## Available Tools
-        
-        - read_text(filename, line_number, window_size, show_line_numbers)  
-        Reads a window of *window_size* lines centered on *line_number* (1-based).
-        use *window_size* = 0 to read entire file
-        use *show_line_numbers* = True to prefix each line with its line number.
+## Role
+The assistant is a python coding assistant. You work in python 3.12. You work autonomously to complete the user requests using the tools provided.
 
-        - apply_edits(filename, edits)  
-        Applies one or more multi line changes to a file.
-        Each change consists of search and replace lines surrounded by the delimiters <<<<<<< ======= >>>>>>>
-        The search lines are matched in the file and replaced with the replace block. Leading spaces are ignored and the tool will automatically match the indentation of the source.
-        The search block should contain at least 1 unmodified line to establish the context.
-        If an error occurs no changes are applied and an error message is returned.
-        A common error is that the search lines do not identify a unique block of code which can be fixed by including more context.
-        Another error is adding prefixes " " or "-" or "+" to each line. This is unnecessary.
+## Available Tools
 
-        <<<<<<< SEARCH
-        context line
-        line to change
-        =======
-        context line
-        replacement line
-        >>>>>>> REPLACE
+- read_text(filename, line_number, window_size, show_line_numbers)  
+Reads a window of *window_size* lines centered on *line_number* (1-based).
+Set *window_size* = 0 to read entire file
+Set *show_line_numbers* = True to prefix each line with its line number.
 
-        the current datetime is {datetime.now().isoformat()}
+## Edit output format
+Output structured edits in this exact format:
+                
+--- search filename
+<contiguous source context to be replaced>
+--- replace
+<complete replacement content for the matched region>
+--- end
+
+Each block starts with the control line '--- search' and ends with '--- end'
+                
+Rules:
+- The first block for a file must use `--- search filename`. Additional blocks for the same file may use `--- search` (no filename).
+- The search block must contain exact, contiguous text copied from the file (no line numbers, no ellipses, no regex). Include enough unique context to avoid accidental matches; prefer 2–5 lines surrounding the change.
+- The replace block is the full intended content for that region (use it to insert, modify, or delete):
+- Insert: include the surrounding context in the search block and add the new lines at the appropriate position in the replace block.
+- Delete: omit the lines to be removed from the replace block.
+- Modify: present the edited lines in the replace block.
+- Create targeted changes; do not repeat large unchanged sections.
+- If no changes are needed, output a single line: NO CHANGES
+                
+the current datetime is {datetime.now().isoformat()}
         """)
-    llm = LLM(OpenAIModel.O4, "", True)
+    llm = LLM(OpenAIModel.GPT, "", True)
     llm.instructions = dev_inst
     history = MessageHistory()
 
-    prompt = dedent(f"""\
-        task: fix unittest errors. The code is fib2.py and associated test test_fib2.py
+    prompt = dedent("""\
+        task: fix unittest errors. The code is toolutils.py and associated test test_toolutils.py
 
         instructions: 
         - understand the error message.
         - read the test code to understand the purpose of the test
         - read relevant source code
         - do not assume the test is correct
-        - fix the source or test or both
-        - summarise the change for the user. do not repeat the code changes.
+        - produce the required edit blocks in the specified format.
+        - Avoid repeating unchanged sections of source code in the search and replace blocks.
 
         ## unittest output
 
@@ -1328,18 +1353,29 @@ def unittest_workflow(fname: Path):
     prompt = prompt.replace("__output__", output)
     errors = tu.extract_error_locations(output)
     for e in errors:
-        s = f"\n## {e.file_path}:{e.line_number}\n\n```python\n{''.join(e.get_source())}\n```\n\n"
+        s = f"\n## {e.file_path}:{e.line_number}\n\n```python\n{''.join(e.source_code)}\n```\n\n"
         prompt += s
     prompt += cu.load_textfile(fname)
     msg = user_message(prompt)
-    cu.save_content(prompt)
+    # cu.save_content(prompt)
     history.append(msg)
     print_message(msg)
     exit()
     response = llm.create(history)
     print_response(response)
-    vfs.save_all()
-    cu.print_block(vfs.read_text(fname.name, line_number=1, window_size=0), line_numbers=True)
+    # vfs.save_all()
+    r, t, typ = extract_text_content(response)
+    if blocks := cu.extract_markdown_blocks(t):
+        s = vfs.apply_edits(blocks)
+        cu.print_block(vfs.read_text(fname.name, line_number=1, window_size=0), line_numbers=True)
+        msg = user_message(f"{s}.\n\nSummarise the change. Do not repeat the source code")
+        history.append(msg)
+        print_message(msg)
+        response = llm.create(history)
+        print_response(response)
+    else:
+        console.print("No changes found", style="yellow")
+
     console.print(f"{llm.usage}", style="green")
 
 
@@ -1551,12 +1587,15 @@ When discussing contentious topics, go beyond media talking points to examine un
 """
 
 
-def process_command(cmd: str, params: str, attachments: list[str]) -> None:
+def process_command(cmd: str, params: str) -> None:
     if cmd == "attach":
-        if s := cu.load_textfile(cu.make_fullpath(params)):
-            attachments.append(s)
+        p = Path(params).expanduser() if params.startswith("~") else Path(params)
+        if vfs.create_mapping(p):
+            console.print(f"attached file {p}", style="green")
+        else:
+            console.print(f"file {p} not found", style="red")
     elif cmd == "lint":
-        p = Path(params + ".py")
+        p = Path(params + ".py").expanduser()
         if p.exists():
             lint_workflow(p)
         else:
@@ -1568,14 +1607,6 @@ def process_command(cmd: str, params: str, attachments: list[str]) -> None:
 def test_chat_loop():
     """a simple multi-turn conversation maintaining coversation state using response.id"""
 
-    def input_multi_line() -> str:
-        if (inp := input().strip()) != "{":
-            return inp
-        lines = []
-        while (line := input()) != "}":
-            lines.append(line)
-        return "\n".join(lines)
-
     dev_inst = f"The assistant is Marvin an AI chatbot. The assistant uses precise language and avoids vague or generic statements. The current date is {datetime.now().isoformat()}"
     # dev_inst = dedent(f"""\
     #     The assistant is Marvin a helpful AI chatbot. Marvin is an expert python programmer.
@@ -1584,30 +1615,28 @@ def test_chat_loop():
     #     keep a track of all important decisions and the reasoning behind them
     #     The current date is {datetime.now().isoformat()}
     #     """)
-    model = LLM(OpenAIModel.O4, use_tools=True)
+    model = LLM(OpenAIModel.GPT_MINI, use_tools=True)
     history = MessageHistory()
     history.append(developer_message(dev_inst))
-    attachments = []
     history.print()
     inp = ""
     while True:
-        inp = input_multi_line()
+        inp = cu.input_multi_line()
         if inp == "x":
             break
         if inp[0] == "%":
             xs = inp.split(maxsplit=1)
-            process_command(xs[0][1:], xs[1], attachments)
+            process_command(xs[0][1:], xs[1])
             continue
 
-        for a in attachments:
-            inp += "\n" + a
+        if vfs:
+            inp += "\n" + vfs.as_markdown()
         console.print(Markdown(f"user:\n\n{inp}\n"), style="green")
         history.append(user_message(inp))
         response = model.create(history)
         console.print(Markdown(f"assistant ({response.model}):\n\n{response.output_text}\n"), style="cyan")
-        attachments.clear()
+        console.print(f"{model.usage}", style="yellow")
 
-    console.print(model.usage, style="green")
     history.print()
     # pprint(history)
 
@@ -1623,7 +1652,7 @@ def main():
     # test_solve_visual_maths_problem()
     # structured_output_message()
     git_workflow()
-    # lint_workflow(Path("~/code/scripts/toolutils.py").expanduser())
+    # lint_workflow(Path("~/code/scripts/chatutils.py").expanduser())
     # mypy_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # unittest_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # test_code_edit()

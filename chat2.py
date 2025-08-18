@@ -4,12 +4,12 @@ import datetime
 import json
 import os
 import platform
-import textwrap
 
 # import sympy # used by eval
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from textwrap import dedent, shorten
 from typing import Any, Literal
 
 import requests
@@ -27,23 +27,22 @@ from rich.pretty import pprint
 
 from chatutils import (
     execute_script,
-    extract_markdown_blocks,
     extract_first_code_block,
-    load_textfile,
+    extract_markdown_blocks,
     input_multi_line,
+    load_textfile,
     make_fullpath,
     save_content,
     translate_latex,
     translate_thinking,
 )
-
-from toolutils import (VirtualFileSystem)
-
 from ftutils import ftutils_functions  # retrieve_headlines, retrieve_article, retrieve_stock_quotes, get_function_map
+from toolutils import VirtualFileSystem
 
 LOG_FILE = make_fullpath("chat-log.json")
 console = Console()
-code1 = None
+# code1 = None
+vfs = VirtualFileSystem()
 role_to_color = {"system": "red", "developer": "red", "user": "green", "assistant": "cyan", "tool": "yellow"}
 FNCALL_SYSMSG = """
 
@@ -58,6 +57,16 @@ tool_ex = """
 </tool_call>
 """
 
+INSTRUCTIONS = dedent("""\
+ [yellow bold]Controls:[/yellow bold]
+ [dim] • Ctrl+J (or Alt+Enter): Submit message[/dim]
+ [dim] • Enter: New line (Enter on empty: quick submit)[/dim]
+ [dim] • Up/Down: Move cursor within the buffer[/dim]
+ [dim] • Alt+Up/Alt+Down or Ctrl+P/Ctrl+N: Browse history[/dim]
+ [dim] • Tab: Command completion[/dim]
+ [dim] • Ctrl+Y: Paste from clipboard[/dim]
+ [dim] • Ctrl+Q or type 'x': Exit[/dim]
+ """)
 
 q = """```python
 from math import sqrt
@@ -322,6 +331,8 @@ class LLM:
         # lmstudio port base_url="http://localhost:1234/v1"
 
     def chat(self, messages: MessageHistory) -> ChatCompletion:
+        """returns the text completion after all tool calls processed."""
+
         def clean_asdict(obj):
             # certain providers groq do not like tool_calls = None in assistant messages so remove None values
             data = asdict(obj)
@@ -329,19 +340,40 @@ class LLM:
 
         supports_temp = self.model.name != "o4-mini"
 
-        args = {"model": self.model.name, "messages": [clean_asdict(m) for m in messages], "max_completion_tokens": 16000 if self.model.reasoning else 4096}
+        args = {"model": self.model.name, "messages": [clean_asdict(m) for m in messages], "max_completion_tokens": 16000 if self.model.reasoning else 8192}
 
         if self.use_tool:
             args["tools"] = [v["defn"] for v in ftutils_functions().values()]
             if supports_temp:
                 args["temperature"] = 0.6
         try:
-            res = self.client.chat.completions.create(**args)
+            response = self.client.chat.completions.create(**args)
+            response = self.check_and_process_tool_call(messages, response)
         except Exception as e:
             console.print(f"Error: {e}", style="red")
             breakpoint()
             raise
-        return res
+        return response
+
+    def check_and_process_tool_call(self, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
+        """check for a tool call and process. If there is no tool call then the original response is returned"""
+        # https://platform.openai.com/docs/guides/function-calling
+        for choice in response.choices:
+            n = 9
+            while choice.finish_reason == "tool_calls" and n:
+                n -= 1
+                # append choice.message to message history
+                history.append(assistant_tool_message(choice.message.tool_calls))
+                for tc in choice.message.tool_calls:
+                    tool_response = process_tool_call(tc)
+                    history.append(tool_response)
+                # reply to llm with tool responses
+                response = self.chat(history)
+                choice = response.choices[0]
+
+            if n == 0:
+                console.print("consecutive tool call limit exceeded", style="red")
+        return response
 
     def toggle_tool_use(self) -> bool:
         self.use_tool = not self.use_tool
@@ -349,6 +381,32 @@ class LLM:
 
 
 tokens = Usage(0.15, 0.60)
+
+
+def process_tool_call(tool_call: ChatCompletionMessageToolCall) -> ToolMessage:
+    fnname = tool_call.function.name
+    args = json.loads(tool_call.function.arguments)
+    console.print(f"tool call {fnname} {args}", style="yellow")
+
+    if fnname in ftutils_functions():
+        try:
+            r = ftutils_functions()[fnname]["fn"](**args)
+            # tool return value is either a string or a pydantic data type
+            if isinstance(r, str):
+                markdown = Markdown(r, style="yellow", code_theme="monokai")
+                console.print(markdown, width=80)
+                return tool_message(tool_call, r)
+            console.print(f"result = {r}", style="yellow")
+        except Exception as e:
+            r = f"ERROR: {e.__class__.__name__}: {e}"
+            console.print(r, style="red")
+            return tool_message(tool_call, r)
+
+        return tool_message(tool_call, r.model_dump_json())
+
+    err_msg = "ERROR: unknown funtion name " + fnname
+    console.print(err_msg, style="red")
+    return tool_message(tool_call, err_msg)
 
 
 def is_toolcall(s: str) -> str:
@@ -504,7 +562,7 @@ def prt_summary(history: MessageHistory):
     console.print(f"loaded from log {history} words {count_words} chars {count_chars}", style="red")
     for i, m in enumerate(history):
         c = m.get_content().replace("\n", "\\n")  # msgs:
-        short_c = textwrap.shorten(c, width=70)
+        short_c = shorten(c, width=70)
         s = f"{i:2} {m.role:<10} {short_c}"
         console.print(s, style=role_to_color[m.role])
 
@@ -517,53 +575,6 @@ def tool_response(s: str) -> str:
 # def load(filename: str) -> list[ChatMessage]:
 #     with open(filename) as f:
 #         return ChatMessage.schema().parse_raw(f.read())
-
-
-def process_tool_call(tool_call: ChatCompletionMessageToolCall) -> ToolMessage:
-    fnname = tool_call.function.name
-    args = json.loads(tool_call.function.arguments)
-    console.print(f"tool call {fnname} {args}", style="yellow")
-
-    if fnname in ftutils_functions():
-        try:
-            r = ftutils_functions()[fnname]["fn"](**args)
-            # tool return value is either a string or a pydantic data type
-            if isinstance(r, str):
-                markdown = Markdown(r, style="yellow", code_theme="monokai")
-                console.print(markdown, width=80)
-                return tool_message(tool_call, r)
-            console.print(f"result = {r}", style="yellow")
-        except Exception as e:
-            r = f"ERROR: {e.__class__.__name__}: {e}"
-            console.print(r, style="red")
-            return tool_message(tool_call, r)
-
-        return tool_message(tool_call, r.model_dump_json())
-
-    err_msg = "ERROR: unknown funtion name " + fnname
-    console.print(err_msg, style="red")
-    return tool_message(tool_call, err_msg)
-
-
-def check_and_process_tool_call(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
-    """check for a tool call and process. If there is no tool call then the original response is returned"""
-    # https://platform.openai.com/docs/guides/function-calling
-    for choice in response.choices:
-        n = 9
-        while choice.finish_reason == "tool_calls" and n:
-            n -= 1
-            # append choice.message to message history
-            history.append(assistant_tool_message(choice.message.tool_calls))
-            for tc in choice.message.tool_calls:
-                tool_response = process_tool_call(tc)
-                history.append(tool_response)
-            # reply to llm with tool responses
-            response = client.chat(history)
-            choice = response.choices[0]
-
-        if n == 0:
-            console.print("consecutive tool call limit exceeded", style="red")
-    return response
 
 
 def check_and_process_code_block(history: MessageHistory) -> bool:
@@ -580,34 +591,52 @@ def check_and_process_code_block(history: MessageHistory) -> bool:
 
 
 def check_and_process_diff_blocks(client: LLM, history: MessageHistory, response: ChatCompletion) -> ChatCompletion:
-    for choice in response.choices:
-        blocks = extract_markdown_blocks(choice.message.content)
-        if any(b for b in blocks if b.language == "diff"):
-            vfs = VirtualFileSystem()
-            p = Path("/code/scripts/fib2.py")
-            vfs.create_mapping(p)
-            r = vfs.apply_edits(blocks)
-    #           gpt-oss on groq returns reasoning trace in choice.message.reasoning:
-            console.print(r)
-            if r.startswith("SUCCESS:"):
-                vfs.save_all()
-                msg = user_message(r + "\n\nSummarise the changes made. Do not repeat the source code.")
-                prt(msg)
-                history.append(msg)
-            else:
-                msg = user_message(r)
-                prt(msg)
-                history.append(user_message(r))
-            # process the original response before generating a new one
+    if vfs.is_empty():
+        return response
+
+    def extract_text(rsp) -> str:
+        return "".join(c.message.content for c in rsp.choices if c.message.content)
+
+    # gpt-oss on groq returns reasoning trace in choice.message.reasoning:
+    def extract_reasoning(rsp) -> str:
+        return "".join(c.message.reasoning for c in rsp.choices if hasattr(c.message, "reasoning") and c.message.reasoning)
+
+    retries = 3
+    txt = extract_text(response)
+    while "--- search" in txt and retries:
+        prt(assistant_message(txt), response.model)
+        if reasoning := extract_reasoning(response):
+            console.print(reasoning, style="dim")
+        blocks = extract_markdown_blocks(txt)
+        r = vfs.apply_edits(blocks)
+        if "SUCCESS:" in r:
+            d = vfs.save_all()
+            successful_files = [file_name for file_name, message in d.items() if message.startswith("SUCCESS")]
+            for s in successful_files:
+                console.print(Markdown(vfs.get_file(s).as_markdown()))
+            msg = user_message(r + "\n\nSummarise the changes made. Do not repeat the source code.")
+            prt(msg)
+            history.append(msg)
             update_usage(response.usage)
-            prt(msg, response.model)
             response = client.chat(history)
+            break
+
+        # return failure message to model and allow for retry
+        msg = user_message(r)
+        prt(msg)
+        history.append(user_message(r))
+        update_usage(response.usage)
+        response = client.chat(history)
+        txt = extract_text(response)
+        retries -= 1
+
+    if retries == 0:
+        console.print("failed to apply edits max retry limit reached.", style="red")
     return response
 
 
 def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -> bool:
     """ret True if next action is to call model otherwise will wait for user input"""
-    global code1
     next_action = False
     if cmd == "load":
         msg = load_msg(inp)
@@ -626,8 +655,11 @@ def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -
         if msg:
             history.append(msg)
             next_action = True
-    if cmd == "code":
-        code1 = load_textfile(make_fullpath(inp))
+    if cmd == "attach":
+        if inp[0] == "~":
+            vfs.create_mapping(Path(inp).expanduser())
+        else:
+            vfs.create_mapping(make_fullpath(inp))
     elif cmd == "resp":
         msg = user_message(text=tool_response(inp))
     elif cmd == "reset":
@@ -668,14 +700,72 @@ def update_usage(ru):
     print(f"prompt tokens: {ru.prompt_tokens}, completion tokens: {ru.completion_tokens}, total tokens: {ru.total_tokens} cost: {tokens.cost():.4f}")
 
 
+edit_html = dedent("""\
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title></title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+  </head>
+  <body>
+    <main>
+    </main>
+  </body>
+</html>
+              """)
+
+edit_py = dedent("""\
+#!/usr/bin/python3
+from rich.console import Console
+
+console = Console()
+
+
+def fib(n):
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+
+def fibm(maxn):
+    def impl(n: int) -> int:
+        if memo[n] < 0:
+            # print(f'calculating {n}')
+            memo[n] = impl(n - 1) + impl(n - 2)
+        return memo[n]
+
+    memo = [-1] * maxn
+    memo[0] = 0
+    memo[1] = 1
+    return impl
+
+
+def fib_iter():
+    a, b = 0, 1
+    for _ in range(n):
+        yield a
+        a, b = b, a + b
+
+
+def collatz_iter():
+    while n > 1:
+        yield n
+        n = n // 2 if n % 2 == 0 else 3 * n + 1
+    yield n
+                 """)
+
+
 def chat(llm_name, use_tool):
     # useTool pass llm_name.startswith('gpt')
-    global code1
     client = LLM(llm_name, use_tool)
     history = MessageHistory()
+    # vfs.create_unmapped(fname = "template.html", contents = edit_html)
+    # vfs.create_unmapped(fname = "fib.py", contents = edit_py)
+
     history.append(sys_msg(client.model.name))
     pprint(history)
-    print(f"chat with {client}. Enter x to exit.")
+    console.print(f"Chat with {client}", style="cyan bold")
+    console.print(INSTRUCTIONS)
     inp = ""
     while inp != "x":
         inp = input_multi_line()
@@ -685,15 +775,15 @@ def chat(llm_name, use_tool):
                 if not process_commands(client, cmds[0][1:], cmds[1] if len(cmds) > 1 else None, history):
                     continue
             else:
-                if code1:
-                    msg = user_message(text=f"{inp}\n{code1}")
-                    code1 = None
+                if not vfs.is_empty():
+                    inp += vfs.as_markdown()
+                    msg = user_message(text=inp)
                 else:
                     msg = user_message(text=inp)
                 history.append(msg)
                 prt(msg)
             response = client.chat(history)
-            response = check_and_process_tool_call(client, history, response)
+            #            response = check_and_process_tool_call(client, history, response)
             response = check_and_process_diff_blocks(client, history, response)
             reason = response.choices[0].finish_reason
             if reason != "stop":
