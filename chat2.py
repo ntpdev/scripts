@@ -338,16 +338,19 @@ class LLM:
             data = asdict(obj)
             return {k: v for k, v in data.items() if v is not None}
 
-        supports_temp = self.model.name != "o4-mini"
-
-        args = {"model": self.model.name, "messages": [clean_asdict(m) for m in messages], "max_completion_tokens": 16000 if self.model.reasoning else 8192}
+        kwargs = {
+            "model": self.model.name,
+            "messages": [clean_asdict(m) for m in messages],
+            "max_completion_tokens": 16384 if self.model.reasoning else 8192,
+            }
 
         if self.use_tool:
-            args["tools"] = [v["defn"] for v in ftutils_functions().values()]
+            kwargs["tools"] = [v["defn"] for v in ftutils_functions().values()]
+            supports_temp = not (self.model.reasoning and self.model.provider.id == "openai")
             if supports_temp:
-                args["temperature"] = 0.6
+                kwargs["temperature"] = 0.7
         try:
-            response = self.client.chat.completions.create(**args)
+            response = self.client.chat.completions.create(**kwargs)
             response = self.check_and_process_tool_call(messages, response)
         except Exception as e:
             console.print(f"Error: {e}", style="red")

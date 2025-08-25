@@ -421,22 +421,41 @@ def retrieve_bbc_most_read() -> ArticleList:
 
 def get_bbc_article_contents(url: str) -> BeautifulSoup | None:
     console.print(f"navigate {url}", style="yellow")
+    def dismiss_maybe_later_popup() -> bool:
+        try:
+            overlay = page.locator('[data-testid="test-overlay"]')
+            overlay.wait_for(state="visible", timeout=5000)
+            page.locator('button:has-text("Maybe later")').click()
+            overlay.wait_for(state="hidden")
+            return True
+        except PlaywrightTimeoutError:
+            return False
+
+    def reject_cookies() -> bool:
+        try:
+            btn = page.locator('[data-testid="reject-button"]')
+            btn.wait_for(state="visible", timeout=5000)
+            btn.click()
+            page.locator('section[aria-labelledby="consent-banner-title"]').wait_for(state="hidden")
+            return True
+        except PlaywrightTimeoutError:
+            return False
+        
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
         try:
             page.goto(url)
 
-            if cookie_button := page.wait_for_selector('button[data-testid="reject-button"]', timeout=5000):
-                cookie_button.click()
-            # find the h1 by id
-            page.wait_for_timeout(1000)
+            dismiss_maybe_later_popup()
+            reject_cookies()
+
             locator = page.locator("#main-heading")
             console.print(f"retrieved - {locator.text_content()}")
 
             content = page.content()
             soup = BeautifulSoup(content, "html.parser")
-            save_soup(soup, Path("c://temp/z.htm"))
+#            save_soup(soup, Path("~/Downloads/z.htm").expanduser())
             return soup
         except Exception as e:
             console.print(f"error retrieving {e}", style="red")
@@ -542,28 +561,40 @@ def parse_bloomberg_homepage(page) -> list[ArticleLink]:
 
 def parse_nyt_homepage(page) -> list[ArticleLink]:
     """retrieve headlines from nyt mobile home page"""
+    def dismiss_privacy_popup() -> bool:
+        """Click the 'Accept all' button on the privacy banner if it appears."""
+        try:
+            banner = page.wait_for_selector("#fides-banner-container", state="visible", timeout=5000)
+            accept_btn = banner.wait_for_selector('button[data-testid="Accept all-btn"]', state="visible", timeout=100)
+            accept_btn.click()
+            return True
+        except PlaywrightTimeoutError:
+            console.print("nyt privacy popup not found", style="red")
+            return False
 
-    # accept cookies
-    banner = page.wait_for_selector("#fides-banner", timeout=9000)
-    if button := banner.wait_for_selector('button[data-testid="Accept all-btn"]', timeout=4000):
-        button.click()
-
-    page.wait_for_timeout(1000)
-    # close sign-in with google iframe
-    try:
-        google_iframe_locator = page.frame_locator('iframe[src*="google"]').first
-        if close_button := google_iframe_locator.locator('[aria-label="Close"]'):
+    def dismiss_google_sign_in() -> bool:
+        # close sign-in with google iframe
+        try:
+            google_iframe_locator = page.frame_locator('iframe[src*="google"]').first
+            close_button = google_iframe_locator.locator('[aria-label="Close"]')
+            close_button.wait_for(state="visible", timeout=2_000)
             close_button.click()
-    except PlaywrightTimeoutError:
-        console.print("nyt google login not found", style="red")
+            return True
+        except PlaywrightTimeoutError:
+            console.print("nyt google login not found", style="red")
+            return False
+        
+    dismiss_privacy_popup()   
+    # Path("~/Downloads/temp.html").expanduser().write_text(page.content(), encoding="utf-8")
+    page.keyboard.press("Escape") # dismiss special offer - this does not work
+    dismiss_google_sign_in()
 
-    # Path("page_dump.html").write_text(page.content(), encoding="utf-8")
     if element := page.locator('span[data-testid="todays-date"]'):
         date_string = element.inner_text()
         try:
             # Parse the date string, ignoring the day
             pubdate = datetime.strptime(date_string, "%A, %B %d, %Y").date()
-            console.print(f"published {pubdate}", style="yellow")
+            console.print(f"NYT home page published {pubdate}", style="yellow")
         except ValueError:
             console.print(f"Error: Could not parse date string: {date_string}", style="red")
 
@@ -709,9 +740,11 @@ def retrieve_archive(url: str):
             input.fill(url)
             page.click('input[type="submit"][value="search"]')
 
-        # find list of page snapshots and click latest one
-        if anchor := page.locator("div.TEXT-BLOCK").locator("a").first:
-            anchor.click()
+        # Wait until at least one <img> is present inside the thumbs container
+        page.wait_for_selector("#row0 .THUMBS-BLOCK img")
+
+        # Click the last <img> inside the thumbs block
+        page.locator("#row0 .THUMBS-BLOCK img >> nth=-1").click()
 
         # wait for target page
         page.wait_for_load_state("domcontentloaded")
