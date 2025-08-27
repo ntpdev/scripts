@@ -344,7 +344,6 @@ class LLM:
 
         max_tool_calls = 15
         while max_tool_calls and any(is_tool_call(e) for e in response.output):
-            breakpoint()
             process_function_calls(history, response)
             console.print(f"{15 - max_tool_calls}: returning function call results", style="yellow")
             # send results of function calls back to model
