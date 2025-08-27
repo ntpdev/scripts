@@ -282,13 +282,8 @@ def save_markdown_article(title: str, text: str) -> Path | None:
 
 
 def text_between(content: str, start_tag: str, end_tag: str) -> str:
-    r = ""
-    start = content.find(start_tag)
-    if start >= 0:
-        end = content.find(end_tag, start)
-        if end > start:
-            r = content[start + len(start_tag) : end]
-    return r
+    return "" if (start := content.find(start_tag)) < 0 or (end := content.find(end_tag, start + len(start_tag))) < 0 \
+        else content[start + len(start_tag) : end]
 
 
 def add_citation(text: str, cite: Citation) -> str:
@@ -483,14 +478,14 @@ def retrieve_bbc_article(url: str) -> str:
 def retrieve_wsj_article(url: str) -> str:
     content, cite = retrieve_archive(url)
     soup = BeautifulSoup(content, "html.parser")
-
+    save_soup(soup, Path("~/Downloads/temp.html").expanduser())
     # remove some divs before extracting text
     if divs := soup.find_all("div"):
         xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get("style")]
         console.print(f"removing divs with style {len(xs)}", style="red")
         for d in xs:
             d.decompose()
-
+    
     md = html_to_markdown(soup=soup.find("section"), href_base="https://www.wsj.com/")
     md = add_citation(md, cite)
     save_markdown_article(cite.title, md)
@@ -564,8 +559,10 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
     def dismiss_privacy_popup() -> bool:
         """Click the 'Accept all' button on the privacy banner if it appears."""
         try:
-            banner = page.wait_for_selector("#fides-banner-container", state="visible", timeout=5000)
-            accept_btn = banner.wait_for_selector('button[data-testid="Accept all-btn"]', state="visible", timeout=100)
+            banner = page.locator("#fides-banner-container")
+            banner.wait_for(state="visible", timeout=5000)
+            accept_btn = banner.locator('button[data-testid="Accept all-btn"]')
+            accept_btn.wait_for(state="visible", timeout=5000)
             accept_btn.click()
             return True
         except PlaywrightTimeoutError:
@@ -573,7 +570,7 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
             return False
 
     def dismiss_google_sign_in() -> bool:
-        # close sign-in with google iframe
+        """close sign-in with google iframe"""
         try:
             google_iframe_locator = page.frame_locator('iframe[src*="google"]').first
             close_button = google_iframe_locator.locator('[aria-label="Close"]')
@@ -586,7 +583,7 @@ def parse_nyt_homepage(page) -> list[ArticleLink]:
         
     dismiss_privacy_popup()   
     # Path("~/Downloads/temp.html").expanduser().write_text(page.content(), encoding="utf-8")
-    page.keyboard.press("Escape") # dismiss special offer - this does not work
+    # occasionally get a special offer popup but unable to capture the html
     dismiss_google_sign_in()
 
     if element := page.locator('span[data-testid="todays-date"]'):
@@ -736,14 +733,17 @@ def retrieve_archive(url: str):
         # go to archive home page and search for URL
         page.goto("https://archive.is/")
 
-        if input := page.wait_for_selector("#q"):
+        input_locator = page.locator("#q")
+        input_locator.wait_for(state="visible")
+        if input := input_locator.element_handle():
             input.fill(url)
             page.click('input[type="submit"][value="search"]')
 
         # Wait until at least one <img> is present inside the thumbs container
-        page.wait_for_selector("#row0 .THUMBS-BLOCK img")
+        # page.locator("#row0 .THUMBS-BLOCK img").wait_for()
 
-        # Click the last <img> inside the thumbs block
+        # must wait for a unique element then can click the last <img> inside the thumbs block
+        page.locator("#row0 .THUMBS-BLOCK img >> nth=0").wait_for(state="attached")
         page.locator("#row0 .THUMBS-BLOCK img >> nth=-1").click()
 
         # wait for target page
@@ -888,8 +888,8 @@ if __name__ == "__main__":
     # items = retrieve_headlines("nyt")
     # print_most_read_table(items)
 
-    items = retrieve_headlines("wsj")
-    print_most_read_table(items)
+    # items = retrieve_headlines("wsj")
+    # print_most_read_table(items)
 
     # items = retrieve_headlines("bloomberg")
     # print_most_read_table(items)
@@ -898,9 +898,7 @@ if __name__ == "__main__":
 
     # items2 = retrieve_ft_most_read_section("https://www.ft.com/markets")
     # print_most_read_table(items)
-    # md = retrieve_wsj_article('https://www.wsj.com/politics/elections/democrat-party-strategy-progressive-moderates-13e8df10')
-    # markdown = Markdown(md, style="cyan", code_theme="monokai")
-    # console.print(markdown, width=80)
+    content, cite = retrieve_archive('https://www.wsj.com/tech/inside-intels-tricky-dance-with-trump-c03f729c')
     # items = retrieve_bbc_most_read()
     # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
     # print_most_read_table(items)

@@ -331,9 +331,10 @@ class LLM:
             args["max_output_tokens"] = 8192
         else:
             # GPT-5 allow minimal reasoning and verbosity for agentic tasks
+            # need to verify if want summary add "summary": "auto"
             args["reasoning"] = {"effort": "medium"}
             args["text"] = {"verbosity": "low"}
-            args["max_output_tokens"] = 4096
+            args["max_output_tokens"] = 16384
         if self.use_tools:
             args["tools"] = [v["defn"] for v in fn_mapping().values()]
             # gpt-5 models do not support temperature or top-p
@@ -343,6 +344,7 @@ class LLM:
 
         max_tool_calls = 15
         while max_tool_calls and any(is_tool_call(e) for e in response.output):
+            breakpoint()
             process_function_calls(history, response)
             console.print(f"{15 - max_tool_calls}: returning function call results", style="yellow")
             # send results of function calls back to model
@@ -1246,18 +1248,22 @@ def test_code_edit():
         """)
     prompt = dedent("""\
         ## task
-        cli.py is a skeleton for a command line LLM chat application. The goal of this stage it to implement multi-line text entry from the user.
-        complete the Python code cli.py in the file as per the comments
+        edit the file index.html following the instructions in plan.md . First review the plan and check
+        that it makes sense and the changes can be applied to the existing page.
+        If the suggestion would not work or is unclear inform the user and do not make any changes.
+        Apply only the changes necessary to implement the fix.
         
         ## output format
-        Output the code changes to cli.py as structured edit blocks. Avoid repeating unchanged lines
+        Output the code changes to index.html as structured edit blocks. Avoid repeating unchanged lines
         """)
 
     # vfs.create_unmapped("template.html", contents)
     # prompt += vfs.get_file("template.html").as_markdown()
     # vfs.create_mapping(Path("~/Documents/chats/temp.py").expanduser())
-    vfs.create_mapping(Path("~/code/scripts/cli.py").expanduser())
-    prompt += vfs.get_file("cli.py").as_markdown()
+    vfs.create_mapping(Path("~/code/test/index.html").expanduser())
+    vfs.create_mapping(Path("~/code/test/plan.md").expanduser())
+    prompt += vfs.get_file("index.html").as_markdown()
+    prompt += vfs.get_file("plan.md").as_markdown()
 
     msg = user_message(prompt)
     print_message(msg)
@@ -1271,7 +1277,7 @@ def test_code_edit():
     r, t, typ = extract_text_content(response)
     if blocks := cu.extract_markdown_blocks(t):
         s = vfs.apply_edits(blocks)
-        cu.print_block(vfs.read_text("cli.py"), line_numbers=True)
+        # cu.print_block(vfs.read_text("cli.py"), line_numbers=True)
         console.print(s, style="yellow")
         if s.startswith("SUCCESS"):
             vfs.save_all()
@@ -1615,7 +1621,7 @@ def test_chat_loop():
     #     keep a track of all important decisions and the reasoning behind them
     #     The current date is {datetime.now().isoformat()}
     #     """)
-    model = LLM(OpenAIModel.GPT_MINI, use_tools=True)
+    model = LLM(OpenAIModel.GPT, use_tools=True)
     history = MessageHistory()
     history.append(developer_message(dev_inst))
     history.print()
