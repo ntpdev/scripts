@@ -282,14 +282,12 @@ class Usage(BaseModel):
         input_price_per_million, output_price_per_million = PRICING[self.model]
 
         input_cost = (self.input_tokens / 1_000_000) * input_price_per_million
-
-        total_output_tokens = self.output_tokens + self.reasoning_tokens
-        output_cost = (total_output_tokens / 1_000_000) * output_price_per_million
+        output_cost = (self.output_tokens / 1_000_000) * output_price_per_million
 
         return input_cost + output_cost
 
     def __str__(self) -> str:
-        return f"Usage:\n  Input Tokens: {self.input_tokens}\n  Output Tokens: {self.output_tokens}\n  Reasoning Tokens: {self.reasoning_tokens}\n  Estimated Cost: ${self.calculate_cost():.5f}"
+        return f"Usage:\n  Input Tokens: {self.input_tokens}\n  Output Tokens: {self.output_tokens}\n  Reasoning: {self.reasoning_tokens} / {self.output_tokens - self.reasoning_tokens}\n  Estimated Cost: ${self.calculate_cost():.5f}"
 
 
 class LLM:
@@ -300,12 +298,18 @@ class LLM:
     use_tools: bool
     response_id: str | None = None
     usage: Usage
+    # configurable properties
+    reasoning: str  # minimal|low|medium|high
+    verbosity: str  # low|medium|high
 
-    def __init__(self, model: OpenAIModel, instructions: str = "", use_tools: bool = False):
+    def __init__(self, model: OpenAIModel, instructions: str = "", use_tools: bool = False, *, reasoning: str = "medium", verbosity: str = "low"):
         self.model = model
         self.instructions = instructions
         self.use_tools = use_tools
         self.usage = Usage(model=model)
+        # defaults
+        self.reasoning = reasoning
+        self.verbosity = verbosity
 
     def _create(self, args) -> Response:
         if self.response_id:
@@ -327,13 +331,13 @@ class LLM:
             args["instructions"] = self.instructions
         is_reasoning = self.model.startswith("o")
         if is_reasoning:
-            args["reasoning"] = {"effort": "low"}
+            # reasoning models (o-series)
+            args["reasoning"] = {"effort": self.reasoning}
             args["max_output_tokens"] = 8192
         else:
-            # GPT-5 allow minimal reasoning and verbosity for agentic tasks
-            # need to verify if want summary add "summary": "auto"
-            args["reasoning"] = {"effort": "medium"}
-            args["text"] = {"verbosity": "low"}
+            # gpt-5 family supports both reasoning effort and text verbosity
+            args["reasoning"] = {"effort": self.reasoning}
+            args["text"] = {"verbosity": self.verbosity}
             args["max_output_tokens"] = 16384
         if self.use_tools:
             args["tools"] = [v["defn"] for v in fn_mapping().values()]
@@ -435,7 +439,7 @@ apply_diff_fn: FunctionDef = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "start_position": {"type": "integer", "description": "1‐based index in the file where this diff is applied."},
+                        "start_position": {"type": "integer", "description": "1-based index in the file where this diff is applied."},
                         "diff": {"type": "string", "description": "Unified diff format. prefix lines with ' ' unchanged '-' delete '+' insert."},
                     },
                     "required": ["start_position", "diff"],
@@ -478,7 +482,11 @@ apply_edits_fn: FunctionDef = {
     },
 }
 
-edit_text_fn = {"type": "custom", "name": "apply_edits", "description": "Applies one or more changes to a text file. Write as many changes as necessary. Format each change as a search replace block using the delimiters ---search ---replace ---end"}
+edit_text_fn = {
+    "type": "custom",
+    "name": "apply_edits",
+    "description": "Applies one or more changes to a text file. Write as many changes as necessary. Format each change as a search replace block using the delimiters ---search ---replace ---end"
+    }
 
 
 # lifted from agents SDK
@@ -555,7 +563,7 @@ def fn_mapping() -> dict[str, dict[str, Any]]:
         mark_task_complete_fn["name"].lower(): {"defn": mark_task_complete_fn, "fn": mark_task_complete},
         read_text_fn["name"].lower(): {"defn": read_text_fn, "fn": read_text},
         # apply_edits_fn["name"].lower(): {"defn": apply_edits_fn, "fn": apply_edits},
-        # edit_text_fn["name"].lower(): {"defn": edit_text_fn, "fn": edit_text},
+        edit_text_fn["name"].lower(): {"defn": edit_text_fn, "fn": edit_text},
         # apply_diff_fn["name"].lower(): {"defn": apply_diff_fn, "fn": apply_diff},
     }
 
@@ -597,8 +605,8 @@ def process_function_call(tool_call: ResponseFunctionToolCall, history: MessageH
 def process_custom_tool_call(tool_call: ResponseOutputMessage, history: MessageHistory) -> None:
     """process the custom tool call and append response to history"""
     input = getattr(tool_call, "input", "")
-    console.print(f"{tool_call.type}: {tool_call.name} with {len(input)} chars", style="yellow")
-    result = dispatch(tool_call.name, {"input": input})
+    console.print(f"{tool_call.type}: {tool_call.name} with {shorten(input, width=50)} chars", style="yellow")
+    result = dispatch(tool_call.name, {"input": input}) if input else "error: no input string passed"
     history.append(function_call_response(tool_call, result))
 
 
@@ -926,6 +934,7 @@ def test_function_calling():
         history.append(msg)
         response = llm.create(history)
         print_response(response)
+        console.print(f"{llm.usage}")
     history.print()
 
 
@@ -1250,7 +1259,7 @@ def test_code_edit():
         edit the file index.html following the instructions in plan.md . First review the plan and check
         that it makes sense and the changes can be applied to the existing page.
         If the suggestion would not work or is unclear inform the user and do not make any changes.
-        Apply only the changes necessary to implement the fix.
+        Apply only the changes ask for.
         
         ## output format
         Output the code changes to index.html as structured edit blocks. Avoid repeating unchanged lines
@@ -1268,7 +1277,7 @@ def test_code_edit():
     print_message(msg)
     history.append(msg)
 
-    llm = LLM(OpenAIModel.GPT, "", True)
+    llm = LLM(OpenAIModel.GPT_MINI, "", True)
     llm.instructions = dev_inst
     response = llm.create(history)
     print_response(response)
@@ -1592,7 +1601,14 @@ When discussing contentious topics, go beyond media talking points to examine un
 """
 
 
-def process_command(cmd: str, params: str) -> None:
+def process_command(model: LLM, cmd: str, params: str) -> None:
+    """Handle CLI-style commands during chat.
+
+    Supported:
+    - reasoning [minimal|low|medium|high]
+    - verbosity [low|medium|high]
+    """
+    params = params.strip() if params else ""
     if cmd == "attach":
         p = Path(params).expanduser() if params.startswith("~") else Path(params)
         if vfs.create_mapping(p):
@@ -1605,6 +1621,26 @@ def process_command(cmd: str, params: str) -> None:
             lint_workflow(p)
         else:
             console.print(f"file {p} not found", style="red")
+    elif cmd == "reasoning":
+        allowed = {"minimal", "low", "medium", "high"}
+        if params in allowed:
+            model.reasoning = params
+            console.print(f"reasoning set to {model.reasoning}", style="green")
+        else:
+            console.print(
+                f"current reasoning: {model.reasoning}. set with %reasoning [minimal|low|medium|high]",
+                style="yellow",
+            )
+    elif cmd == "verbosity":
+        allowed = {"low", "medium", "high"}
+        if params in allowed:
+            model.verbosity = params
+            console.print(f"verbosity set to {model.verbosity}", style="green")
+        else:
+            console.print(
+                f"current verbosity: {model.verbosity}. set with %verbosity [low|medium|high]",
+                style="yellow",
+            )
     else:
         console.print(f"unknown command: {cmd}", style="red")
 
@@ -1620,7 +1656,7 @@ def test_chat_loop():
     #     keep a track of all important decisions and the reasoning behind them
     #     The current date is {datetime.now().isoformat()}
     #     """)
-    model = LLM(OpenAIModel.GPT, use_tools=True)
+    model = LLM(OpenAIModel.GPT_MINI, use_tools=True)
     history = MessageHistory()
     history.append(developer_message(dev_inst))
     history.print()
@@ -1631,7 +1667,8 @@ def test_chat_loop():
             break
         if inp[0] == "%":
             xs = inp.split(maxsplit=1)
-            process_command(xs[0][1:], xs[1])
+            params = xs[1] if len(xs) > 1 else ""
+            process_command(model, xs[0][1:], params)
             continue
 
         if vfs:

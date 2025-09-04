@@ -838,22 +838,28 @@ def retrieve_ft_article(url: str) -> str:
     pprint(citation)
 
     text = ""
-
     if content:
-        if title := text_between(content, "<title>", "</title>"):
+        soup = BeautifulSoup(content, "html.parser")
+        save_soup(soup, Path("~/Downloads/temp.html").expanduser())
+
+        # Extract the first <h1> text (if present)
+        title = soup.find("h1").get_text(strip=True) if soup.find("h1") else ""
+        if title:
             citation.title = title  # citation can contain abbreviated title so replace
 
-        # the archive version of ft articles contains the extracted text as well as the html
-        start = content.find("articleBody")
-        end = content.find("wordCount", start)
-        if start > 0 and end > start:
-            s = content[start + 14 : end - 3]
-            s = s.replace("\\n", "\n")
-            text += s
+        # Find the article container
+        article = soup.find(id="article-body")
 
-    text = add_citation(text, citation)
-    save_markdown_article(citation.title, text)
-    return text
+        # Extract non-empty div texts and join with double newlines
+        output = "\n\n".join(
+            text
+            for div in article.find_all("div", recursive=False)
+            if (text := div.get_text(strip=True, separator=" "))
+        )
+
+    output = add_citation(output, citation)
+    save_markdown_article(citation.title, output)
+    return output
 
 
 @cache
@@ -898,7 +904,8 @@ if __name__ == "__main__":
 
     # items2 = retrieve_ft_most_read_section("https://www.ft.com/markets")
     # print_most_read_table(items)
-    content, cite = retrieve_archive('https://www.wsj.com/tech/inside-intels-tricky-dance-with-trump-c03f729c')
+    content = retrieve_ft_article("https://www.ft.com/content/d01290c9-cc92-4c1f-bd70-ac332cd40f94")
+    console.print(Markdown(content), style="cyan", width=80)
     # items = retrieve_bbc_most_read()
     # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
     # print_most_read_table(items)
