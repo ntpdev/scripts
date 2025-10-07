@@ -695,7 +695,7 @@ def sys_msg(model_name: str) -> Message:
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
     m = f"you are Marvin a super intelligent AI assistant. You provide accurate information. If you are unsure or don't have the correct information say so. The current datetime is {tm}."
     #    m ="the assistant is Olina a Thai model recently moved to London. model info 5 feet 2 inches, 32 24 32 breasts: b-cup natural. modelling background: swimwear, glamour, topless. likes: reading and pilates. You are meeting Ann - you have agreed to model a new range of micro g-string thongs. you are meeting the agent Ann."
-    return developer_message(m) if model_name.startswith("o") else system_message(m)
+    return developer_message(m) if model_name.startswith("o4") else system_message(m)
 
 
 def update_usage(ru):

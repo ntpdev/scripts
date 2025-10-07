@@ -1,12 +1,14 @@
 #!/usr/bin/python3
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 import math
+import time
 from bs4 import BeautifulSoup
 from functools import cache
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -17,16 +19,9 @@ from rich.markdown import Markdown
 # from chatutils import execute_python_script
 from rich.pretty import pprint
 from rich.table import Table
+from dataclasses import dataclass
 
 from htm2md import html_to_markdown
-
-NYT_URL = "https://www.nytimes.com/"
-WSJ_URL = "https://www-wsj-com.translate.goog/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp&_x_tr_hist=true"
-BLOOMBERG_URL = "https://www.bloomberg.com/uk"
-# cookies from a bloomberg request
-BLOOMBERG_COOKIES = """
-exp_pref=UK; country_code=GB; _pxhd=hybJB-QwokZf4leNclckCnRVuIpFClaKV1llOjmL0jtP37YQSo3OvB3LQomq-H5WHuzFBOtLOYP6-94lFNOnYA==:xcFLr9qTPJw8sGEzPYHXuJc/hPFuxaP3C/CQ9l6KTqWEzP/bEwlbm11lGlIPx9iZG7/zyzfnN5LXSk2J/ImKNFYpsCly7dMgTOUK5jxixZY=; session_id=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; _session_id_backup=eb8c34d4-17dc-4f1f-8aa1-96c51d642f0f; agent_id=7b759df2-41ab-48f2-8d18-e8f4c830e74f; session_key=05e93f9def0810c2a5f8f184dab9e72b2a664249; _reg-csrf-token=vUgp4QCG-ZhI6oKN1fp1d1IRVQcaDZdJojN8; _reg-csrf=s%3A_t_6ZTpMq4aJfacc4id6cG6T.N3kayACM%2BeU1su9PG3W38wIn0F5hjdkbfPezAkk%2Beck; _sp_krux=true; gatehouse_id=39936fa4-25a4-4ca0-b34b-6b0745e9aaaa; geo_info=%7B%22countryCode%22%3A%22GB%22%2C%22country%22%3A%22GB%22%2C%22field_n%22%3A%22hf%22%2C%22trackingRegion%22%3A%22Europe%22%2C%22cacheExpiredTime%22%3A1743438724334%2C%22region%22%3A%22Europe%22%2C%22fieldN%22%3A%22hf%22%7D%7C1743438724334; geo_info={%22country%22:%22GB%22%2C%22region%22:%22Europe%22%2C%22fieldN%22:%22hf%22}|1743438723668; consentUUID=44d6a9b5-52bd-46da-8b60-dacd569ab812_42; consentDate=2025-03-24T16:32:09.533Z; bbgconsentstring=req1fun1pad1; bdfpc=004.2124236125.1742833928898; _ga_GQ1PBLXZCT=GS1.1.1743025085.3.1.1743025481.0.0.0; _ga=GA1.1.2038307183.1742833929; _gcl_au=1.1.465814927.1742833929; usnatUUID=5e7f4c49-db91-48fa-95bc-fbd68e8b7c26; pxcts=890d621c-08cd-11f0-9cbe-2c6d2c51ccd5; _pxvid=840a3f28-08cd-11f0-a082-8df59c8c78b6; _user-data=%7B%22status%22%3A%22anonymous%22%7D; _last-refresh=2025-3-26%2021%3A38; _pxde=e0adf1db95f603de3ae8f5ccb5a02c822502d8210417fd7f4170bce2642f3ea3:eyJ0aW1lc3RhbXAiOjE3NDMwMjUzMjgxNDIsImZfa2IiOjAsImlwY19pZCI6W119; _px2=eyJ1IjoiOTlmOGY2NDAtMGE4YS0xMWYwLWFhZWItYTcwMjM0ZjFmN2U4IiwidiI6Ijg0MGEzZjI4LTA4Y2QtMTFmMC1hMDgyLThkZjU5YzhjNzhiNiIsInQiOjE3NDMwMjU2MjgxNDIsImgiOiIyOWQwNzNmMDU4NThlMjA1ZGUwNTllYTYxYjdmODIxYzQ1NTc1Mzg4ODFmMDNjMjQyMTJkOThhMWMwNzUxMTliIn0=
-"""
 
 console = Console()
 
@@ -176,27 +171,6 @@ def evaluate_expression(expression: str) -> str:
     return str(result)
 
 
-def retrieve_headlines(source: str) -> ArticleList:
-    if not source:
-        return ErrorInfo(error=True, type="invalid argument", message="source required", url="")
-    try:
-        s = source.lower()
-        if s == "ft":
-            return retrieve_ft_headlines()
-        if s == "nyt":
-            xs = retrieve_cached_headlines()[NYT_URL]
-            return ArticleList(source="New York Times", articles=xs)
-        if s == "wsj":
-            xs = retrieve_cached_headlines()[WSJ_URL]
-            return ArticleList(source="Wall Street Journal", articles=xs)
-        if s == "bloomberg":
-            xs = retrieve_bloomberg_home_page()
-            return ArticleList(source="Bloomberg UK", articles=xs)
-        return retrieve_bbc_most_read()
-    except Exception as e:
-        return ErrorInfo(error=True, type=e.__class__.__name__, message=str(e), url=source)
-
-
 def retrieve_article(url: str) -> str:
     if not url:
         return ErrorInfo(error=True, type="invalid argument", message="url required", url="")
@@ -294,7 +268,7 @@ def add_citation(text: str, cite: Citation) -> str:
 
 def get_bnnbloomberg_quote(client: httpx.Client, symbol: str) -> dict:
     """
-    Fetches JNK:UN summary info and company info
+    Fetches symbol summary info and company info via REST calls
 
     Returns:
         dict: The JSON response as a dictionary, or None if an error occurs.
@@ -326,7 +300,7 @@ def get_bnnbloomberg_quote(client: httpx.Client, symbol: str) -> dict:
         merge_from(scorecard)
         merge_from(company_info)
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        console.print(f"An unexpected error occurred: {e}", style="red")
     return result
 
 
@@ -337,56 +311,6 @@ def process_bnn_stock_page(page) -> dict | None:
     d = {"symbol": ticker_head.inner_text(), "name": name.inner_text(), "close": float(close.inner_text())}
     console.print("scorecard found " + d["symbol"], style="yellow")
     return d
-
-
-def retrieve_bloomberg_home_page() -> list[ArticleList]:
-    """use httpx to get uk homepage and parse headlines. need a valid cookie string"""
-
-    def find_parent_prop(element, tagname, attr):
-        """Traverse up the DOM tree to find the nearest parent <a> tag and return its href."""
-        elem = element
-        while (elem := elem.parent) is not None:
-            if elem.name == tagname and elem.has_attr(attr):
-                return elem[attr]
-        return None
-
-    def find_sibling_with_component(element, prop, component_value):
-        """Find the nearest sibling element with the specified data-component attribute."""
-        sibling = element
-        while (sibling := sibling.find_next_sibling()) is not None:
-            if sibling.has_attr(prop) and sibling[prop] == component_value:
-                return sibling.get_text(strip=True)
-        return ""
-
-    with httpx.Client(http2=True) as client:
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "en-UK,en;q=0.5",
-            "Connection": "keep-alive",
-            "Cookie": BLOOMBERG_COOKIES,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
-        }
-        response = client.get(BLOOMBERG_URL, headers=headers)
-        response.raise_for_status()
-        content = response.text
-
-    soup = BeautifulSoup(content, "html.parser")
-    #    save_soup(soup, Path.home() / "Downloads" / "bloomberg-uk.html")
-    section = soup.find("section", {"data-zoneid": "Above the Fold"})
-    headlines = section.find_all("div", {"data-testid": "headline"})
-    xs = []
-    for div in headlines:
-        # anchor tag is mostly the parent but occasionally the child
-        href = find_parent_prop(div, "a", "href")
-        if not href:
-            anchor = div.find("a")
-            if anchor:
-                href = anchor.get("href")
-        summary = find_sibling_with_component(div, "data-component", "summary")
-        if href:
-            xs.append(ArticleLink(headline=div.get_text(strip=True), summary=summary, url="https://www.bloomberg.com" + href.split("?")[0]))
-    return xs[:16]
 
 
 def retrieve_bbc_most_read() -> ArticleList:
@@ -517,8 +441,8 @@ def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = Fa
     results = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
-        iphone_15 = p.devices["iPhone 15"]
-        context = browser.new_context(**iphone_15)
+        mobile = p.devices["iPhone 15 Plus"]
+        context = browser.new_context(**mobile)
         try:
             page = context.new_page()
             for url, parse_function in url_dict.items():
@@ -526,6 +450,12 @@ def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = Fa
                     console.print(f"fetching {url}", style="yellow")
                     page.goto(url)
                     page.wait_for_load_state("domcontentloaded")
+                    try:
+                        iframe_locator = page.frame_locator("iframe[id^='sp_message_iframe']")        
+                        iframe_locator.locator("button[aria-label='YES, I AGREE']").click(timeout=5000)
+                    except PlaywrightTimeoutError:
+                        console.print("iframe not found")
+
                     # Call the parsing function for this page
                     results[url] = parse_function(page)
 
@@ -539,148 +469,437 @@ def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = Fa
     return results
 
 
-def parse_bloomberg_homepage(page) -> list[ArticleLink]:
-    links = []
-    for anchor in page.query_selector_all('a[data-component="story-link"]'):
-        headline_element = anchor.query_selector('div[data-component="headline"]')
-        summary_element = anchor.query_selector('section[data-component="summary"]')
+class Cookie(TypedDict, total=False):
+    """Type hint for cookie structure."""
 
-        if headline_element and summary_element:
-            headline = headline_element.inner_text()
-            summary = summary_element.inner_text()
-            href = anchor.get_attribute("href")
-            links.append(ArticleLink(headline=headline, summary=summary, url=href))
-
-    return links
+    name: str
+    value: str
+    domain: str
+    expiry: float
 
 
-def parse_nyt_homepage(page) -> list[ArticleLink]:
-    """retrieve headlines from nyt mobile home page"""
-    def dismiss_privacy_popup() -> bool:
-        """Click the 'Accept all' button on the privacy banner if it appears."""
-        try:
-            banner = page.locator("#fides-banner-container")
-            banner.wait_for(state="visible", timeout=5000)
-            accept_btn = banner.locator('button[data-testid="Accept all-btn"]')
-            accept_btn.wait_for(state="visible", timeout=5000)
-            accept_btn.click()
-            return True
-        except PlaywrightTimeoutError:
-            console.print("nyt privacy popup not found", style="red")
-            return False
+@dataclass
+class SiteConfig:
+    """Configuration for a specific news site."""
 
-    def dismiss_google_sign_in() -> bool:
-        """close sign-in with google iframe"""
-        try:
-            google_iframe_locator = page.frame_locator('iframe[src*="google"]').first
-            close_button = google_iframe_locator.locator('[aria-label="Close"]')
-            close_button.wait_for(state="visible", timeout=2_000)
-            close_button.click()
-            return True
-        except PlaywrightTimeoutError:
-            console.print("nyt google login not found", style="red")
-            return False
-        
-    dismiss_privacy_popup()   
-    # Path("~/Downloads/temp.html").expanduser().write_text(page.content(), encoding="utf-8")
-    # occasionally get a special offer popup but unable to capture the html
-    dismiss_google_sign_in()
+    name: str
+    url: str
+    cookie_domain: str
+    extract_function: Callable[[BeautifulSoup], ArticleList]
+    filename_stem: str
 
-    if element := page.locator('span[data-testid="todays-date"]'):
-        date_string = element.inner_text()
-        try:
-            # Parse the date string, ignoring the day
-            pubdate = datetime.strptime(date_string, "%A, %B %d, %Y").date()
-            console.print(f"NYT home page published {pubdate}", style="yellow")
-        except ValueError:
-            console.print(f"Error: Could not parse date string: {date_string}", style="red")
+    def make_filename(self) -> Path:
+        """Generate filename based on site configuration"""
+        dir = Path.home() / "Downloads"
+        return dir / f"{self.filename_stem}.html"
 
-    # find <main id="#site-content"> then all divs within
-    links = []
-    for wrapper in page.query_selector_all("#site-content div.story-wrapper"):
-        link_tag = wrapper.query_selector('a[data-tpl="l"]')
+    def make_cookie_filename(self) -> Path:
+        """Generate cookie filename based on site configuration"""
+        p = self.make_filename()
+        # Remove .html extension and add -cookies.json
+        stem = p.stem  # This gets the filename without extension
+        return p.parent / f"{stem}-cookies.json"
+
+
+# Constants
+SESSION_COOKIE_PATTERNS = frozenset(
+    {
+        # WSJ
+        "s_cc",
+        "s_ppv",
+        "s_tp",
+        "_dj_ses.",
+        "_uetsid",
+        "__tbc",
+        "xbc",
+        "_lr_retry_request",
+        # NYTimes
+        "nyt-b-sid",  # Browser session ID
+        "nyt-traceid",  # Session tracing (no expiry)
+        "_dd_s",  # DataDog session
+        "_cb_svref",  # ChartBeat session reference
+        "nyt-jkidd",  # User session data
+        "nyt-purr",  # Session tracking
+        "nyt-gdpr",  # GDPR session consent
+        # FT.com patterns
+        "FtComEntryPoint",  # Session entry point
+        "OriginalReferer",  # Session referrer
+    }
+)
+
+ONE_DAY_SECONDS = 86400  # 24 * 3600
+
+def is_session_cookie(cookie: Cookie) -> bool:
+    """
+    Determine if a cookie is a session cookie.
+
+    Session cookies are identified by:
+    - No expiry field
+    - Expiry within 1 day
+    - Matching known session cookie patterns
+    """
+    expiry = cookie.get("expiry")
+
+    # No expiry = session cookie
+    if not expiry:
+        return True
+
+    # httpOnly cookies are typically session/auth tokens
+    if cookie.get("httpOnly"):
+        return True
+
+    # Short expiry = session cookie
+    if expiry - time.time() <= ONE_DAY_SECONDS:
+        return True
+
+    # Known session cookie pattern
+    cookie_name = cookie.get("name", "")
+    return any(pattern in cookie_name for pattern in SESSION_COOKIE_PATTERNS)
+
+
+def load_cookies_from_file(filepath: Path, domain_suffix: str) -> dict[str, str]:
+    """Load persistent cookies from a JSON file and return as dict {name: value}."""
+    if not filepath.exists():
+        raise FileNotFoundError(f"Cookies file not found: {filepath}")
+
+    with filepath.open("r", encoding="utf-8") as f:
+        cookies_list = json.load(f)
+
+    persistent_cookies = {
+        cookie["name"]: cookie["value"]
+        for cookie in cookies_list
+        if cookie.get("domain", "").endswith(domain_suffix) and not is_session_cookie(cookie)
+    }
+
+    return persistent_cookies
+
+
+def bloomberg_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+    def build_url(path: str) -> str:
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"https://bloomberg.com{path.split("?", 1)[0]}"
+
+    root = soup.find("section", {"data-zoneid": "Above the Fold"})
+    if not root:
+        return None
+
+    results = {}  # store in dict keyed by url to filter duplicates
+    for headline_elem in root.find_all("div", {"data-component": "headline"}):
+        # Find the enclosing <a> tag
+        link_tag = headline_elem.find_parent("a")
         if not link_tag:
             continue
 
-        url = (link_tag.get_attribute("href") or "").strip()
+        # Extract URL
+        url = link_tag.get("href")
+        if not url or url in results:
+            continue
+
+        # Extract headline text (from span inside headline)
+        headline_span = headline_elem.find("span")
+        headline = headline_span.get_text(strip=True) if headline_span else headline_elem.get_text(strip=True)
+
+        # Try to find optional summary with data-testid="summary"
+        summary_elem = link_tag.find("section", {"data-component": "summary"})
+        summary = summary_elem.get_text(strip=True) if summary_elem else ""
+
+        results[url] = ArticleLink(headline=headline, summary=summary, url=build_url(url))
+
+    return list(results.values())
+
+
+def ft_most_read(soup: BeautifulSoup) -> list[str]:
+    """Extract URLs from the most-read section"""
+    most_read_urls = []
+
+    # Find all most-read items using data-id="most-read-id"
+    most_read_items = soup.find_all("div", attrs={"data-id": "most-read-id"})
+
+    for item in most_read_items:
+        # Find the heading link within most-read items
+        heading_elem = item.select_one('a[data-trackable="heading-link"]')
+        if not heading_elem:
+            continue
+
+        url_path = heading_elem.get("href")
+        if not url_path:
+            continue
+
+        # Fully qualify the URL
+        url = f"https://www.ft.com{url_path}" if url_path.startswith("/") else url_path
+
+        most_read_urls.append(url)
+
+    return most_read_urls
+
+
+def ft_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+    """Extract FT story cards with headings and optional subheads"""
+    root = soup.find("main")
+    if not root:
+        breakpoint()
+        return None
+
+    # Find all story group containers using the data-trackable attribute
+    story_groups = root.find_all("div", attrs={"data-trackable": lambda x: x and "storyGroupTitle" in x})
+
+    articles = {}
+
+    for story_group in story_groups:
+        # Find all elements with data-trackable that contain stories
+        stories = story_group.find_all(attrs={"data-trackable": True})
+
+        for story in stories:
+            story_trackable = story.get("data-trackable", "")
+            if not story_trackable.startswith("story:"):
+                continue  # Skip non-story elements
+
+            # Extract headline and URL
+            heading_elem = story.select_one('a[data-trackable="heading-link"]')
+            if not heading_elem:
+                continue
+
+            # Get URL
+            url_path = heading_elem.get("href")
+            if not url_path:
+                continue
+            url = f"https://www.ft.com{url_path}" if url_path.startswith("/") else url_path
+
+            # Get headline text - more robust approach
+            headline = ""
+
+            # Try to find the main headline span (not the indicator)
+            headline_spans = heading_elem.find_all("span.text")
+            for span in headline_spans:
+                text = span.get_text(strip=True)
+                # Skip indicator text like "Lex." or "The Big Read."
+                if text and not any(indicator in text for indicator in ["Lex.", "The Big Read.", "opinion content."]):
+                    headline = text
+                    break
+
+            # Fallback: get all text and clean it up
+            if not headline:
+                all_text = heading_elem.get_text(strip=True)
+                # Remove common indicator texts
+                for indicator in ["Lex.", "The Big Read."]:
+                    all_text = all_text.replace(indicator, "").strip()
+                headline = all_text
+
+            if not headline:
+                continue
+
+            # Try to find summary/standfirst (optional)
+            summary = ""
+            # Look for standfirst in multiple possible locations
+            summary_elem = (
+                story.select_one('.standfirst a[data-trackable="standfirst-link"] span')
+                or story.select_one(".standfirst span")
+                or story.select_one(".featured-story-content .standfirst span")
+            )
+            if summary_elem:
+                summary = summary_elem.get_text(strip=True)
+
+            if url not in articles:
+                articles[url] = ArticleLink(headline=headline, summary=summary, url=url)
+
+    # Separate most-read articles from others
+    most_read_articles = []
+    other_articles = []
+    most_read = ft_most_read(root)
+
+    for article in articles.values():
+        if article.url in most_read:
+            most_read_articles.append(article)
+        else:
+            other_articles.append(article)
+    # Return most-read articles first, then others
+    return most_read_articles + other_articles
+
+
+def nyt_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+    """Extract NYT story cards with headings and optional subheads"""
+    root = soup.find("main")
+    if not root:
+        return None
+
+    # Find all story wrappers
+    stories = root.select('.story-wrapper[data-tpl="sli"]')
+
+    articles = []
+
+    for story in stories:
+        # Find heading and URL together (same anchor element)
+        heading = None
+        url = None
+
+        # Get the anchor element
+        link_elem = story.select_one('[data-tpl="h"] a[data-tpl="l"]')
+        if not link_elem:
+            continue  # Skip if no link found
+
+        url = link_elem.get("href")
         if not url:
             continue
 
-        headline = (link_tag.inner_text() or "").strip()
+        # Get heading text from within the anchor
+        heading_elem = link_elem.select_one("p.indicate-hover")
+        if heading_elem:
+            heading = heading_elem.get_text(strip=True)
 
-        summary_tag = wrapper.query_selector('div[data-tpl="bo"]')
-        summary = (summary_tag.inner_text() or "").strip() if summary_tag else ""
+        if not heading or not url:
+            continue
 
-        links.append(ArticleLink(headline=headline, summary=summary, url=url))
-        if len(links) >= 16:
-            break
+        # Try to find subhead (optional)
+        summary = ""
+        subhead_elem = story.select_one('[data-tpl="bo"] p.summary-class')
+        if subhead_elem:
+            summary = subhead_elem.get_text(strip=True)
 
-    return links
+        articles.append(ArticleLink(headline=heading, summary=summary, url=url))
 
-
-def parse_wsj_homepage(page) -> list[ArticleLink]:
-    """retrieve first 10 headlines from wsj mobile home page"""
-    xs = []
-    if cards := page.locator(".e1u7xa1g1.css-1x52dtc-CardLayoutItem"):
-        for i in range(10):
-            card = cards.nth(i)
-            h3 = card.locator("h3")
-            title = h3.text_content()
-            anchor = h3.locator("a")
-            subtitle = card.locator("p").first.text_content().strip()
-            url = anchor.get_attribute("href")
-            xs.append(ArticleLink(headline=title, summary=subtitle, url=url[: url.find("?")]))
-
-    return xs
+    return articles
 
 
-def retrieve_bloomberg_home_page_playright() -> ArticleList | None:
-    xs = retrieve_using_playwright({BLOOMBERG_URL: parse_bloomberg_homepage})
-    return ArticleList(source="Bloomberg", articles=list(xs.values()))
+def wsj_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+    """Extract all mobile homepage cards with headings and subheads"""
+    root = soup.find("main")
+    if not root:
+        return None
 
+    # Find all elements with data-parsely-slot starting with "mobile-homepage-card-"
+    cards = root.find_all(attrs={"data-parsely-slot": lambda x: x and x.startswith("mobile-homepage-card-")})
 
-def retrieve_nyt_home_page() -> ArticleList | None:
-    xs = retrieve_using_playwright({NYT_URL: parse_nyt_homepage})
-    return ArticleList(source="New York Times", articles=list(xs.values()))
+    articles = []
+    for card in cards:
+        # Try to find heading
+        heading_elem = card.select_one('[data-testid="flexcard-headline"] .e1sf124z8')
+        if not heading_elem:
+            continue  # Skip this card if no heading
 
+        heading = heading_elem.get_text(strip=True)
 
-def retrieve_wsj_home_page() -> ArticleList:
-    xs = retrieve_using_playwright({WSJ_URL: parse_wsj_homepage})
-    return ArticleList(source="Wall Street Journal", articles=xs)
+        # Find the parent anchor tag for the URL
+        link_elem = heading_elem.find_parent("a")
+        if not link_elem or not link_elem.get("href"):
+            continue  # Skip if no link found
 
+        url = link_elem["href"]
 
-def retrieve_wsj_home_page_ex() -> ArticleList | None:
-    """retrieve first 10 headlines from wsj mobile home page"""
-    xs = []
-    with sync_playwright() as p:
-        console.print("fetching wsj.com via google translate", style="yellow")
+        # Optional subhead
+        summary = ""
+        subhead_elem = card.select_one('[data-testid="flexcard-text"]')
+        if subhead_elem:
+            summary = subhead_elem.get_text(strip=True)
+
+        articles.append(ArticleLink(headline=heading, summary=summary, url=url))
+
+    return articles
+
+def scrape_site(site_config: SiteConfig) -> bool:
+    """Scrape a single site using its configuration."""
+    # Load persistent cookies
+    try:
+        cookie_file = site_config.make_cookie_filename()
+        cookies = load_cookies_from_file(cookie_file, site_config.cookie_domain)
+        print(f"🍪 Loaded {len(cookies)} cookies from {cookie_file}")
+    except Exception as e:
+        return ErrorInfo(error=True, type=e.__class__.__name__, message= f"❌ Failed to load cookies: {e}", url="")
+
+    # Set headers to mimic a mobile browser
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6.2 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": site_config.url,
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Connection": "keep-alive",
+    }
+
+    # Make request
+    with httpx.Client(cookies=cookies, headers=headers, follow_redirects=True, timeout=30.0, http2=True) as client:
         try:
-            browser = p.chromium.launch(headless=False)
-
-            iphone_15 = p.devices["iPhone 15"]
-            context = browser.new_context(**iphone_15)
-            page = context.new_page()
-
-            page.goto(WSJ_URL)
-
-            if cards := page.locator(".e1u7xa1g1.css-1x52dtc-CardLayoutItem"):
-                for i in range(10):
-                    card = cards.nth(i)
-                    h3 = card.locator("h3")
-                    title = h3.text_content()
-                    anchor = h3.locator("a")
-                    subtitle = card.locator("p").first.text_content().strip()
-                    url = anchor.get_attribute("href")
-                    # console.print(f"Title: {title}, Subtitle: {subtitle}, URL: {href}")
-                    xs.append(ArticleLink(headline=title, summary=subtitle, url=url[: url.find("?")]))
-
+            print(f"🌐 Fetching {site_config.url}...")
+            response = client.get(site_config.url)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            return ErrorInfo(error=True, type=e.__class__.__name__, message= f"❌ HTTP error occurred: {e}", url="")
         except Exception as e:
-            console.print(f"error retrieving {e}", style="red")
-            return None
-        finally:
-            browser.close()
+            return ErrorInfo(error=True, type=e.__class__.__name__, message= f"❌ Request failed: {e}", url="")
 
-    return ArticleList(source="Wall Street Journal", articles=xs)
+    print("parsing response")
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # Extract articles using site-specific function
+    return ArticleList(source=site_config.name, articles=site_config.extract_function(soup))
+    #     return print_article_list(articles)
+    # else:
+    #     print(f"❌ Failed to find articles")
+
+    # Save HTML content
+    # try:
+    #     output_file = site_config.make_filename()
+    #     with open(output_file, "w", encoding="utf-8") as f:
+    #         if root := soup.find("main"):
+    #             f.write(root.prettify())
+    #         else:
+    #             f.write(soup.prettify())
+    #     print(f"💾 Successfully saved to {output_file.resolve()}")
+    #     return True
+    # except Exception as e:
+    #     print(f"❌ Failed to write file: {e}")
+    #     return False
+
+
+# Site configurations
+SITE_CONFIGS: dict[str, SiteConfig] = {
+    "bloomberg": SiteConfig(
+        name="Bloomberg UK",
+        url="https://www.bloomberg.com/uk",
+        cookie_domain=".bloomberg.com",
+        extract_function=bloomberg_extract_headlines,
+        filename_stem="bloomberg",
+    ),
+    "ft": SiteConfig(
+        name="Financial Times",
+        url="https://www.ft.com/",
+        cookie_domain=".ft.com",
+        extract_function=ft_extract_headlines,
+        filename_stem="ft",
+    ),
+    "nyt": SiteConfig(
+        name="New York Times",
+        url="https://www.nytimes.com/",
+        cookie_domain=".nytimes.com",
+        extract_function=nyt_extract_headlines,
+        filename_stem="nyt",
+    ),
+    "wsj": SiteConfig(
+        name="Wall Street Journal",
+        url="https://www.wsj.com/",
+        cookie_domain=".wsj.com",
+        extract_function=wsj_extract_headlines,
+        filename_stem="wsj",
+    ),
+}
+
+
+def retrieve_headlines(source: str) -> ArticleList | ErrorInfo:
+    site = source.lower()
+    if site not in SITE_CONFIGS:
+        msg = f"❌ Unknown site: {site}. Available sites: {list(SITE_CONFIGS.keys())}"
+        return ErrorInfo(error=True, type="invalid argument", message= msg, url="")
+
+    try:
+        site_config = SITE_CONFIGS[site]
+        return scrape_site(site_config)
+    except Exception as e:
+        return ErrorInfo(error=True, type=e.__class__.__name__, message=str(e), url=source)
 
 
 def print_most_read_table(most_read: ArticleList):
@@ -759,80 +978,6 @@ def tool_call_handler(fnname: str, args: dict) -> str:
     pass
 
 
-def parse_ft_most_read_section(soup) -> ArticleList:
-    """return most read articles. retrieve articles from most-read list and augment with teasers"""
-
-    articles = {}
-    if most_read := soup.find("div", class_="o-teaser-collection--numbered"):
-        for title_anchor in most_read.find_all("a"):
-            title = title_anchor.text.strip()
-            url = title_anchor["href"]
-            articles[url] = ArticleLink(headline=title, url="https://www.ft.com" + url)
-
-    # find all teaser blocks so we can get subtitle and add to most read
-    for div in soup.find_all("div", class_="o-teaser__content"):
-        # Retrieve the anchor (assuming these are always present)
-        url = div.select_one(".o-teaser__heading a")["href"]
-
-        # Retrieve the subtitle, handling the case where it might not exist
-        subtitle_element = div.select_one(".o-teaser__standfirst a")
-        subtitle = subtitle_element.text.strip() if subtitle_element else ""
-        if url in articles:
-            if len(articles[url].summary) < len(subtitle):
-                articles[url].summary = subtitle
-
-    return ArticleList(source="Financial Times", articles=articles.values())
-
-
-def parse_ft_most_read(soup) -> ArticleList:
-    def extract_article(div) -> ArticleLink:
-        # get "data-content-id" or find child with read attribute
-        id = div.get("data-content-id")
-        content_id = id if id else div.find("div", class_="headline").get("data-content-id")
-        # read child span with class="text" and get content
-        headline_text = div.find("span", class_="text").get_text(strip=True)
-        return ArticleLink(headline=headline_text, url="https://www.ft.com/content/" + content_id)
-
-    xs = [extract_article(d) for d in soup.find_all("div", class_="headline--scale-7")]
-    xs.extend(extract_article(d) for d in soup.find_all("div", {"data-id": "most-read-id"}))
-
-    return ArticleList(source="Financial Times", articles=xs)
-
-
-def retrieve_ft_headlines() -> ArticleList:
-    with httpx.Client(http2=True) as client:
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "en-UK,en;q=0.5",
-            "Connection": "keep-alive",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
-        }
-
-        xs = []
-        response = client.get("https://www.ft.com/", headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        xs.append(parse_ft_most_read(soup))
-
-        response = client.get("https://www.ft.com/technology", headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        xs.append(parse_ft_most_read_section(soup))
-
-        response = client.get("https://www.ft.com/markets", headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        xs.append(parse_ft_most_read_section(soup))
-
-        response = client.get("https://www.ft.com/world-uk", headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        xs.append(parse_ft_most_read_section(soup))
-
-    return merge(*xs)
-
-
 def retrieve_ft_article(url: str) -> str:
     content, citation = retrieve_archive(url)
     pprint(citation)
@@ -862,12 +1007,6 @@ def retrieve_ft_article(url: str) -> str:
     return output
 
 
-@cache
-def retrieve_cached_headlines():
-    """retrieve from both sites as we need to web scrape. results are cached"""
-    return retrieve_using_playwright({NYT_URL: parse_nyt_homepage, WSJ_URL: parse_wsj_homepage})
-
-
 def test_eval():
     s = "10 - (7 * .52 + 4 * .47)"
     print(evaluate_expression(s))
@@ -894,8 +1033,12 @@ if __name__ == "__main__":
     # items = retrieve_headlines("nyt")
     # print_most_read_table(items)
 
-    # items = retrieve_headlines("wsj")
-    # print_most_read_table(items)
+    for site in SITE_CONFIGS.keys():
+        items = retrieve_headlines(site)
+        if isinstance(items, ArticleList):
+            print_most_read_table(items)
+        else:
+            console.print(items, style="red")
 
     # items = retrieve_headlines("bloomberg")
     # print_most_read_table(items)
@@ -904,8 +1047,8 @@ if __name__ == "__main__":
 
     # items2 = retrieve_ft_most_read_section("https://www.ft.com/markets")
     # print_most_read_table(items)
-    content = retrieve_ft_article("https://www.ft.com/content/d01290c9-cc92-4c1f-bd70-ac332cd40f94")
-    console.print(Markdown(content), style="cyan", width=80)
+    # content = retrieve_ft_article("https://www.ft.com/content/d01290c9-cc92-4c1f-bd70-ac332cd40f94")
+    # console.print(Markdown(content), style="cyan", width=80)
     # items = retrieve_bbc_most_read()
     # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
     # print_most_read_table(items)
