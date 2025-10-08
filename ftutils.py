@@ -1,25 +1,25 @@
 #!/usr/bin/python3
-import re
 import json
-from datetime import datetime
-from pathlib import Path
+import math
+import re
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from functools import cache
+from pathlib import Path
 from typing import Any, TypedDict
 
 import httpx
-import math
-import time
 from bs4 import BeautifulSoup
-from functools import cache
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
 
 # from chatutils import execute_python_script
 from rich.pretty import pprint
-from rich.table import Table
-from dataclasses import dataclass
 
 from htm2md import html_to_markdown
 
@@ -256,8 +256,7 @@ def save_markdown_article(title: str, text: str) -> Path | None:
 
 
 def text_between(content: str, start_tag: str, end_tag: str) -> str:
-    return "" if (start := content.find(start_tag)) < 0 or (end := content.find(end_tag, start + len(start_tag))) < 0 \
-        else content[start + len(start_tag) : end]
+    return "" if (start := content.find(start_tag)) < 0 or (end := content.find(end_tag, start + len(start_tag))) < 0 else content[start + len(start_tag) : end]
 
 
 def add_citation(text: str, cite: Citation) -> str:
@@ -340,6 +339,7 @@ def retrieve_bbc_most_read() -> ArticleList:
 
 def get_bbc_article_contents(url: str) -> BeautifulSoup | None:
     console.print(f"navigate {url}", style="yellow")
+
     def dismiss_maybe_later_popup() -> bool:
         try:
             overlay = page.locator('[data-testid="test-overlay"]')
@@ -359,7 +359,7 @@ def get_bbc_article_contents(url: str) -> BeautifulSoup | None:
             return True
         except PlaywrightTimeoutError:
             return False
-        
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
@@ -374,7 +374,7 @@ def get_bbc_article_contents(url: str) -> BeautifulSoup | None:
 
             content = page.content()
             soup = BeautifulSoup(content, "html.parser")
-#            save_soup(soup, Path("~/Downloads/z.htm").expanduser())
+            # save_soup(soup, Path("~/Downloads/z.htm").expanduser())
             return soup
         except Exception as e:
             console.print(f"error retrieving {e}", style="red")
@@ -409,7 +409,7 @@ def retrieve_wsj_article(url: str) -> str:
         console.print(f"removing divs with style {len(xs)}", style="red")
         for d in xs:
             d.decompose()
-    
+
     md = html_to_markdown(soup=soup.find("section"), href_base="https://www.wsj.com/")
     md = add_citation(md, cite)
     save_markdown_article(cite.title, md)
@@ -451,7 +451,7 @@ def retrieve_using_playwright(url_dict: dict[str, Callable], headless: bool = Fa
                     page.goto(url)
                     page.wait_for_load_state("domcontentloaded")
                     try:
-                        iframe_locator = page.frame_locator("iframe[id^='sp_message_iframe']")        
+                        iframe_locator = page.frame_locator("iframe[id^='sp_message_iframe']")
                         iframe_locator.locator("button[aria-label='YES, I AGREE']").click(timeout=5000)
                     except PlaywrightTimeoutError:
                         console.print("iframe not found")
@@ -501,7 +501,6 @@ class SiteConfig:
         return p.parent / f"{stem}-cookies.json"
 
 
-# Constants
 SESSION_COOKIE_PATTERNS = frozenset(
     {
         # WSJ
@@ -524,10 +523,20 @@ SESSION_COOKIE_PATTERNS = frozenset(
         # FT.com patterns
         "FtComEntryPoint",  # Session entry point
         "OriginalReferer",  # Session referrer
+        # bloomberg
+        "_pxde",
+        "_px2",
+        "_pxhd",
+        "_reg-csrf",
+        "_reg-csrf-token",
+        "pxcts",  # PerimeterX timestamp
+        "_last-refresh",  # Page timestamp (1 hour)
+        "AF_SYNC",  # Sync timestamp
     }
 )
 
 ONE_DAY_SECONDS = 86400  # 24 * 3600
+
 
 def is_session_cookie(cookie: Cookie) -> bool:
     """
@@ -565,20 +574,14 @@ def load_cookies_from_file(filepath: Path, domain_suffix: str) -> dict[str, str]
     with filepath.open("r", encoding="utf-8") as f:
         cookies_list = json.load(f)
 
-    persistent_cookies = {
-        cookie["name"]: cookie["value"]
-        for cookie in cookies_list
-        if cookie.get("domain", "").endswith(domain_suffix) and not is_session_cookie(cookie)
-    }
-
-    return persistent_cookies
+    return {cookie["name"]: cookie["value"] for cookie in cookies_list if cookie.get("domain", "").endswith(domain_suffix) and not is_session_cookie(cookie)}
 
 
 def bloomberg_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
     def build_url(path: str) -> str:
         if not path.startswith("/"):
             path = "/" + path
-        return f"https://bloomberg.com{path.split("?", 1)[0]}"
+        return f"https://bloomberg.com{path.split('?', 1)[0]}"
 
     root = soup.find("section", {"data-zoneid": "Above the Fold"})
     if not root:
@@ -692,11 +695,7 @@ def ft_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
             # Try to find summary/standfirst (optional)
             summary = ""
             # Look for standfirst in multiple possible locations
-            summary_elem = (
-                story.select_one('.standfirst a[data-trackable="standfirst-link"] span')
-                or story.select_one(".standfirst span")
-                or story.select_one(".featured-story-content .standfirst span")
-            )
+            summary_elem = story.select_one('.standfirst a[data-trackable="standfirst-link"] span') or story.select_one(".standfirst span") or story.select_one(".featured-story-content .standfirst span")
             if summary_elem:
                 summary = summary_elem.get_text(strip=True)
 
@@ -796,7 +795,8 @@ def wsj_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
 
     return articles
 
-def scrape_site(site_config: SiteConfig) -> bool:
+
+def scrape_site(site_config: SiteConfig) -> ArticleList | ErrorInfo:
     """Scrape a single site using its configuration."""
     # Load persistent cookies
     try:
@@ -804,7 +804,7 @@ def scrape_site(site_config: SiteConfig) -> bool:
         cookies = load_cookies_from_file(cookie_file, site_config.cookie_domain)
         print(f"🍪 Loaded {len(cookies)} cookies from {cookie_file}")
     except Exception as e:
-        return ErrorInfo(error=True, type=e.__class__.__name__, message= f"❌ Failed to load cookies: {e}", url="")
+        return ErrorInfo(error=True, type=e.__class__.__name__, message=f"❌ Failed to load cookies: {e}", url="")
 
     # Set headers to mimic a mobile browser
     headers = {
@@ -819,6 +819,7 @@ def scrape_site(site_config: SiteConfig) -> bool:
         "Sec-Fetch-Site": "same-origin",
         "Sec-Fetch-User": "?1",
         "Connection": "keep-alive",
+        "Cache-Control": "max-age=0",
     }
 
     # Make request
@@ -828,9 +829,9 @@ def scrape_site(site_config: SiteConfig) -> bool:
             response = client.get(site_config.url)
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            return ErrorInfo(error=True, type=e.__class__.__name__, message= f"❌ HTTP error occurred: {e}", url="")
+            return ErrorInfo(error=True, type=e.__class__.__name__, message=f"❌ HTTP error occurred: {e}", url="")
         except Exception as e:
-            return ErrorInfo(error=True, type=e.__class__.__name__, message= f"❌ Request failed: {e}", url="")
+            return ErrorInfo(error=True, type=e.__class__.__name__, message=f"❌ Request failed: {e}", url="")
 
     print("parsing response")
     soup = BeautifulSoup(response.text, "html.parser")
@@ -893,7 +894,7 @@ def retrieve_headlines(source: str) -> ArticleList | ErrorInfo:
     site = source.lower()
     if site not in SITE_CONFIGS:
         msg = f"❌ Unknown site: {site}. Available sites: {list(SITE_CONFIGS.keys())}"
-        return ErrorInfo(error=True, type="invalid argument", message= msg, url="")
+        return ErrorInfo(error=True, type="invalid argument", message=msg, url="")
 
     try:
         site_config = SITE_CONFIGS[site]
@@ -996,11 +997,7 @@ def retrieve_ft_article(url: str) -> str:
         article = soup.find(id="article-body")
 
         # Extract non-empty div texts and join with double newlines
-        output = "\n\n".join(
-            text
-            for div in article.find_all("div", recursive=False)
-            if (text := div.get_text(strip=True, separator=" "))
-        )
+        output = "\n\n".join(text for div in article.find_all("div", recursive=False) if (text := div.get_text(strip=True, separator=" ")))
 
     output = add_citation(output, citation)
     save_markdown_article(citation.title, output)
@@ -1033,7 +1030,7 @@ if __name__ == "__main__":
     # items = retrieve_headlines("nyt")
     # print_most_read_table(items)
 
-    for site in SITE_CONFIGS.keys():
+    for site in ["bloomberg"]:  # SITE_CONFIGS.keys():
         items = retrieve_headlines(site)
         if isinstance(items, ArticleList):
             print_most_read_table(items)
