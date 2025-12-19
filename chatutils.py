@@ -96,6 +96,10 @@ class ChatInput:
         """Create key bindings for LaTeX translation"""
         kb = KeyBindings()
 
+        @kb.add("c-j")  # Ctrl+Enter to submit
+        def handle_submit(event):
+            event.current_buffer.validate_and_handle()
+
         @kb.add("$")
         def handle_dollar(event):
             buffer = event.current_buffer

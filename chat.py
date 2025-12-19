@@ -101,15 +101,15 @@ class InputFile(InputItem):
 
 
 class OpenAIModel(StrEnum):
-    GPT = "gpt-5"
-    GPT_MINI = "gpt-5-mini"
+    GPT = "gpt-5.2"
+    GPT_MINI = "gpt-5.2-chat-latest" # this is the instant model
     O4 = "o4-mini"
 
 
 # Costs are per million tokens (input / output)
 PRICING = {
-    OpenAIModel.GPT: (1.25, 10.00),
-    OpenAIModel.GPT_MINI: (0.25, 2.00),
+    OpenAIModel.GPT: (1.75, 14.00),
+    OpenAIModel.GPT_MINI: (1.75, 14.00),
     OpenAIModel.O4: (1.10, 4.40),
 }
 
@@ -302,7 +302,7 @@ class LLM:
     reasoning: str  # minimal|low|medium|high
     verbosity: str  # low|medium|high
 
-    def __init__(self, model: OpenAIModel, instructions: str = "", use_tools: bool = False, *, reasoning: str = "medium", verbosity: str = "low"):
+    def __init__(self, model: OpenAIModel, instructions: str = "", use_tools: bool = False, *, reasoning: str = "medium", verbosity: str = None):
         self.model = model
         self.instructions = instructions
         self.use_tools = use_tools
@@ -337,7 +337,8 @@ class LLM:
         else:
             # gpt-5 family supports both reasoning effort and text verbosity
             args["reasoning"] = {"effort": self.reasoning}
-            args["text"] = {"verbosity": self.verbosity}
+            if self.verbosity:
+                args["text"] = {"verbosity": self.verbosity}
             args["max_output_tokens"] = 16384
         if self.use_tools:
             args["tools"] = [v["defn"] for v in fn_mapping().values()]
