@@ -73,6 +73,7 @@ class ChatInput:
             clipboard=PyperclipClipboard(),
             multiline=True,
             key_bindings=self.key_bindings,
+            prompt_continuation=lambda width, line_number, is_soft_wrap: "... ",
         )
 
     def _should_complete(self):
@@ -80,24 +81,14 @@ class ChatInput:
         buffer = get_app().current_buffer
         word = buffer.document.get_word_before_cursor(WORD=True)
         return word is not None and word.startswith("%")
-        cursor_pos = app.current_buffer.cursor_position
-        text = app.current_buffer.text
-
-        # Find the start of the current word
-        word_start = cursor_pos
-        while word_start > 0 and text[word_start - 1] not in " \n\t":
-            word_start -= 1
-
-        # Check if current word starts with %
-        current_word = text[word_start:cursor_pos]
-        return current_word.startswith("%")
 
     def _create_key_bindings(self):
-        """Create key bindings for LaTeX translation"""
+        """Create key bindings for LaTeX translation and multiline input"""
         kb = KeyBindings()
 
-        @kb.add("c-j")  # Ctrl+Enter to submit
+        @kb.add("escape", "enter")
         def handle_submit(event):
+            """Submit input with Esc+Enter"""
             event.current_buffer.validate_and_handle()
 
         @kb.add("$")
@@ -135,12 +126,18 @@ class ChatInput:
         return WordCompleter(commands, ignore_case=True)
 
     def get_input(self) -> str:
-        """Get multi-line input from user. Returns 'x' on exit."""
+        """Get multi-line input from user. Returns 'x' on exit.
+        
+        Usage:
+        - Press Enter to create new lines
+        - Press Esc+Enter to submit
+        - Press Ctrl+D or Ctrl+C to exit
+        """
         try:
-            return self.session.prompt()
+            return self.session.prompt(">>> ", multiline=True)
         except (EOFError, KeyboardInterrupt):
             return "x"
-
+        
 
 def input_multi_line() -> str:
     """Enhanced input with history, multi-line editing, and command completion"""

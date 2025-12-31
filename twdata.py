@@ -674,6 +674,27 @@ def print_summary_information(symbol: str, df: pd.DataFrame, mas: list[str]):
     pct_drawdown = round(((last_value / high_value) - 1) * 100, 2)
     pct_off_low = round((last_value / low_value - 1) * 100, 2)
 
+    def calculate_returns(start_date, end_date):
+        close_start = df.loc[start_date, 'close']
+        close_end = df.loc[end_date, 'close']
+        num_days = (end_date - start_date).days
+        total_return = (close_end / close_start - 1)
+        return total_return, (1 + total_return) ** (365 / num_days) - 1 if num_days > 0 else 0
+
+    _, ann_whole = calculate_returns(df.index[0], df.index[-1])
+    ann_whole_pct = round(ann_whole * 100, 2)
+
+    if high_idx < low_idx:
+        _, ann_hl = calculate_returns(high_idx, low_idx)
+    else:
+        _, ann_hl = calculate_returns(low_idx, high_idx)
+    ann_hl_pct = round(ann_hl * 100, 2)
+
+    # Monthly investment returns
+    total_invested, current_value = calculate_monthly_investment_returns(df)
+    dca_return_pct = round(((current_value / total_invested - 1) * 100), 2)
+    dca_annualized = round(100 * ((current_value / total_invested) ** (365 / (df.index[-1] - df.index[0]).days) - 1), 2)
+
     # Create summary table
     summary_table = Table(title="Summary Information", style="white")
 
@@ -691,6 +712,12 @@ def print_summary_information(symbol: str, df: pd.DataFrame, mas: list[str]):
     summary_table.add_row("% in range", f"{pct_in_range}%")
     summary_table.add_row("% drawdown", f"{pct_drawdown}%")
     summary_table.add_row("% off low", f"{pct_off_low}%")
+    summary_table.add_row("Ann %", f"{ann_whole_pct}%")
+    summary_table.add_row("Ann H-L %", f"{ann_hl_pct}%")
+    summary_table.add_row("DCA (Monthly $100)", f"${total_invested:.2f}")
+    summary_table.add_row("Current Value", f"${current_value:.2f}")
+    summary_table.add_row("DCA Return", f"{dca_return_pct}%")
+    summary_table.add_row("DCA Ann", f"{dca_annualized}%")
 
     # Current price info calculations
     price_data = {"name": ["high", "low", "last"] + mas, "value": [high_value, low_value, last_value] + [df[ma].iloc[-1] for ma in mas]}
@@ -736,6 +763,30 @@ def print_summary_information(symbol: str, df: pd.DataFrame, mas: list[str]):
     console.print(summary_table)
     console.print(current_price_table)
 
+
+def calculate_monthly_investment_returns(df: pd.DataFrame) -> tuple[float, float]:
+    """Calculate returns from investing $100 on the first trading day of each month.
+    
+    Assumes fractional shares can be held.
+    
+    Args:
+        df: DataFrame with datetime index and 'close' column.
+        
+    Returns:
+        Tuple of (total_invested, current_value)
+    """
+    df = df.copy()
+    df['month'] = df.index.to_period('M')
+    # Get the first trading day of each month
+    first_days = df.groupby('month').head(1).index
+    first_closes = df.loc[first_days, 'close']
+    # Shares bought each month
+    shares_bought = 100 / first_closes
+    total_shares = shares_bought.sum()
+    total_invested = 100 * len(first_closes)
+    last_close = df['close'].iloc[-1]
+    current_value = total_shares * last_close
+    return total_invested, current_value
 
 def process(symbol: str, df: pd.DataFrame, sw_perc: float = 5.0):
     print_summary_information(symbol, df, ["ema19", "sma50", "sma150"])

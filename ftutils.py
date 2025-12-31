@@ -9,6 +9,7 @@ from datetime import datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -200,7 +201,8 @@ def retrieve_stock_quotes(symbols: list[str]) -> QuoteList | ErrorInfo:
 
     def make_url(ticker: str) -> str:
         t = ticker.upper()
-        return f"https://www.bnnbloomberg.ca/stock/{t}/" if ticker.find(":") >= 0 else f"https://www.bnnbloomberg.ca/stock/{t}:UN/"
+        path = f"{t}/" if ":" in ticker else f"{t}:UN/"
+        return "https://www.bnnbloomberg.ca/stock/" + path
 
     d = {make_url(e): process_bnn_stock_page for e in symbols}
     result = retrieve_using_playwright(d)
@@ -333,7 +335,7 @@ def retrieve_bbc_most_read() -> ArticleList:
     #    save_soup(soup, Path.home() / "Downloads" / "bbc-news.html")
     xs = []
     if mrs := soup.find("h2", id="mostRead-label"):
-        xs = [ArticleLink(headline=anchor.get_text(strip=True), url="https://bbc.co.uk" + anchor["href"]) for anchor in mrs.find_parent("div").find_all("a")]
+        xs = [ArticleLink(headline=anchor.get_text(strip=True), url=urljoin("https://www.bbc.co.uk", anchor["href"])) for anchor in mrs.find_parent("div").find_all("a")]
     return ArticleList(source="BBC News", articles=xs)
 
 
@@ -488,18 +490,16 @@ class SiteConfig:
     extract_function: Callable[[BeautifulSoup], ArticleList]
     filename_stem: str
 
-    def make_filename(self) -> Path:
-        """Generate filename based on site configuration"""
-        dir = Path.home() / "Downloads"
-        return dir / f"{self.filename_stem}.html"
+
+    def _get_dir(self) -> Path:
+        """Get the download directory path."""
+        return Path.home() / "Downloads"
+
+    def make_page_filename(self) -> Path:
+        return self._get_dir() / f"{self.filename_stem}.html"
 
     def make_cookie_filename(self) -> Path:
-        """Generate cookie filename based on site configuration"""
-        p = self.make_filename()
-        # Remove .html extension and add -cookies.json
-        stem = p.stem  # This gets the filename without extension
-        return p.parent / f"{stem}-cookies.json"
-
+        return self._get_dir() / f"{self.filename_stem}-cookies.json"
 
 SESSION_COOKIE_PATTERNS = frozenset(
     {
@@ -577,15 +577,16 @@ def load_cookies_from_file(filepath: Path, domain_suffix: str) -> dict[str, str]
     return {cookie["name"]: cookie["value"] for cookie in cookies_list if cookie.get("domain", "").endswith(domain_suffix) and not is_session_cookie(cookie)}
 
 
-def bloomberg_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+def bloomberg_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink]:
     def build_url(path: str) -> str:
-        if not path.startswith("/"):
-            path = "/" + path
-        return f"https://bloomberg.com{path.split('?', 1)[0]}"
+        base = "https://bloomberg.com"
+        url = urljoin(base, path)
+        parsed = urlparse(url)
+        return urlunparse(parsed._replace(query="", fragment=""))
 
     root = soup.find("section", {"data-zoneid": "Above the Fold"})
     if not root:
-        return None
+        return []
 
     results = {}  # store in dict keyed by url to filter duplicates
     for headline_elem in root.find_all("div", {"data-component": "headline"}):
@@ -630,19 +631,18 @@ def ft_most_read(soup: BeautifulSoup) -> list[str]:
             continue
 
         # Fully qualify the URL
-        url = f"https://www.ft.com{url_path}" if url_path.startswith("/") else url_path
+        url = urljoin("https://www.ft.com", url_path)
 
         most_read_urls.append(url)
 
     return most_read_urls
 
 
-def ft_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+def ft_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink]:
     """Extract FT story cards with headings and optional subheads"""
     root = soup.find("main")
     if not root:
-        breakpoint()
-        return None
+        return []
 
     # Find all story group containers using the data-trackable attribute
     story_groups = root.find_all("div", attrs={"data-trackable": lambda x: x and "storyGroupTitle" in x})
@@ -667,7 +667,7 @@ def ft_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
             url_path = heading_elem.get("href")
             if not url_path:
                 continue
-            url = f"https://www.ft.com{url_path}" if url_path.startswith("/") else url_path
+            url = urljoin("https://www.ft.com", url_path)
 
             # Get headline text - more robust approach
             headline = ""
@@ -716,11 +716,11 @@ def ft_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
     return most_read_articles + other_articles
 
 
-def nyt_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+def nyt_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink]:
     """Extract NYT story cards with headings and optional subheads"""
     root = soup.find("main")
     if not root:
-        return None
+        return []
 
     # Find all story wrappers
     stories = root.select('.story-wrapper[data-tpl="sli"]')
@@ -760,11 +760,11 @@ def nyt_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
     return articles
 
 
-def wsj_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink] | None:
+def wsj_extract_headlines(soup: BeautifulSoup) -> list[ArticleLink]:
     """Extract all mobile homepage cards with headings and subheads"""
     root = soup.find("main")
     if not root:
-        return None
+        return []
 
     # Find all elements with data-parsely-slot starting with "mobile-homepage-card-"
     cards = root.find_all(attrs={"data-parsely-slot": lambda x: x and x.startswith("mobile-homepage-card-")})
@@ -838,56 +838,6 @@ def scrape_site(site_config: SiteConfig) -> ArticleList | ErrorInfo:
 
     # Extract articles using site-specific function
     return ArticleList(source=site_config.name, articles=site_config.extract_function(soup))
-    #     return print_article_list(articles)
-    # else:
-    #     print(f"❌ Failed to find articles")
-
-    # Save HTML content
-    # try:
-    #     output_file = site_config.make_filename()
-    #     with open(output_file, "w", encoding="utf-8") as f:
-    #         if root := soup.find("main"):
-    #             f.write(root.prettify())
-    #         else:
-    #             f.write(soup.prettify())
-    #     print(f"💾 Successfully saved to {output_file.resolve()}")
-    #     return True
-    # except Exception as e:
-    #     print(f"❌ Failed to write file: {e}")
-    #     return False
-
-
-# Site configurations
-SITE_CONFIGS: dict[str, SiteConfig] = {
-    "bloomberg": SiteConfig(
-        name="Bloomberg UK",
-        url="https://www.bloomberg.com/uk",
-        cookie_domain=".bloomberg.com",
-        extract_function=bloomberg_extract_headlines,
-        filename_stem="bloomberg",
-    ),
-    "ft": SiteConfig(
-        name="Financial Times",
-        url="https://www.ft.com/",
-        cookie_domain=".ft.com",
-        extract_function=ft_extract_headlines,
-        filename_stem="ft",
-    ),
-    "nyt": SiteConfig(
-        name="New York Times",
-        url="https://www.nytimes.com/",
-        cookie_domain=".nytimes.com",
-        extract_function=nyt_extract_headlines,
-        filename_stem="nyt",
-    ),
-    "wsj": SiteConfig(
-        name="Wall Street Journal",
-        url="https://www.wsj.com/",
-        cookie_domain=".wsj.com",
-        extract_function=wsj_extract_headlines,
-        filename_stem="wsj",
-    ),
-}
 
 
 def retrieve_headlines(source: str) -> ArticleList | ErrorInfo:
@@ -1003,6 +953,38 @@ def retrieve_ft_article(url: str) -> str:
     save_markdown_article(citation.title, output)
     return output
 
+# Site configurations
+SITE_CONFIGS: dict[str, SiteConfig] = {
+    "bloomberg": SiteConfig(
+        name="Bloomberg UK",
+        url="https://www.bloomberg.com/uk",
+        cookie_domain=".bloomberg.com",
+        extract_function=bloomberg_extract_headlines,
+        filename_stem="bloomberg",
+    ),
+    "ft": SiteConfig(
+        name="Financial Times",
+        url="https://www.ft.com/",
+        cookie_domain=".ft.com",
+        extract_function=ft_extract_headlines,
+        filename_stem="ft",
+    ),
+    "nyt": SiteConfig(
+        name="New York Times",
+        url="https://www.nytimes.com/",
+        cookie_domain=".nytimes.com",
+        extract_function=nyt_extract_headlines,
+        filename_stem="nyt",
+    ),
+    "wsj": SiteConfig(
+        name="Wall Street Journal",
+        url="https://www.wsj.com/",
+        cookie_domain=".wsj.com",
+        extract_function=wsj_extract_headlines,
+        filename_stem="wsj",
+    ),
+}
+
 
 def test_eval():
     s = "10 - (7 * .52 + 4 * .47)"
@@ -1022,39 +1004,12 @@ def test_eval():
 
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
-    # retrieve_bloomberg_article("https://www.bloomberg.com/news/features/2025-04-24/price-alwaleed-s-elon-musk-ties-are-boosting-his-comeback-bid")
-    # get_bnnbloomberg_quote("JNK:UN")
-    # exit(0)
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
-    # exit(0)
-    # items = retrieve_headlines("nyt")
-    # print_most_read_table(items)
 
-    for site in ["bloomberg"]:  # SITE_CONFIGS.keys():
+    # for site in SITE_CONFIGS.keys():
+    for site in ["nyt"]:
         items = retrieve_headlines(site)
         if isinstance(items, ArticleList):
             print_most_read_table(items)
         else:
             console.print(items, style="red")
-
-    # items = retrieve_headlines("bloomberg")
-    # print_most_read_table(items)
-
-    # items = retrieve_headlines("ft")
-
-    # items2 = retrieve_ft_most_read_section("https://www.ft.com/markets")
-    # print_most_read_table(items)
-    # content = retrieve_ft_article("https://www.ft.com/content/d01290c9-cc92-4c1f-bd70-ac332cd40f94")
-    # console.print(Markdown(content), style="cyan", width=80)
-    # items = retrieve_bbc_most_read()
-    # items = ArticleList(source="Bloomberg UK", articles=retrieve_bloomberg_home_page())
-    # print_most_read_table(items)
-    # test_eval()
-
-    # items = retrieve_wsj_home_page()
-    # print_most_read_table(items)
-    # console.print(Markdown(items.to_markdown(), style="cyan"), width=80)
-    # print_most_read_table(items2)
-    # m = merge(items, items2)
-    # print_most_read_table(m)
-    # pprint(items)

@@ -59,13 +59,14 @@ tool_ex = """
 
 INSTRUCTIONS = dedent("""\
  [yellow bold]Controls:[/yellow bold]
- [dim] • Ctrl+J (or Alt+Enter): Submit message[/dim]
- [dim] • Enter: New line (Enter on empty: quick submit)[/dim]
+ [dim] • Esc+Enter: Submit message[/dim]
+ [dim] • Enter: New line[/dim]
  [dim] • Up/Down: Move cursor within the buffer[/dim]
  [dim] • Alt+Up/Alt+Down or Ctrl+P/Ctrl+N: Browse history[/dim]
- [dim] • Tab: Command completion[/dim]
+ [dim] • Tab: Command completion (for % commands)[/dim]
  [dim] • Ctrl+Y: Paste from clipboard[/dim]
- [dim] • Ctrl+Q or type 'x': Exit[/dim]
+ [dim] • $symbol$: Insert Unicode symbol (e.g., $alpha$ → α)[/dim]
+ [dim] • Ctrl+D, Ctrl+C, or type 'x': Exit[/dim]
  """)
 
 q = """```python

@@ -1616,6 +1616,9 @@ def process_command(model: LLM, cmd: str, params: str) -> None:
             console.print(f"attached file {p}", style="green")
         else:
             console.print(f"file {p} not found", style="red")
+    elif cmd == "clear":
+        vfs.file_mapping.clear()
+        console.print("All file mappings cleared.", style="green")
     elif cmd == "lint":
         p = Path(params + ".py").expanduser()
         if p.exists():
@@ -1657,7 +1660,7 @@ def test_chat_loop():
     #     keep a track of all important decisions and the reasoning behind them
     #     The current date is {datetime.now().isoformat()}
     #     """)
-    model = LLM(OpenAIModel.GPT_MINI, use_tools=True)
+    model = LLM(OpenAIModel.GPT, use_tools=True)
     history = MessageHistory()
     history.append(developer_message(dev_inst))
     history.print()
@@ -1694,13 +1697,13 @@ def main():
     # test_image_analysis()
     # test_solve_visual_maths_problem()
     # structured_output_message()
-    git_workflow()
+    # git_workflow()
     # lint_workflow(Path("~/code/scripts/chatutils.py").expanduser())
     # mypy_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # unittest_workflow(Path("~/code/scripts/toolutils.py").expanduser())
     # test_code_edit()
     # test_apply_diff()
-    # test_chat_loop()
+    test_chat_loop()
     # failed,s = cu.run_python_unittest(Path("./toolutils.py"), "apply_diff_impl")
 
 

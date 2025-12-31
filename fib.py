@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 import math
 from collections import defaultdict, deque
-from collections.abc import Iterator
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import cache
@@ -105,7 +104,7 @@ def parse_lines(xs):
         ys = x.split()
         if len(ys) > 0:
             if colnames:
-                yield {k: v for k, v in zip(colnames, ys)}
+                yield dict(zip(colnames, ys, strict=True))
             else:
                 colnames = ys
 
@@ -248,7 +247,8 @@ def example_cashflow():
     evaluate_cashflow(df, round(r, 2), interest_rate)
     console.print("--- example cashflow ---", style="yellow")
     console.print(f"drawdown {drawdown:.2f}, interest rate {interest_rate * 100:.4f}%, monthly payment {round(r, 2)}")
-    console.print(f"total paid {df['repayment'].sum():.2f} , total interest {df['int_paid'].sum():.2f}, total frac {df['frac_int'].sum()}")
+    console.print(f"total paid {df['repayment'].sum():.2f}, total interest {df['int_paid'].sum():.2f}")
+    console.print(f"total frac {df['frac_int'].sum()}")
     console.print(df)
 
 
