@@ -1,0 +1,162 @@
+[
+  {
+    "domain": ".ft.com",
+    "expiry": 1775734205,
+    "httpOnly": false,
+    "name": "FTCookieConsentGDPR",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "true"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1791545404,
+    "httpOnly": false,
+    "name": "consentDate",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "2025-10-09T11:30:04.847Z"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1775561405,
+    "httpOnly": false,
+    "name": "__eoi",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "ID=f7cc299d87d81616:T=1760009405:RT=1760009405:S=AA-Afjaql7Qp7awSp693qLKit75S"
+  },
+  {
+    "domain": ".www.ft.com",
+    "expiry": 1775734201,
+    "httpOnly": false,
+    "name": "__exponea_time2__",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "-0.21233510971069336"
+  },
+  {
+    "domain": ".www.ft.com",
+    "expiry": 1775734200,
+    "httpOnly": false,
+    "name": "__exponea_etc__",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "0d6e456d-578c-4ac3-9ecd-3bea67322550"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1791545404,
+    "httpOnly": false,
+    "name": "consentUUID",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "5ffd2257-dbb8-40cd-a555-2c8bf8e0006a_48"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1760011200,
+    "httpOnly": false,
+    "name": "_cb_svref",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "external"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1793705405,
+    "httpOnly": false,
+    "name": "__gads",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "ID=c164865f0200c7bf:T=1760009405:RT=1760009405:S=ALNI_MYo9NMYNW94bxiNpTIYiiBMqf_VUw"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1794137400,
+    "httpOnly": false,
+    "name": "_chartbeat2",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": ".1760009400624.1760009400624.1.Z322lBlj76SBdvzGRCwVxPyB50ymo.1"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1794137400,
+    "httpOnly": false,
+    "name": "_cb",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "UsGB-4bUJJDFDB"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1760011199,
+    "httpOnly": false,
+    "name": "FtComEntryPoint",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "/"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1791545399,
+    "httpOnly": false,
+    "name": "spoor-id",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "e94a4a4d-ec90-418b-806b-41fbc6885ec5"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1775734205,
+    "httpOnly": false,
+    "name": "FTConsent",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "marketingBypost%3Aoff%2CmarketingByemail%3Aoff%2CmarketingByphonecall%3Aoff%2CmarketingByfax%3Aoff%2CmarketingBysms%3Aoff%2CenhancementBypost%3Aoff%2CenhancementByemail%3Aoff%2CenhancementByphonecall%3Aoff%2CenhancementByfax%3Aoff%2CenhancementBysms%3Aoff%2CbehaviouraladsOnsite%3Aon%2CdemographicadsOnsite%3Aon%2CrecommendedcontentOnsite%3Aon%2CprogrammaticadsOnsite%3Aon%2CcookiesOnsite%3Aon%2CcookiesUseraccept%3Aon%2CmembergetmemberByemail%3Aoff%2CpermutiveadsOnsite%3Aon%2CpersonalisedmarketingOnsite%3Aon"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1794569399,
+    "httpOnly": false,
+    "name": "FTClientSessionId",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "e94a4a4d-ec90-418b-806b-41fbc6885ec5"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1791545405,
+    "httpOnly": false,
+    "name": "usnatUUID",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "17b57693-955f-4544-9e0b-f279f415c2a6"
+  },
+  {
+    "domain": ".ft.com",
+    "expiry": 1760011199,
+    "httpOnly": false,
+    "name": "OriginalReferer",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "None"
+  }
+]

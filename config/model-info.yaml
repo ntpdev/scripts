@@ -1,0 +1,104 @@
+providers:
+  openai:
+    env_var: OPENAI_API_KEY
+    url: "https://api.openai.com/v1/chat/completions"
+  alibaba:
+    env_var: ALIBABA_API_KEY
+    url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  togetherai:
+    env_var: TOGETHERAI_API_KEY
+    url: "https://api.together.xyz/v1"
+  groq:
+    env_var: GROQ_API_KEY
+    url: "https://api.groq.com/openai/v1"
+  sambanova:
+    env_var: SAMBANOVA_API_KEY
+    url: "https://api.sambanova.ai/v1"
+  openrouter:
+    env_var: OPENROUTER_API_KEY
+    url: "https://openrouter.ai/api/v1"
+  ollama:
+    env_var: null  # No API key needed
+    url: "http://localhost:11434/v1"
+models:
+  gpt4o:
+    name: gpt-4o
+    provider: openai
+  gptm:
+    name: gpt-5-mini
+    provider: openai
+    reasoning: True
+  gpt5:
+    name: gpt-5
+    provider: openai
+    reasoning: True
+  gpt45:
+    name: gpt-4.5-preview
+    provider: openai
+  o4m:
+    name: o4-mini
+    provider: openai
+    reasoning: True
+  groq:
+    name: moonshotai/kimi-k2-instruct-0905
+    provider: groq
+  groqo:
+    name: openai/gpt-oss-120b
+    provider: groq
+  llama4:
+    name: meta-llama/llama-4-maverick-17b-128e-instruct
+    provider: groq
+  groq-r1:
+    name: deepseek-r1-distill-llama-70b
+    provider: groq
+  qwq:
+    name: qwen-qwq-32b
+    provider: groq
+    reasoning: True
+  llama:
+    name: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
+    provider: togetherai
+  llama-big:
+    name: meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo
+    provider: togetherai
+  ds:
+    name: deepseek-ai/DeepSeek-V3.1
+    provider: togetherai
+  qwen:
+    name: Qwen/Qwen2.5-72B-Instruct-Turbo
+    provider: togetherai
+  qwen3:
+    name: Qwen/Qwen3-235B-A22B-Instruct-2507-tput
+    provider: togetherai
+  coder:
+    name: Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8
+    provider: togetherai
+  kimi:
+    name: moonshotai/Kimi-K2-Instruct-0905
+    provider: togetherai
+  oss:
+    name: gpt-oss-120b
+    provider: sambanova
+  samba:
+    name: DeepSeek-V3.1-Terminus
+    provider: sambanova
+  samba-r1:
+    name: DeepSeek-R1
+    provider: sambanova
+    reasoning: True
+  llama3:
+    name: Meta-Llama-3.3-70B-Instruct
+    provider: sambanova
+  grok4f:
+    name: x-ai/grok-4-fast:free
+    provider: openrouter
+  mini:
+    name: minimax/minimax-m2:free
+    provider: openrouter
+    reasoning: True
+  qwenm:
+    name: qwen3-max
+    provider: alibaba  
+  ollama:
+    name: llama3.1:8b-instruct-q5_K_M
+    provider: ollama

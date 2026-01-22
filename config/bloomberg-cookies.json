@@ -1,0 +1,456 @@
+[
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1759930597,
+    "httpOnly": false,
+    "name": "_pxde",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "45493751d27332953d262b6e1e7541174f86f28957800809eb85e336956ca8e0:eyJ0aW1lc3RhbXAiOjE3NTk5MzAyNjc3OTksImZfa2IiOjAsImlwY19pZCI6W119"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1759930534,
+    "httpOnly": false,
+    "name": "_px2",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "eyJ1IjoiZDdmMGMwZTAtYTQ0YS0xMWYwLWJmOTYtMTlhMGFiNzNkYzNjIiwidiI6ImQyZDMxNGRjLWE0NGEtMTFmMC1iOWYxLWRhYjgwNzllNGVjMCIsInQiOjE3NTk5MzA1MDQxOTksImgiOiIwMzkyODA5ZjdjOWNlNDlkNGQ2NmJjMThjNzY0NDc5YTE4MzY0NGRiZDY3NGRjOTdiYjI3ZjdmYjQ3OTc0OGMyIn0="
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1794490182,
+    "httpOnly": false,
+    "name": "_ga_GQ1PBLXZCT",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "GS2.1.s1759930179$o1$g0$t1759930182$j58$l0$h0"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706181,
+    "httpOnly": false,
+    "name": "ttcsid_CSN3O6BC77UF5CI6702G",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1759930181609::pXYl3o52j3XVpzVpSilV.1.1759930181972.0"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1760534981,
+    "httpOnly": false,
+    "name": "panoramaIdType",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "panoDevice"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1760534981,
+    "httpOnly": false,
+    "name": "panoramaId",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "3748474cd1b8a078a7169e2bafa0185ca02c38c6e98f5be378772c40c9d7174a"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706181,
+    "httpOnly": false,
+    "name": "_ttp",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "01K7206SYYSSSJ8WBVEBA32GPE_.tt.1"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1783258181,
+    "httpOnly": false,
+    "name": "_cc_aud",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "ABR4nGNgYGDIeJbuygADTAysmUUgBmtmIZAEAEMVA7w%3D"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1760016581,
+    "httpOnly": false,
+    "name": "_uetsid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "d8568ed0a44a11f08e46a56f6d5832af"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1783258181,
+    "httpOnly": false,
+    "name": "_cc_cc",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "ACZ4nGNQMDe2NDFJNTFKMzUwNUpKsUwxTzJPtjQ2MTNJNTexNDNkAIKMZ%2BmuDHAgunDlfWnGQ3EM%2FxkZGT7Nvm4MY285u0cHxl67HqFm%2Be2Z4jD2ZiS9m5DYR6cjzHl9dZIhjH38zCM2GPvRmuN6MPblxXNYYOw3nyzhSqb2MMLY544eYoaxVx8%2FawJjr1iC0LrquDqMeXDZVLjwuVMIW%2B9ueqELYwMAtTZnFA%3D%3D"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706181,
+    "httpOnly": false,
+    "name": "_fbp",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "fb.1.1759930181230.747206726766182299"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1783258181,
+    "httpOnly": false,
+    "name": "_cc_id",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "73944e42f5052bd9d7b7c93464e74961"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706180,
+    "httpOnly": false,
+    "name": "_rdt_uuid",
+    "path": "/",
+    "sameSite": "Strict",
+    "secure": true,
+    "value": "1759930180885.93952b68-5bcf-4667-b30b-e6caa014f90d"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1760534982,
+    "httpOnly": false,
+    "name": "AF_SYNC",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1759930182021"
+  },
+  {
+    "domain": "www.bloomberg.com",
+    "expiry": 1791466180,
+    "httpOnly": false,
+    "name": "__spdt",
+    "path": "/",
+    "sameSite": "Strict",
+    "secure": false,
+    "value": "f2d49aa2a1624f7a99f1d8549e062383"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466180,
+    "httpOnly": false,
+    "name": "usnatUUID",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "00b25488-3ab5-4ddb-86b5-77dcb9fb66fd"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706180,
+    "httpOnly": false,
+    "name": "_gcl_au",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1.1.970229663.1759930180"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1794490179,
+    "httpOnly": false,
+    "name": "_ga",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "GA1.1.377420876.1759930180"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": true,
+    "name": "_session_id_backup",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "0199c403-4260-747d-8b0d-fcf399b9dc89"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "httpOnly": false,
+    "name": "__sppvid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "3bfc5842-0999-409f-9903-375fdbb3fedb"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466179,
+    "httpOnly": false,
+    "name": "consentDate",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "2025-10-08T13:29:39.639Z"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706179,
+    "httpOnly": false,
+    "name": "_sp_krux",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "true"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1760534981,
+    "httpOnly": false,
+    "name": "panoramaId_expiry",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1760534981434"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466179,
+    "httpOnly": false,
+    "name": "bbgconsentstring",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "req1fun1pad1"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1793626181,
+    "httpOnly": false,
+    "name": "_uetvid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "d8568c40a44a11f09781dd3485f8b2b4"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": false,
+    "name": "gatehouse_id",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "0199c403-4ba9-7026-8b47-39417e2d88d5"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706181,
+    "httpOnly": false,
+    "name": "ttcsid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1759930181609::VuggSfx8oyirjIzDkTuu.1.1759930181972.0"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": false,
+    "name": "geo_info",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "%7B%22countryCode%22%3A%22GB%22%2C%22country%22%3A%22GB%22%2C%22field_n%22%3A%22hf%22%2C%22trackingRegion%22%3A%22Europe%22%2C%22cacheExpiredTime%22%3A1760534974389%2C%22region%22%3A%22Europe%22%2C%22fieldN%22%3A%22hf%22%7D%7C1760534974389"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466180,
+    "httpOnly": false,
+    "name": "_pxvid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "d2d314dc-a44a-11f0-b9f1-dab8079e4ec0"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": false,
+    "name": "session_id",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "0199c403-4260-747d-8b0d-fcf399b9dc89"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "httpOnly": false,
+    "name": "pxcts",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "d8017c6f-a44a-11f0-9e4f-a9fea3cb1f25"
+  },
+  {
+    "domain": ".www.bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": false,
+    "name": "geo_info",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "{%22country%22:%22GB%22%2C%22region%22:%22Europe%22%2C%22fieldN%22:%22hf%22}|1760534974055"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": false,
+    "name": "session_key",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "eee4d08c13ddfd78c5f9ee2b9f2a1e2fd08aa741"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "httpOnly": true,
+    "name": "_reg-csrf",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "s%3AqVqn77V9kxVDL_9zM7E362xa.eTIJVw7KPUIik5zuQfUAhFIwwX6Mpq92xHsD1ofuU0A"
+  },
+  {
+    "domain": ".www.bloomberg.com",
+    "expiry": 1791466179,
+    "httpOnly": false,
+    "name": "bdfpc",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "004.7500579534.1759930179734"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1759933780,
+    "httpOnly": false,
+    "name": "_last-refresh",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "2025-10-8%2013%3A29"
+  },
+  {
+    "domain": "www.bloomberg.com",
+    "expiry": 1791466175,
+    "httpOnly": false,
+    "name": "_pxhd",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "kRV5ZmOi51-P1geiSxBfK5jBgS2Oeo8kVhiC2vLFUWnRs2unURKdDIjPLHOWXtS2d6EOZDmIC4tmI5lu5Dv1vA==:U/sam4jJj48VHQit6dRpo-3NpwnWLCcviUVYiYXJbR24gR7ybkQuIhch3HQYSnySqCok/JhAgcMCwY0nEelrHI8CQCTyrVGCTpsvuWelJf0="
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466174,
+    "httpOnly": false,
+    "name": "agent_id",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "0199c403-4260-72ef-ae4e-c6f67fd00ebf"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "httpOnly": false,
+    "name": "exp_pref",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "UK"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1767706181,
+    "httpOnly": false,
+    "name": "_tt_enable_cookie",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1791466179,
+    "httpOnly": false,
+    "name": "consentUUID",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "9af058ed-6a8c-4589-9523-e2fd38344ebb_48"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1794490181,
+    "httpOnly": false,
+    "name": "afUserId",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "78eaf11d-f319-4258-962f-3f75f3aeaa75-p"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1759933780,
+    "httpOnly": false,
+    "name": "_user-data",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "%7B%22status%22%3A%22anonymous%22%7D"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "expiry": 1793626180,
+    "httpOnly": false,
+    "name": "_scor_uid",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "67c35d3d22a444158e634d762736549e"
+  },
+  {
+    "domain": ".www.bloomberg.com",
+    "httpOnly": false,
+    "name": "country_code",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "GB"
+  },
+  {
+    "domain": ".bloomberg.com",
+    "httpOnly": false,
+    "name": "_reg-csrf-token",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "TBncb2ek-ajYbU5iEScp3211uNx0Cxd_XVys"
+  }
+]

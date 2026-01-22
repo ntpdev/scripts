@@ -1,0 +1,566 @@
+[
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791363187,
+    "httpOnly": false,
+    "name": "datadome",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "a~anbewAyv5cmdlO3ToIXdaSaHEKH69OswOKLgIGX1EBUiR_TqmQ~8Gu9x5NHGEl0fyqhxbHz~hjKsBm89oy1oP3ZFgqL4ktr3oFThj5C8JmFs2gv1n07i4oAU8m1eSC"
+  },
+  {
+    "domain": ".wsj.com",
+    "httpOnly": false,
+    "name": "s_tp",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "14178"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793954934,
+    "httpOnly": false,
+    "name": "_awl",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "2.1759826934.5-69135b14c6c5d8b46ecfe39c6cc109f6-6763652d75732d6561737431-0"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793522933,
+    "httpOnly": false,
+    "name": "_uetvid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "56cd6d60a35a11f09867ffa7f8d44517"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386933,
+    "httpOnly": false,
+    "name": "_ga_K2H7B9JRSS",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "GS2.1.s1759826882$o1$g1$t1759826932$j10$l0$h1510609212"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386932,
+    "httpOnly": false,
+    "name": "ab.storage.sessionId.5e5585c7-11f6-45b4-af93-40dc4cf278a3",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "g%3A82163a17-fd6b-5b94-fecc-3b03721e76e3%7Ce%3A1759828732786%7Cc%3A1759826884054%7Cl%3A1759826932786"
+  },
+  {
+    "domain": ".wsj.com",
+    "httpOnly": false,
+    "name": "_dj_id.9183",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": ".1759826883.1.1759826933..39fe49b8-59cc-40cd-8375-beb90902f1bd..76f8fff3-f5d2-41d6-bdf0-935a28492571.1759826882548.2"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1767602932,
+    "httpOnly": false,
+    "name": "_rdt_uuid",
+    "path": "/",
+    "sameSite": "Strict",
+    "secure": true,
+    "value": "1759826883058.18b1ba09-3ed5-4c34-8cd3-83e21974b29b"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362875,
+    "httpOnly": false,
+    "name": "_pubcid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "fd520747-58c2-4ecf-905f-f596b12247f8"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793958530,
+    "httpOnly": false,
+    "name": "_pcus",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "eyJ1c2VyU2VnbWVudHMiOnsiQ09NUE9TRVIxWCI6eyJzZWdtZW50cyI6WyJhYTlxNmU0czFuazgiLCJhYTlxNmU0czFua2IiLCJhYXZ3ZGdycW02d3EiLCJDU2NvcmU6Mzk5ODk5NGRiMDcyYWMwMzhlYmI2NWU2YjhjOWRkYWMyNWJkYjU5Mjpub19zY29yZSIsIkxUcmV0dXJuOmUwNGM5OGJmM2JmYzRjMTg2NjBjZDgzNzQ5NTEzZjlhMmExMDQwMjA6bm9fc2NvcmUiLCJDU2NvcmU6ZGQzODg1NmU5Mzk0ZjIxM2Y1MWFkZGNjMWFmOTNiNDcwZTg0Nzc5Mzpub19zY29yZSIsIkxUczo5MWIxOGE3NjAwZjJiOTI2YjY3YjJlNjA2YjBhNzA2NzFlOTRkYjcwOm5vX3Njb3JlIl19fX0%3D"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386932,
+    "httpOnly": false,
+    "name": "ab.storage.deviceId.5e5585c7-11f6-45b4-af93-40dc4cf278a3",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "g%3Ad6ec52b4-af28-b417-d6a7-cd5e828647f6%7Ce%3Aundefined%7Cc%3A1759826884057%7Cl%3A1759826884057"
+  },
+  {
+    "domain": ".wsj.com",
+    "httpOnly": false,
+    "name": "s_ppv",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "%5B%5BB%5D%5D"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793958483,
+    "httpOnly": false,
+    "name": "cX_G",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "cx%3A2ml7lsverc7onjh108hswuht9%3A2z669hbf8k8lw"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1759913333,
+    "httpOnly": false,
+    "name": "_uetsid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "56cd0450a35a11f095eefd2722a21d9b"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793522933,
+    "httpOnly": false,
+    "name": "_scor_uid",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "91cd476d33be4e72890ba4bc23d925c4"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386930,
+    "httpOnly": false,
+    "name": "__tbc",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "%7Bkpcd%7DChBtZ2diaGVsenJsaXk2cWZqEgpLS2JncXBCbHB1Gjxrdk9haDZSVmVWclcyMEoyTTk4cnFaMjJIUGdERE9UcFc5c2RGRTF0SURnUExoSGhCb2FkUnROQVRuU3AgAA"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1759830528,
+    "httpOnly": false,
+    "name": "usr_prof_v2",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "eyJpYyI6M30%3D"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1767602932,
+    "httpOnly": false,
+    "name": "_fbp",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "fb.1.1759826881931.1270251097"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1767602933,
+    "httpOnly": false,
+    "name": "_fbp",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "fb.1.1759826881931.1270251097"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793958529,
+    "httpOnly": false,
+    "name": "_pcid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "%7B%22browserId%22%3A%22mggbhelzrliy6qfj%22%7D"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362932,
+    "httpOnly": false,
+    "name": "_meta_cross_domain_id",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "7f02e684-2e7b-4a8e-8e1a-7b4cf499b8e0"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362878,
+    "httpOnly": false,
+    "name": "_ncg_g_id_",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "6fd08508-2673-4538-aa84-a403ce8be4aa.1.1759826882.1791362878"
+  },
+  {
+    "domain": ".wsj.com",
+    "httpOnly": false,
+    "name": "AMCVS_CB68E4BA55144CAA0A4C98A5%40AdobeOrg",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1760431682,
+    "httpOnly": false,
+    "name": "_meta_cross_domain_recheck",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "1759826882711"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1775551750,
+    "httpOnly": false,
+    "name": "permutive-id",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "f6170eaa-7715-4d77-ba16-865bfa1562e0"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1767602883,
+    "httpOnly": false,
+    "name": "_gcl_au",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1.1.872931572.1759826883"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1767602881,
+    "httpOnly": false,
+    "name": "_meta_facebookTag_sync",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "1759826881931"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1759999674,
+    "httpOnly": false,
+    "name": "_lr_geo_location",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "US"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362932,
+    "httpOnly": false,
+    "name": "ajs_anonymous_id",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "213f2e86-ee9b-4611-a91c-e2a5367544ae"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1759828732,
+    "httpOnly": false,
+    "name": "_dj_ses.9183",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "*"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362878,
+    "httpOnly": false,
+    "name": "_ncg_domain_id_",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "23b2d13a-bae6-4553-87bf-f6e1e2c0b772.1.1759826878.1791362878"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1759913329,
+    "httpOnly": false,
+    "name": "__pvi",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "eyJpZCI6InYtbWdnYmhlbTZtOHVvNmFsNSIsImRvbWFpbiI6Ii53c2ouY29tIiwidGltZSI6MTc1OTgyNjkyOTQyOH0%3D"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1760431680,
+    "httpOnly": false,
+    "name": "_lr_sampling_rate",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "100"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1763714881,
+    "httpOnly": false,
+    "name": "_meta_googleAdsSegments_library_loaded",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "1759826881933"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362931,
+    "httpOnly": false,
+    "name": "utag_main",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "v_id:0199bddb20420019f7935d4cd02705087001407f0056a$_sn:1$_se:2$_ss:0$_st:1759828731391$ses_id:1759826878535%3Bexp-session$_pn:2%3Bexp-session$_prevpage:WSJ_Home_US%20Home%20Page%3Bexp-1759830531406$vapi_domain:wsj.com"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793522879,
+    "httpOnly": false,
+    "name": "__gads",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "ID=496053725ebf9939:T=1759826879:RT=1759826879:S=ALNI_MZVrvzkZWTQqvQ_7AXO1tTq4Vdo6w"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793958530,
+    "httpOnly": false,
+    "name": "cX_P",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "mggbhelzrliy6qfj"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386928,
+    "httpOnly": false,
+    "name": "ab_uuid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "225183be-bc10-427f-a5cf-ac14e84d779c"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1765010931,
+    "httpOnly": false,
+    "name": "pbjs-unifiedid_cst",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "CyzZLLwsaQ%3D%3D"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362933,
+    "httpOnly": false,
+    "name": "_pin_unauth",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "dWlkPU1UUmtaV0ppWm1NdE1qTXdPQzAwTkdaaExXRXhPVGN0TlRNM09XSmlZV0kyTkdNeg"
+  },
+  {
+    "domain": ".wsj.com",
+    "httpOnly": false,
+    "name": "s_cc",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "true"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1765010931,
+    "httpOnly": false,
+    "name": "pbjs-unifiedid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "%7B%22TDID%22%3A%227c465069-07e1-4166-9196-a8bd900a8b6c%22%2C%22TDID_LOOKUP%22%3A%22FALSE%22%2C%22TDID_CREATED_AT%22%3A%222025-10-07T08%3A47%3A56%22%7D"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386932,
+    "httpOnly": false,
+    "name": "LANG",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "en_US"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1759913332,
+    "httpOnly": false,
+    "name": "LANG_CHANGED",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "en_US"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386882,
+    "httpOnly": false,
+    "name": "AMCV_CB68E4BA55144CAA0A4C98A5%40AdobeOrg",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "1585540135%7CMCIDTS%7C20369%7CMCMID%7C11229854724963236480630874372218997798%7CMCAID%7CNONE%7CMCOPTOUT-1759834080s%7CNONE%7CMCAAMLH-1760431680%7C7%7CMCAAMB-1760431680%7Cj8Odv6LonN4r3an7LhD3WZrU1bUpAkFkkiY1ncBR96t2PTI%7CMCSYNCSOP%7C411-20376%7CvVersion%7C4.4.0"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1762418875,
+    "httpOnly": false,
+    "name": "_lr_env_src_ats",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "false"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386933,
+    "httpOnly": false,
+    "name": "_ga",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "GA1.1.521651221.1759826883"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1759830475,
+    "httpOnly": false,
+    "name": "_lr_retry_request",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "true"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362933,
+    "httpOnly": false,
+    "name": "_dj_sp_id",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "952ccd36-b185-4342-8a7a-416a0ab39651"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1793958529,
+    "httpOnly": false,
+    "name": "_pctx",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": true,
+    "value": "%7Bu%7DN4IgrgzgpgThIC4B2YA2qA05owMoBcBDfSREQpAeyRCwgEt8oBJAEzIE4AmHgZgEYAHADZ%2BvQQFYuAFhEcADPJABfIA"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362875,
+    "httpOnly": false,
+    "name": "_sp_su",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "false"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1794386930,
+    "httpOnly": false,
+    "name": "xbc",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "%7Bkpcd%7DChBtZ2diaGVsenJsaXk2cWZqEgpLS2JncXBCbHB1Gjxrdk9haDZSVmVWclcyMEoyTTk4cnFaMjJIUGdERE9UcFc5c2RGRTF0SURnUExoSGhCb2FkUnROQVRuU3AgAA"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1760431673,
+    "httpOnly": false,
+    "name": "ca_r",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "www.wsj.com"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1762422530,
+    "httpOnly": false,
+    "name": "__pat",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "-14400000"
+  },
+  {
+    "domain": "www.wsj.com",
+    "expiry": 1759999674,
+    "httpOnly": false,
+    "name": "_lr_geo_location_state",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "FL"
+  },
+  {
+    "domain": "www.wsj.com",
+    "httpOnly": true,
+    "name": "connect.sid",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "s%3AEvtFlcEHyMxNOvoSP7p5F-mXFLneI1_T.uO%2BkgxlqDPMV1PkaxslJrbje4PDANdTLtVpPZUhWVH0"
+  },
+  {
+    "domain": ".wsj.com",
+    "expiry": 1791362875,
+    "httpOnly": false,
+    "name": "_pubcid_cst",
+    "path": "/",
+    "sameSite": "Lax",
+    "secure": false,
+    "value": "DCwOLBEsaQ%3D%3D"
+  }
+]
