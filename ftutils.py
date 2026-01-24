@@ -802,7 +802,7 @@ def scrape_site(site_config: SiteConfig) -> ArticleList | ErrorInfo:
     try:
         cookie_file = site_config.make_cookie_filename()
         cookies = load_cookies_from_file(cookie_file, site_config.cookie_domain)
-        print(f"🍪 Loaded {len(cookies)} cookies from {cookie_file}")
+        console.print(f"🍪 Loaded {len(cookies)} cookies from {cookie_file}")
     except Exception as e:
         return ErrorInfo(error=True, type=e.__class__.__name__, message=f"❌ Failed to load cookies: {e}", url="")
 
@@ -825,7 +825,7 @@ def scrape_site(site_config: SiteConfig) -> ArticleList | ErrorInfo:
     # Make request
     with httpx.Client(cookies=cookies, headers=headers, follow_redirects=True, timeout=30.0, http2=True) as client:
         try:
-            print(f"🌐 Fetching {site_config.url}...")
+            console.print(f"🌐 Fetching {site_config.url}...")
             response = client.get(site_config.url)
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -833,7 +833,7 @@ def scrape_site(site_config: SiteConfig) -> ArticleList | ErrorInfo:
         except Exception as e:
             return ErrorInfo(error=True, type=e.__class__.__name__, message=f"❌ Request failed: {e}", url="")
 
-    print("parsing response")
+    console.print("parsing response")
     soup = BeautifulSoup(response.text, "html.parser")
 
     # Extract articles using site-specific function
@@ -1007,7 +1007,7 @@ if __name__ == "__main__":
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
 
     # for site in SITE_CONFIGS.keys():
-    for site in ["nyt"]:
+    for site in ["bloomberg"]:
         items = retrieve_headlines(site)
         if isinstance(items, ArticleList):
             print_most_read_table(items)

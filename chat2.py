@@ -15,7 +15,7 @@ from typing import Any, Literal
 import requests
 import yaml
 from dataclasses_json import dataclass_json
-from firecrawl import FirecrawlApp
+from firecrawl import Firecrawl
 
 # from datetime import datetime, date, time
 from openai import OpenAI
@@ -536,19 +536,21 @@ def process_markdown_hyperlinks(text: str) -> str:
 
 def load_http(url: str) -> UserMessage:
     try:
-        crawler = FirecrawlApp(api_key=os.environ["FC_API_KEY"])
-        result = crawler.scrape_url(url, params={"formats": ["markdown"]})
+        crawler = Firecrawl(api_key=os.environ["FC_API_KEY"])
+        result = crawler.scrape(url, formats=["markdown"])
+        # from rich.pretty import pprint
+        # breakpoint()
         #        pprint(result)
-        if result["metadata"]["statusCode"] == 200:
-            text = result["markdown"]
-            title = result["metadata"]["title"]
+        if result.metadata.status_code == 200:
+            text = result.markdown
+            title = result.metadata.title
             fname = make_clean_filename(title) + ".md"
             console.print(f"saving {url}\n to {fname}", style="red")
             processed_text = process_markdown_hyperlinks(text)
             markdown = Markdown(processed_text, style="yellow", code_theme="monokai")
             console.print(markdown, width=80)
             with open(make_fullpath(fname), "w", encoding="utf-8") as f:
-                f.write(f"[*source* {result['metadata']['title']}]({url})\n\n")
+                f.write(f"[*source* {result.metadata.title}]({url})\n\n")
                 f.write(processed_text)
             return user_message(text=processed_text)
 
