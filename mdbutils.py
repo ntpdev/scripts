@@ -77,9 +77,7 @@ class MDBRepository:
 
         df = pd.DataFrame(map(lambda d: {"date": d["timestamp"], "open": d["open"], "high": d["high"], "low": d["low"], "close": d["close"], "volume": d["volume"], "vwap": d["vwap"]}, cursor)).set_index("date")
 
-        # Calculate EMA and add it to the DataFrame
-        df["ema"] = df.close.ewm(span=87, adjust=False).mean()
-
+        df["ema"] = ts.calc_ema(df.close, span=87)
         return df
 
     def load_trading_days(self, symbol: str, min_vol: int) -> pd.DataFrame:

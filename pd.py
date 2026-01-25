@@ -297,4 +297,5 @@ if __name__ == "__main__":
     p = Path.home() / "Documents" / "data"
     df = load_overlapping_files(p, "esu5*.csv")
     df['vwap'] = calc_vwap(df)
-    export_min_vol(df, make_filename('es-minvol.csv'))
+    # export_min_vol(df, make_filename('es-minvol.csv'))
+    print_summary(df)

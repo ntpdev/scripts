@@ -222,7 +222,8 @@ def calc_hilo(s: pd.Series) -> np.ndarray:
 
 def day_index(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create a DataFrame with [first, last, rth_first, rth_last, duration] for each trading day, based on gaps in the index.
+    Create a DataFrame with [first, last, rth_first, rth_last, duration] indexed by trade date.
+    Trading days are found based on gaps in the m1 data.
     """
     # Parameters for RTH session
     rth_start_offset = pd.Timedelta(hours=15, minutes=30)
@@ -335,6 +336,32 @@ def create_day_summary(df: pd.DataFrame, di: pd.DataFrame) -> pd.DataFrame:
     result = result.reindex(di.index)
 
     return result[["glbx_high", "glbx_low", "rth_open", "rth_high", "rth_low", "close", "rth_high_tm", "rth_low_tm", "rth_h1_high", "rth_h1_low"]]
+
+
+def print_day_summary(df_summary: pd.DataFrame) -> None:
+    """Print RTH OHLC summary table using rich.
+
+    Args:
+        df_summary: Output from create_day_summary() with trade dates as index
+    """
+    table = Table(title="RTH Daily Summary", show_header=True, header_style="bold cyan")
+
+    table.add_column("date", justify="left")
+    table.add_column("open", justify="right")
+    table.add_column("high", justify="right")
+    table.add_column("low", justify="right")
+    table.add_column("close", justify="right")
+
+    for trade_date, row in df_summary.iterrows():
+        date_str = trade_date.strftime("%Y-%m-%d")
+        rth_open = f"{row['rth_open']:.2f}" if pd.notna(row['rth_open']) else "-"
+        rth_high = f"{row['rth_high']:.2f}" if pd.notna(row['rth_high']) else "-"
+        rth_low = f"{row['rth_low']:.2f}" if pd.notna(row['rth_low']) else "-"
+        rth_close = f"{row['close']:.2f}" if pd.notna(row['close']) else "-"
+
+        table.add_row(date_str, rth_open, rth_high, rth_low, rth_close)
+
+    console.print(table)
 
 
 def aggregate_to_time_bars(df: pd.DataFrame, di: pd.DataFrame, start_col: str, end_col: str, target_freq: str | None = None) -> pd.DataFrame:
@@ -450,7 +477,13 @@ def pivot_cum_vol_avg_by_day(df: pd.DataFrame, di: pd.DataFrame, n: int = 30) ->
     return (pivot.div(row_avg, axis=0) * 100).round(2)
 
 
+def calc_ema(df: pd.DataFrame, length: int) -> pd.Series:
+    """calculate ema of close prices."""
+    return df["close"].ewm(span=length, adjust=False).mean().round(2)
+
+
 def calc_vwap(df: pd.DataFrame) -> pd.Series:
+    """calculate vwap anchored to each globex session open"""
     # 1) mark where the 1-minute gap occurs
     gap = df.index.to_series().diff().ne(pd.Timedelta(minutes=1))
     # 2) build a group label that increments at each gap

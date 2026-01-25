@@ -9,11 +9,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
+from rich.console import Console
 from rich.pretty import pprint
 
 import tsutils as ts
 from mdbutils import load_price_history
 
+console = Console()
 STRAT_BAR_COLOUR: str = "strat"
 
 
@@ -26,6 +28,16 @@ class MinVolDay:
     eu_end_bar: int
     rth_start_bar: int
     rth_end_bar: int
+
+
+@dataclass
+class PlotData:
+    """Container for all data required by the volume bar plotting function."""
+
+    df_min_vol: pd.DataFrame
+    day_index: pd.DataFrame
+    day_summary: pd.DataFrame
+    skip_first: bool
 
 
 def samp():
@@ -56,6 +68,34 @@ def plot_3lb(fname):
     df["xlabel"] = df.index.strftime("%d %b")
     fig = go.Figure(data=[go.Bar(x=df["xlabel"], y=df["close"] - df["open"], base=df["open"], marker=dict(color=df["colour"]), text=df["text"])])
     fig.show()
+
+
+def _create_plot_data(df: pd.DataFrame, min_vol: int) -> PlotData:
+    """Transform raw m1 data into structures needed for plotting.
+
+    Args:
+        df: Raw 1-minute OHLCV data with vwap and ema columns
+        min_vol: Minimum volume threshold for bar aggregation
+    """
+    day_index = ts.day_index(df)
+    day_summary = ts.create_day_summary(df, day_index)
+    num_days = day_index.shape[0]
+    ts.print_day_summary(day_summary)
+    # Skip first day if we have multiple days (first day used for prior hi-lo)
+    skip_first = num_days > 1
+    if skip_first:
+        slice_df = df[day_index.iat[1, 0] : day_index.iat[num_days - 1, 1]]
+    else:
+        slice_df = df
+
+    df_min_vol = ts.aggregate_min_volume(slice_df, min_vol)
+
+    return PlotData(
+        df_min_vol=df_min_vol,
+        day_summary=day_summary,
+        day_index=day_index,
+        skip_first=skip_first,
+    )
 
 
 #        color="LightSeaGreen",
@@ -122,54 +162,216 @@ def make_rth_index(df, day_index):
     # select rows matching time, convert index to a normal col, add col which is date
     ops = df[df.index.isin(rth_opens)]
     ops2 = ops.reset_index()
-    ops2["dt"] = ops2['date'].dt.date
+    ops2["dt"] = ops2["date"].dt.date
 
     cls = df[df.index.isin(rth_closes)]
     cls2 = cls.reset_index()
-    cls2["dt"] = cls2['date'].dt.date
+    cls2["dt"] = cls2["date"].dt.date
 
     # join dfs on date ie include only days that have open+close
     mrg = pd.merge(ops2, cls2, how="inner", on="dt")
     return [(x, y) for x, y in zip(mrg["date_x"], mrg["date_y"])]
 
 
-def plot(index):
-    # TODO the loading from files no longer matches the mongo version
-    # the mongo code starts from the original 1 min data this code
-    # from the saved minvol data so the indexes will differ
-    # the saved minvol files has a dateCl column
-    #df = pd.read_csv(ts.make_filename("es-minvol.csv"), parse_dates=["date", "dateCl"], index_col=0)
-    df = ts.load_overlapping_files(Path.home() / "Documents" / "data", "esu5*.csv")
-    df["vwap"] = ts.calc_vwap(df)
-    idx = ts.day_index(df)
-    day_summary_df = ts.create_day_summary(df, idx)
-    num_days = idx.shape[0]
-    breakpoint()
-    # loaded an additional day for hi-lo info but create minVol for display skipping first day
-    skip_first = num_days > 1
-    slice = df[idx.iat[index, 0] : idx.iat[index, 1]] if skip_first else df
-    df_min_vol = ts.aggregate_min_volume(slice, 2500)
-    # create a string for X labels
+def plot_minvol_price_chart(data: PlotData) -> None:
+    """Plot a minimum volume price chart with session markers and hi-lo labels."""
+    df_min_vol = data.df_min_vol
+    day_summary_df = data.day_summary
+    idx = data.day_index
+    skip_first = data.skip_first
+
+    # Create X-axis labels
     tm = df_min_vol.index.strftime("%d/%m %H:%M")
 
-    fig = go.Figure(
-        data=[go.Ohlc(x=tm, open=df_min_vol['open'], high=df_min_vol['high'], low=df_min_vol['low'], close=df_min_vol['close'], name='ES'),
-              go.Scatter(x=tm, y=df_min_vol['vwap'], line=dict(color='orange'), name='vwap')])
-    # fig = color_bars(df, tm, STRAT_BAR_COLOUR)
-    # #    fig = go.Figure(data=[go.Candlestick(x=tm, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ES'),
-    # #                        go.Scatter(x=tm, y=df['VWAP'], line=dict(color='orange'), name='vwap') ])
-    # xs = make_day_index(df)
-    # rths = make_rth_index(df, xs)
+    # Create figure with colored bars
+    fig = color_bars(df_min_vol, tm, STRAT_BAR_COLOUR)
+    add_hilo_labels(df_min_vol, fig)
 
-    # breakpoint()
-    # draw_daily_lines(df, fig, tm, rths)
-    # add_hilo_labels(df, fig)
-    #TODO create [MinVolDay] and use that to draw vertical session lines and horizontal opening lines
-    # op, cl = xs[index]
-    # fig.layout.xaxis.range = [op, cl]
-    # lo, hi = make_yrange(df, op, cl, 4)
-    # fig.layout.yaxis.range = [lo, hi]
+    # Create min-vol day index for session markers
+    mvds = create_min_vol_index(df_min_vol, idx)
+
+    def add_h_line(x_start, x_end, y_value, prefix="", color="Gray", dash="dot"):
+        fig.add_shape(
+            type="line",
+            x0=x_start,
+            y0=y_value,
+            x1=x_end,
+            y1=y_value,
+            line=dict(color=color, dash=dash),
+        )
+        if prefix:
+            label = f"{prefix} {y_value:.2f}"
+            fig.add_annotation(text=label, x=x_end, y=y_value, showarrow=False)
+
+    for i in mvds[1:] if skip_first else mvds:
+        eu_open = df_min_vol.at[df_min_vol.index[i.eu_start_bar], "open"]
+        add_h_line(tm[i.eu_start_bar], tm[i.eu_end_bar], eu_open, "", color="LightSeaGreen")
+
+        xstart = tm[i.start_bar]
+        xend = tm[i.rth_end_bar]
+
+        if i.rth_start_bar > 0:
+            xstart_rth = tm[i.rth_start_bar]
+            fig.add_vline(x=xstart_rth, line_width=1, line_dash="dash", line_color="blue")
+
+            if i.rth_end_bar > 0:
+                fig.add_vline(x=xend, line_width=1, line_dash="dash", line_color="blue")
+
+            rth_open = day_summary_df.at[i.trade_dt, "rth_open"]
+            add_h_line(xstart_rth, xend, rth_open, "open", color="LightSeaGreen")
+
+            glbx_hi = day_summary_df.at[i.trade_dt, "glbx_high"]
+            add_h_line(xstart_rth, xend, glbx_hi, "glbx hi")
+
+            glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
+            add_h_line(xstart_rth, xend, glbx_lo, "glbx lo")
+
+        # Add first hour hi-lo
+        h1_hi = day_summary_df.at[i.trade_dt, "rth_h1_high"]
+        if pd.notna(h1_hi):
+            xstart_rth = tm[i.rth_start_bar]
+            add_h_line(xstart_rth, xend, h1_hi, "h1 h")
+
+            h1_lo = day_summary_df.at[i.trade_dt, "rth_h1_low"]
+            add_h_line(xstart_rth, xend, h1_lo, "h1 l")
+
+        # Add previous day rth hi-lo-close
+        ix = day_summary_df.index.searchsorted(i.trade_dt)
+        if ix > 0:
+            prev_day = day_summary_df.iloc[ix - 1]
+            add_h_line(xstart, xend, prev_day.rth_low, "yl", color="chocolate")
+            add_h_line(xstart, xend, prev_day.rth_high, "yh", color="chocolate")
+            add_h_line(xstart, xend, prev_day.close, "cl", color="cyan")
+
     fig.show()
+
+
+def _make_date_range(idx: pd.Index, dt_str: str, n: int) -> tuple[int, int]:
+    """Resolve dt and n to inclusive positional index range.
+
+    Args:
+        idx: DatetimeIndex of trade dates
+        dt_str: Index value (e.g., "-1") or date string (e.g., "20250615")
+        n: Number of days. Positive means dt is start, negative means dt is end.
+           n=0 is treated as n=1.
+
+    Returns:
+        Tuple of (start_pos, end_pos) as inclusive indexes into idx
+    """
+    length = len(idx)
+    pos = None
+
+    # Try as integer index
+    try:
+        i = int(dt_str)
+        if -length <= i < length:
+            pos = i if i >= 0 else length + i
+    except ValueError:
+        pass
+
+    # Try as date string if not resolved
+    if pos is None:
+        try:
+            target = pd.to_datetime(dt_str)
+            pos = idx.searchsorted(target, side="right") - 1
+            pos = max(0, pos)
+        except ValueError:
+            pos = length - 1  # Default to last
+
+    # Normalize n=0 to n=1
+    if n == 0:
+        n = 1
+
+    # Calculate range based on sign of n
+    if n > 0:
+        # dt is start, range extends forward
+        start_pos = pos
+        end_pos = min(length - 1, pos + n - 1)
+    else:
+        # dt is end, range extends backward
+        start_pos = max(0, pos + n + 1)
+        end_pos = pos
+    breakpoint()
+    return start_pos, end_pos
+
+
+def _slice_trading_days(df: pd.DataFrame, dt: str, n: int) -> pd.DataFrame:
+    """Slice trading days from df including prior day for reference.
+
+    Args:
+        df: Full 1-minute OHLCV data
+        dt: Date string or index value
+        n: Number of days. Positive: dt is start. Negative: dt is end.
+
+    Returns:
+        Sliced DataFrame with requested days + 1 prior day for reference lines
+    """
+    idx = ts.day_index(df)
+    console.print(
+        f"Loaded {len(idx)} trading days from {idx.index[0].date()} to {idx.index[-1].date()}"
+    )
+
+    start_pos, end_pos = _make_date_range(idx.index, dt, n)
+
+    # Include prior day for reference (hi-lo-close lines)
+    start_pos = max(0, start_pos - 1)
+
+    start_ts = idx.iat[start_pos, 0]  # 'first' column
+    end_ts = idx.iat[end_pos, 1]  # 'last' column
+    console.print(f"Slicing data from {start_ts} to {end_ts} ({end_pos - start_pos + 1} days)")
+
+    return df[start_ts:end_ts]
+
+def load_timeseries_from_csv(data_dir: Path, pattern: str, dt: str, n: int) -> PlotData:
+    """Load and augment data from CSV files. Returns slice of data for plotting.
+
+    Args:
+        data_dir: Directory containing CSV files
+        pattern: Glob pattern for files (e.g., "esu5*.csv")
+        dt: Date in yyyymmdd format or an index value
+        n: Number of days to plot
+    """
+    df_all = ts.load_overlapping_files(data_dir, pattern)
+
+    # calc vwap and ema if not present
+    if "wap" in df_all.columns and "vwap" not in df_all.columns:
+        df_all["vwap"] = ts.calc_vwap(df_all)
+    if "ema" not in df_all.columns:
+        # ema(87) for m1 bars approx ema(20) for m5 bars
+        df_all["ema"] = ts.calc_ema(df_all, 87)
+
+    df = _slice_trading_days(df_all, dt, n)
+
+    return _create_plot_data(df, min_vol=2500 if abs(n) < 3 else 5000)
+
+
+def load_timeseries_from_mongo(symbol: str, dt_str: str, n: int) -> PlotData:
+    """Load and transform data from MongoDB."""
+    df = load_price_history(symbol, dt_str, n)
+    return _create_plot_data(df, min_vol=2500 if abs(n) < 3 else 5000)
+
+
+def plot(dt: str, n: int) -> None:
+    """Plot n days of price history from CSV files.
+
+    Args:
+        dt: Date in yyyymmdd format or an index value (e.g., "-1" for last day)
+        n: Number of days to plot
+    """
+    data = load_timeseries_from_csv(Path.home() / "Documents" / "data", "esu5*.csv", dt, n)
+    plot_minvol_price_chart(data)
+
+
+def plot_mongo(symbol: str, dt_str: str, n: int) -> None:
+    """Plot n days of price history for symbol starting with dt.
+
+    Args:
+        symbol: Futures symbol (e.g., "esu5")
+        dt: Date in yyyymmdd format or an index value
+        n: Number of days to plot
+    """
+    data = load_timeseries_from_mongo(symbol, dt_str, n)
+    plot_minvol_price_chart(data)
 
 
 def color_bars(df, tm, bar_colour: str):
@@ -232,7 +434,7 @@ def plot_tick(days: int):
     hi = filtered["high"].quantile(0.95)
     lo = filtered["low"].quantile(0.05)
     mid = (filtered["high"] + filtered["low"]) / 2
-    print(f"tick percentiles 5,95 {lo:.2f} and {hi:.2f}")
+    console.print(f"tick percentiles 5,95 {lo:.2f} and {hi:.2f}")
     tm = filtered.index.strftime("%d/%m %H:%M")
     fig = px.bar(x=tm, y=filtered.high, base=filtered.low)
     fig.add_trace(go.Scatter(x=tm, y=mid, line=dict(color="green"), name="ema"))
@@ -245,96 +447,32 @@ def plot_tick(days: int):
 
 
 def create_min_vol_index(df_min_vol, day_index) -> list[MinVolDay]:
+    """create list of MinVolDay from day_index and a df containing volume aggregated bars"""
     # first bar will either be at 23:00 most of the time but 22:00 when US/UK clocks change at different dates
+    def floor_index(tm):
+        """return index of interval that includes tm"""
+        return df_min_vol.index.searchsorted(tm, side="right") - 1
+
     start_tm = df_min_vol.index[0]
     last = df_min_vol.shape[0] - 1
     xs = []
     for i, r in day_index.iterrows():
         start_tm = r["first"]
         #    for startTm in day_index.openTime:
-        start_bar = floor_index(df_min_vol, start_tm)
-        print(start_tm, start_bar)
+        start_bar = floor_index(start_tm)
         eu_start = start_tm + timedelta(minutes=540)
-        eu_start_bar = floor_index(df_min_vol, eu_start)
+        eu_start_bar = floor_index(eu_start)
         eu_end_bar, rth_start_bar, rth_end_bar = -1, -1, -1
         if eu_start_bar < last:
             eu_end = start_tm + timedelta(minutes=929)
-            eu_end_bar = floor_index(df_min_vol, eu_end)
+            eu_end_bar = floor_index(eu_end)
             if eu_end_bar < last:
                 rth_start = start_tm + timedelta(minutes=930)
-                rth_start_bar = floor_index(df_min_vol, rth_start)
+                rth_start_bar = floor_index(rth_start)
                 rth_end = start_tm + timedelta(minutes=1320)
-                rth_end_bar = floor_index(df_min_vol, rth_end)
+                rth_end_bar = floor_index(rth_end)
         xs.append(MinVolDay(i, start_tm, start_bar, eu_start_bar, eu_end_bar, rth_start_bar, rth_end_bar))
     return xs
-
-
-def plot_mongo(symbol: str, dt: str, n: int):
-    """plot n days of price history for symbol starting with dt
-    dt is either a date in yyyymmdd format or a index value"""
-    df = load_price_history(symbol, dt, n)
-    idx = ts.day_index(df)
-    day_summary_df = ts.create_day_summary(df, idx)
-    num_days = idx.shape[0]
-    # loaded an additional day for hi-lo info but create minVol for display skipping first day
-    skip_first = num_days > 1
-    slice = df[idx.iat[1, 0] : idx.iat[num_days - 1, 1]] if skip_first else df
-    df_min_vol = ts.aggregate_min_volume(slice, 1500)
-
-    # create a string for X labels
-    tm = df_min_vol.index.strftime("%d/%m %H:%M")
-    fig = color_bars(df_min_vol, tm, STRAT_BAR_COLOUR)
-    add_hilo_labels(df_min_vol, fig)
-    mvds = create_min_vol_index(df_min_vol, idx)
-
-    def add_h_line(x_start, x_end, y_value, prefix="", color="Gray", dash="dot"):
-        fig.add_shape(type="line", x0=x_start, y0=y_value, x1=x_end, y1=y_value, line=dict(color=color, dash=dash))
-        if prefix:
-            label = f"{prefix} {y_value:.2f}"
-            fig.add_annotation(text=label, x=x_end, y=y_value, showarrow=False)
-
-    for i in mvds[1:] if skip_first else mvds:
-        eu_open = df_min_vol.at[df_min_vol.index[i.eu_start_bar], "open"]
-        add_h_line(tm[i.eu_start_bar], tm[i.eu_end_bar], eu_open, "", color="LightSeaGreen")
-
-        xstart = tm[i.start_bar]
-        xend = tm[i.rth_end_bar]
-
-        if i.rth_start_bar > 0:
-            xstart_rth = tm[i.rth_start_bar]
-            fig.add_vline(x=xstart_rth, line_width=1, line_dash="dash", line_color="blue")
-
-            if i.rth_end_bar > 0:
-                fig.add_vline(x=xend, line_width=1, line_dash="dash", line_color="blue")
-
-            rth_open = day_summary_df.at[i.trade_dt, "rth_open"]
-            add_h_line(xstart_rth, xend, rth_open, "open", color="LightSeaGreen")
-
-            glbx_hi = day_summary_df.at[i.trade_dt, "glbx_high"]
-            add_h_line(xstart_rth, xend, glbx_hi, "glbx hi")
-
-            glbx_lo = day_summary_df.at[i.trade_dt, "glbx_low"]
-            add_h_line(xstart_rth, xend, glbx_lo, "glbx lo")
-
-        # add first hour hi-lo
-        h1_hi = day_summary_df.at[i.trade_dt, "rth_h1_high"]
-        if pd.notna(h1_hi):
-            xstart_rth = tm[i.rth_start_bar]
-            add_h_line(xstart_rth, xend, h1_hi, "h1 h")
-
-            h1_lo = day_summary_df.at[i.trade_dt, "rth_h1_low"]
-            add_h_line(xstart_rth, xend, h1_lo, "h1 l")
-
-        # add previous day rth hi-lo-close
-        ix = day_summary_df.index.searchsorted(i.trade_dt)
-        if ix > 0:
-            prev_day = day_summary_df.iloc[ix - 1]
-
-            add_h_line(xstart, xend, prev_day.rth_low, "yl", color="chocolate")
-            add_h_line(xstart, xend, prev_day.rth_high, "yh", color="chocolate")
-            add_h_line(xstart, xend, prev_day.close, "cl", color="cyan")
-
-    fig.show()
 
 
 def plot_volp(symbol: str, dt: str, n: int):
@@ -399,19 +537,18 @@ def plot_cumulative_volume_by_day(pivot_df: pd.DataFrame) -> go.Figure:
         colors = colors * (len(trading_dates) // len(colors) + 1)
 
     # Plot each trading day
-    for i, date in enumerate(trading_dates):
+    for i, dt in enumerate(trading_dates):
         # Get data for this day, drop NaN values
-        day_data = pivot_df[date].dropna()
+        day_data = pivot_df[dt].dropna()
 
         if len(day_data) == 0:
             continue
 
         # Determine if this is the most recent day
-        is_most_recent = date == most_recent_date
+        is_most_recent = dt == most_recent_date
 
         # Format date for legend
-        date_str = date.strftime("%Y-%m-%d")
-
+        date_str = dt.strftime("%Y-%m-%d")
         # Add line trace
         fig.add_trace(
             go.Scatter(
@@ -461,11 +598,6 @@ def plot_cumulative_volume_by_day(pivot_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def floor_index(df, tm):
-    """return index of interval that includes tm"""
-    return df.index.searchsorted(tm, side="right") - 1
-
-
 def load_trading_days(collection, symbol, min_vol):
     """return dataframe of complete trading days [date, bar-count, volume, normalised-volume]"""
     cursor = collection.aggregate(
@@ -498,6 +630,7 @@ def plot_stdvol(df: pd.DataFrame) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Plot daily chart")
+    parser.add_argument("--dt", type=str, default="-1", help="Start date (yyyymmdd) or index")
     parser.add_argument("--index", type=int, default=-1, help="Index of day to plot e.g. -1 for last")
     parser.add_argument("--tlb", type=str, default="", help="Display three line break [fname]")
     parser.add_argument("--volp", action="store_true", help="Display volume profile for day")
@@ -509,13 +642,13 @@ def main():
     parser.add_argument("--sym", type=str, default="esu5", help="Index symbol")
 
     argv = parser.parse_args()
-    print(argv)
+    console.print(argv)
     if len(argv.tlb) > 0:
         plot_3lb(argv.tlb)
     elif argv.volp and len(argv.mdb) > 0:
-        plot_volp(argv.sym, argv.mdb, argv.days)
+        plot_volp(argv.sym, argv.dt, argv.days)
     elif len(argv.mdb) > 0:
-        plot_mongo(argv.sym, argv.mdb, argv.days)
+        plot_mongo(argv.sym, argv.dt, argv.days)
     elif argv.atr:
         plot_atr(5)
     elif argv.cumvol:
@@ -523,7 +656,7 @@ def main():
     elif argv.tick:
         plot_tick(argv.days)
     else:
-        plot(argv.index)
+        plot(argv.dt, argv.days)
 
 
 # plot_atr()
