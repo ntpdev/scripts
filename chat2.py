@@ -59,14 +59,13 @@ tool_ex = """
 
 INSTRUCTIONS = dedent("""\
  [yellow bold]Controls:[/yellow bold]
- [dim] • Esc+Enter: Submit message[/dim]
- [dim] • Enter: New line[/dim]
- [dim] • Up/Down: Move cursor within the buffer[/dim]
- [dim] • Alt+Up/Alt+Down or Ctrl+P/Ctrl+N: Browse history[/dim]
- [dim] • Tab: Command completion (for % commands)[/dim]
- [dim] • Ctrl+Y: Paste from clipboard[/dim]
- [dim] • $symbol$: Insert Unicode symbol (e.g., $alpha$ → α)[/dim]
- [dim] • Ctrl+D, Ctrl+C, or type 'x': Exit[/dim]
+  • Press Enter to create new lines
+  • Press Ctrl+D to submit
+  • Up/Down: Move cursor within the buffer
+  • Alt+Up/Alt+Down or Ctrl+P/Ctrl+N: Browse history
+  • Tab: Command completion (for % commands)
+  • Ctrl+Y: Paste from clipboard
+  • $symbol$: Insert Unicode symbol (e.g., $alpha$ → α)
  """)
 
 q = """```python
@@ -540,7 +539,7 @@ def load_http(url: str) -> UserMessage:
         result = crawler.scrape(url, formats=["markdown"])
         # from rich.pretty import pprint
         # breakpoint()
-        #        pprint(result)
+        # pprint(result)
         if result.metadata.status_code == 200:
             text = result.markdown
             title = result.metadata.title

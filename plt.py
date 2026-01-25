@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
+from rich.pretty import pprint
 
 import tsutils as ts
 from mdbutils import load_price_history
@@ -115,40 +116,59 @@ def make_day_index(df):
 # return a list of tuples of the op,cl indexes
 def make_rth_index(df, day_index):
     is_first_bar = (df.index.diff().fillna(pd.Timedelta(hours=1)) > timedelta(minutes=59)) & (df.index.hour > 21)
-    rth_opens = df[is_first_bar].index.apply(lambda e: e + np.timedelta64(930 - e.minute, "m"))
-    rth_closes = df[is_first_bar].index.apply(lambda e: e + np.timedelta64(1320 - e.minute, "m"))
+    rth_opens = df[is_first_bar].index.map(lambda e: e + np.timedelta64(930 - e.minute, "m"))
+    rth_closes = df[is_first_bar].index.map(lambda e: e + np.timedelta64(1320 - e.minute, "m"))
 
     # select rows matching time, convert index to a normal col, add col which is date
-    ops = df[df.Date.isin(rth_opens)]
+    ops = df[df.index.isin(rth_opens)]
     ops2 = ops.reset_index()
-    ops2["dt"] = ops2.Date.dt.date
+    ops2["dt"] = ops2['date'].dt.date
 
-    cls = df[df.Date.isin(rth_closes)]
+    cls = df[df.index.isin(rth_closes)]
     cls2 = cls.reset_index()
-    cls2["dt"] = cls2.Date.dt.date
+    cls2["dt"] = cls2['date'].dt.date
 
     # join dfs on date ie include only days that have open+close
     mrg = pd.merge(ops2, cls2, how="inner", on="dt")
-    return [(x, y) for x, y in zip(mrg["index_x"], mrg["index_y"])]
+    return [(x, y) for x, y in zip(mrg["date_x"], mrg["date_y"])]
 
 
 def plot(index):
-    df = pd.read_csv(ts.make_filename("es-minvol.csv"), parse_dates=["date", "dateCl"], index_col=0)
-
+    # TODO the loading from files no longer matches the mongo version
+    # the mongo code starts from the original 1 min data this code
+    # from the saved minvol data so the indexes will differ
+    # the saved minvol files has a dateCl column
+    #df = pd.read_csv(ts.make_filename("es-minvol.csv"), parse_dates=["date", "dateCl"], index_col=0)
+    df = ts.load_overlapping_files(Path.home() / "Documents" / "data", "esu5*.csv")
+    df["vwap"] = ts.calc_vwap(df)
+    idx = ts.day_index(df)
+    day_summary_df = ts.create_day_summary(df, idx)
+    num_days = idx.shape[0]
+    breakpoint()
+    # loaded an additional day for hi-lo info but create minVol for display skipping first day
+    skip_first = num_days > 1
+    slice = df[idx.iat[index, 0] : idx.iat[index, 1]] if skip_first else df
+    df_min_vol = ts.aggregate_min_volume(slice, 2500)
     # create a string for X labels
-    tm = df.index.strftime("%d/%m %H:%M")
-    fig = color_bars(df, tm, STRAT_BAR_COLOUR)
-    #    fig = go.Figure(data=[go.Candlestick(x=tm, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ES'),
-    #                        go.Scatter(x=tm, y=df['VWAP'], line=dict(color='orange'), name='vwap') ])
-    xs = make_day_index(df)
-    rths = make_rth_index(df, xs)
-    draw_daily_lines(df, fig, tm, rths)
-    add_hilo_labels(df, fig)
+    tm = df_min_vol.index.strftime("%d/%m %H:%M")
 
-    op, cl = xs[index]
-    fig.layout.xaxis.range = [op, cl]
-    lo, hi = make_yrange(df, op, cl, 4)
-    fig.layout.yaxis.range = [lo, hi]
+    fig = go.Figure(
+        data=[go.Ohlc(x=tm, open=df_min_vol['open'], high=df_min_vol['high'], low=df_min_vol['low'], close=df_min_vol['close'], name='ES'),
+              go.Scatter(x=tm, y=df_min_vol['vwap'], line=dict(color='orange'), name='vwap')])
+    # fig = color_bars(df, tm, STRAT_BAR_COLOUR)
+    # #    fig = go.Figure(data=[go.Candlestick(x=tm, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ES'),
+    # #                        go.Scatter(x=tm, y=df['VWAP'], line=dict(color='orange'), name='vwap') ])
+    # xs = make_day_index(df)
+    # rths = make_rth_index(df, xs)
+
+    # breakpoint()
+    # draw_daily_lines(df, fig, tm, rths)
+    # add_hilo_labels(df, fig)
+    #TODO create [MinVolDay] and use that to draw vertical session lines and horizontal opening lines
+    # op, cl = xs[index]
+    # fig.layout.xaxis.range = [op, cl]
+    # lo, hi = make_yrange(df, op, cl, 4)
+    # fig.layout.yaxis.range = [lo, hi]
     fig.show()
 
 
@@ -176,8 +196,11 @@ def color_bars(df, tm, bar_colour: str):
         fig.data[4].increasing.line.color = "red"
         fig.data[4].decreasing.line.color = "red"
         # TODO why does 5 not work??
-        fig.data[5].increasing.line.color = "purple"
-        fig.data[5].decreasing.line.color = "purple"
+        try:
+            fig.data[5].increasing.line.color = "purple"
+            fig.data[5].decreasing.line.color = "purple"
+        except IndexError:
+            pass
         return fig
     return go.Figure(data=[go.Candlestick(x=tm, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="ES"), go.Scatter(x=tm, y=df["vwap"], line=dict(color="orange"), name="vwap")])
 

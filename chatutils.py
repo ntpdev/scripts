@@ -16,7 +16,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 
-# on Linux clipbaord support with desktop requires xclip
+# on Linux clipbaord support with X11 desktop requires xclip
 # sudo apt install xclip
 
 IS_LINUX = sys.platform.startswith("linux")
@@ -86,9 +86,9 @@ class ChatInput:
         """Create key bindings for LaTeX translation and multiline input"""
         kb = KeyBindings()
 
-        @kb.add("escape", "enter")
+        @kb.add("c-d")
         def handle_submit(event):
-            """Submit input with Esc+Enter"""
+            """Submit input with ctrl+D"""
             event.current_buffer.validate_and_handle()
 
         @kb.add("$")

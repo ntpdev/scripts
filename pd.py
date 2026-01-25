@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from rich.console import Console
 
-from tsutils import aggregate, aggregate_to_time_bars, aggregate_min_volume, calc_tlb, day_index, load_overlapping_files, make_filename, calc_strat
+from tsutils import aggregate, aggregate_to_time_bars, aggregate_min_volume, calc_tlb, day_index, load_overlapping_files, make_filename, calc_strat, calc_vwap
 
 console = Console()
 Price = namedtuple("Price", ["date", "value"])
@@ -255,8 +255,13 @@ def test() -> None:
     console.print(test_find(df, "2022-09-08", 3))
     console.print(test_find(df, "2022-09-12", -3))
 
+def create_minvol():
+    p = Path.home() / "Documents" / "data"
+    df = load_overlapping_files(p, "esu5*.csv")
+    export_min_vol(df, make_filename("es-minvol.csv"))
 
-if __name__ == "__main__":
+
+def test_overlap() -> None:
     # test()
     # p = Path("c:/temp/ultra")
     p = Path.home() / "Documents" / "data"
@@ -287,7 +292,9 @@ if __name__ == "__main__":
         input("Press Enter to continue...")
 
     # for i,r in day.iterrows():
-
-    # df['vwap'] = calc_vwap(df)
+if __name__ == "__main__":
     # exportNinja(df, make_filename('ES 09-22.Last.txt'))
-    # exportMinVol(df, make_filename('es-minvol.csv'))
+    p = Path.home() / "Documents" / "data"
+    df = load_overlapping_files(p, "esu5*.csv")
+    df['vwap'] = calc_vwap(df)
+    export_min_vol(df, make_filename('es-minvol.csv'))
