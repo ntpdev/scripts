@@ -571,7 +571,6 @@ def load_files(p: Path, spec: str) -> pd.DataFrame | None:
     return None
 
 
-# Path('c:/temp/ultra').
 def load_overlapping_files(p: Path, spec: str) -> pd.DataFrame:
     """concatenates files into one dataframe skipping duplicate index entries. this only works when minute bars are complete because it picks the first occurence of a time"""
     comb = None
@@ -586,22 +585,23 @@ def load_file(fname: Path | str) -> pd.DataFrame:
     """load csv skipping first col and convert Date to index"""
     df = pd.read_csv(fname, parse_dates=["Date"], usecols=lambda col: not col.startswith("Unnamed"), index_col="Date")
     df.columns = df.columns.str.lower()
-    print(f"loaded {fname} {df.shape[0]} {df.shape[1]}")
+    console.print(f"loaded {fname} {df.shape[0]} {df.shape[1]}")
     return df
 
 
-def save_df(df: pd.DataFrame, symbol: str) -> None:
-    """save dataframe to csv in original format"""
+def save_m1_timeseries(df: pd.DataFrame, symbol: str) -> None:
+    """save dataframe to csv in original format. Filename is symbol YYYYMMDD.csv based on first date in index"""
     idx = day_index(df)
-    print(idx)
+    console.print(idx)
     fout = make_filename(f"{symbol} {idx.index[0].strftime('%Y%m%d')}.csv")
-    print(f"saving {fout}")
+    console.print(f"saving {fout}")
     # reverse the parsing operations so the saved csv is the same format
     # drop the first col which is 0,1,2 then make the index date time a standard col
     #    df2 = df.drop(df.columns[0], axis=1)
-    df.reset_index(names="Date", inplace=True)
-    df["Date"] = df["Date"].dt.strftime("%Y%m%d %H:%M:%S")
-    df.to_csv(fout)
+    df_copy = df.copy()
+    df_copy.reset_index(names="Date", inplace=True)
+    df_copy["Date"] = df_copy["Date"].dt.strftime("%Y%m%d %H:%M:%S")
+    df_copy.to_csv(fout)
 
 
 def create_volume_profile(df: pd.DataFrame, prominence: float | int = 40, smoothing_period: int = 1) -> pd.DataFrame:
@@ -780,7 +780,7 @@ def calc_tlb(xs: pd.Series, n: int) -> list | tuple[pd.DataFrame, float]:
             q.append(prev_cl)
             q.append(x)
             dirn *= -1
-    print(f"{'uptrend' if dirn == 1 else 'downtrend'} reversal price {q[0]}")
+    console.print(f"{'uptrend' if dirn == 1 else 'downtrend'} reversal price {q[0]}")
 
     return blocks_to_df(blks), q[0]
 

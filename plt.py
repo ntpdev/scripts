@@ -291,7 +291,7 @@ def _make_date_range(idx: pd.Index, dt_str: str, n: int) -> tuple[int, int]:
         # dt is end, range extends backward
         start_pos = max(0, pos + n + 1)
         end_pos = pos
-    breakpoint()
+
     return start_pos, end_pos
 
 
@@ -358,7 +358,7 @@ def plot(dt: str, n: int) -> None:
         dt: Date in yyyymmdd format or an index value (e.g., "-1" for last day)
         n: Number of days to plot
     """
-    data = load_timeseries_from_csv(Path.home() / "Documents" / "data", "esu5*.csv", dt, n)
+    data = load_timeseries_from_csv(Path.home() / "Documents" / "data", "zesh6*.csv", dt, n)
     plot_minvol_price_chart(data)
 
 

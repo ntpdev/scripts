@@ -1,15 +1,15 @@
 #!/usr/bin/python3
 import sys
 from collections import deque, namedtuple
-from pathlib import Path
-from datetime import datetime, time
 from collections.abc import Sequence
+from datetime import datetime, time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from rich.console import Console
 
-from tsutils import aggregate, aggregate_to_time_bars, aggregate_min_volume, calc_tlb, day_index, load_overlapping_files, make_filename, calc_strat, calc_vwap
+import tsutils as ts
 
 console = Console()
 Price = namedtuple("Price", ["date", "value"])
@@ -17,8 +17,8 @@ Price = namedtuple("Price", ["date", "value"])
 
 def export_daily(df: pd.DataFrame, fname: str) -> None:
     dt = df.index[-1]
-    s = make_filename(f"{fname}-{dt.year}{dt.month:02d}{dt.day:02d}.csv")
-    print(f"exporting daily to {s}")
+    s = ts.make_filename(f"{fname}-{dt.year}{dt.month:02d}{dt.day:02d}.csv")
+    console.print(f"exporting daily to {s}")
     df.to_csv(s)
 
 
@@ -31,13 +31,13 @@ def export_ninja(df: pd.DataFrame, outfile: str) -> None:
 
 
 def export_min_vol(df: pd.DataFrame, outfile: str) -> None:
-    df2 = aggregate_min_volume(df, 2500)
+    df2 = ts.aggregate_min_volume(df, 2500)
     print(f"exporting minVol file {outfile} {len(df2)}")
     df2.to_csv(outfile)
 
 
 def export_3lb(df: pd.DataFrame, outfile: str) -> None:
-    tlb, rev = calc_tlb(df["close"], 3)
+    tlb, rev = ts.calc_tlb(df["close"], 3)
     print(f"exporting 3lb file {outfile} {len(tlb)}")
     tlb.to_csv(outfile)
 
@@ -71,7 +71,7 @@ def aggregrate_bars_between(df: pd.DataFrame, tm_open: time, tm_close: time) -> 
     cls = df.at_time(tm_close).index
     for op, cl in zip(ops, cls):
         # slicing a dataframe by index uses an inclusive range
-        acc = aggregate(df.loc[op:cl])
+        acc = ts.aggregate(df.loc[op:cl])
         rows.append(acc)
     return pd.DataFrame(rows)
 
@@ -184,24 +184,21 @@ def fn1() -> None:
     print(dfd.tail(19))
 
 
-def print_summary(df: pd.DataFrame) -> None:
-    di = day_index(df)
-
-    for i, r in di.iterrows():
-        console.print(df[r["rth_first"] : r["rth_last"]]["volume"].median())
+def export_summary(df: pd.DataFrame) -> None:
+    di = ts.day_index(df)
 
     console.print("\n--- Daily bars ---", style="yellow")
-    df2 = aggregate_to_time_bars(df, di, "first", "last")
+    df2 = ts.aggregate_to_time_bars(df, di, "first", "last")
     export_daily(df2, "es-daily")
     console.print(df2)
 
     console.print("\n--- RTH bars ---", style="yellow")
-    df_rth = aggregate_to_time_bars(df, di, "rth_first", "rth_last")
+    df_rth = ts.aggregate_to_time_bars(df, di, "rth_first", "rth_last")
     export_daily(df_rth, "es-daily-rth")
     console.print(df_rth)
 
     console.print("\n--- 3LB ---", style="yellow")
-    export_3lb(df_rth, make_filename("es-rth-3lb.csv"))
+    export_3lb(df_rth, ts.make_filename("es-rth-3lb.csv"))
 
 
 def previous_max(xs: pd.Series) -> list[pd.Timestamp]:
@@ -257,17 +254,17 @@ def test() -> None:
 
 def create_minvol():
     p = Path.home() / "Documents" / "data"
-    df = load_overlapping_files(p, "esu5*.csv")
-    export_min_vol(df, make_filename("es-minvol.csv"))
+    df = ts.load_overlapping_files(p, "esu5*.csv")
+    export_min_vol(df, ts.make_filename("es-minvol.csv"))
 
 
 def test_overlap() -> None:
     # test()
     # p = Path("c:/temp/ultra")
     p = Path.home() / "Documents" / "data"
-    df = load_overlapping_files(p, "nqu5*.csv")
-    print_summary(df)
-    di = day_index(df)
+    df = ts.load_overlapping_files(p, "nqu5*.csv")
+    export_summary(df)
+    di = ts.day_index(df)
     row = di.iloc[-1]
     day = df[row["first"] : row["last"]]
     tms = previous_min(day["low"])
@@ -282,7 +279,7 @@ def test_overlap() -> None:
     console.print("\n--- local minima", style="yellow")
     console.print(df.loc[minima])
     df["voln"] = normalise_as_perc(df["volume"])
-    df["strat"] = calc_strat(df)
+    df["strat"] = ts.calc_strat(df)
     df["rng"] = ((df["high"] - df["low"]) * 4).astype(int)
     # print minima with rows before and after
     delta = pd.Timedelta(minutes=10)
@@ -295,7 +292,9 @@ def test_overlap() -> None:
 if __name__ == "__main__":
     # exportNinja(df, make_filename('ES 09-22.Last.txt'))
     p = Path.home() / "Documents" / "data"
-    df = load_overlapping_files(p, "esu5*.csv")
-    df['vwap'] = calc_vwap(df)
+    df = ts.load_overlapping_files(p, "zesz5*.csv")
+    df['vwap'] = ts.calc_vwap(df)
+    export_summary(df)
+    # ts.save_m1_timeseries(df, "ESH6a")
+
     # export_min_vol(df, make_filename('es-minvol.csv'))
-    print_summary(df)

@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 from rich.console import Console
 from rich.table import Table
 
-from tsutils import aggregate_to_time_bars, calc_vwap, day_index, load_file, load_files, load_files_as_dict, load_overlapping_files, save_df
+from tsutils import aggregate_to_time_bars, calc_vwap, day_index, load_file, load_files, load_files_as_dict, load_overlapping_files, save_m1_timeseries
 
 console = Console()
 
@@ -363,7 +363,7 @@ def whole_day_concat(path: Path, fspec: str, fnout: str):
                 print(f"--skipping overlap {fn} {start} {end} {hw}")
 
     if comb is not None:
-        save_df(comb, fnout)
+        save_m1_timeseries(comb, fnout)
         comb["Date"] = pd.to_datetime(comb["Date"])
         comb2 = comb.set_index(comb["Date"])
         print_summary(comb2)
@@ -384,28 +384,128 @@ def check_overlap(p, spec):
     console.print("\n--- checking overlap", style="yellow")
     dfs = load_files_as_dict(p, spec)
     xs = []
-    for p, df in dfs.items():
+    for path, df in dfs.items():
         di = day_index(df)
-        xs.append(Fileinfo(p.name, len(di), di.iloc[0]["first"], di.iloc[-1]["last"]))
+        xs.append(Fileinfo(path.name, len(di), di.iloc[0]["first"], di.iloc[-1]["last"]))
     console.print(xs)
+    
+    # Convert to list to maintain order with file paths
+    df_list = list(dfs.items())
+    
     for i in range(len(xs) - 1):
         if xs[i].end >= xs[i + 1].start:
             console.print(f"overlap found fileinfo {i} {xs[i].fname} and {i + 1} {xs[i + 1].fname}", style="red")
             console.print(f"from {xs[i + 1].start} to {xs[i].end}")
+            
+            # Extract overlapping data from both files
+            _, df_i = df_list[i]
+            _, df_i_plus_1 = df_list[i + 1]
+            
+            overlap_start = xs[i + 1].start
+            overlap_end = xs[i].end
+            
+            # Get overlapping rows from each DataFrame
+            overlap_i = df_i.loc[overlap_start:overlap_end]
+            overlap_i_plus_1 = df_i_plus_1.loc[overlap_start:overlap_end]
+            
+            # Find common index values
+            common_idx = overlap_i.index.intersection(overlap_i_plus_1.index)
+            
+            if len(common_idx) > 0:
+                # Compare rows with matching timestamps
+                df1_common = overlap_i.loc[common_idx].sort_index()
+                df2_common = overlap_i_plus_1.loc[common_idx].sort_index()
+                
+                are_identical = df1_common.equals(df2_common)
+                
+                if are_identical:
+                    console.print(f"  ✓ {len(common_idx)} overlapping rows are IDENTICAL", style="green")
+                else:
+                    console.print(f"  ✗ {len(common_idx)} overlapping rows contain DIFFERENCES", style="red")
+                    
+                    # Find which rows differ
+                    comparison = df1_common.compare(df2_common)
+                    if not comparison.empty:
+                        console.print(f"  Differences found in {len(comparison)} rows:")
+                        console.print(comparison)
+            else:
+                console.print(f"  No common timestamps in overlap range", style="yellow")
+            
             if xs[i + 1].end <= xs[i].end:
                 console.print(f"file {i + 1} {xs[i + 1].fname} not needed as contained", style="red")
+
+
+def print_combined_summary(p: Path, spec: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    console.print("\n--- combined summary", style="yellow")
+    df = load_overlapping_files(p, spec)
+    di = day_index(df)
+    console.print(di.head(), style="cyan")
+    
+    # Vectorized approach: assign trade date to each bar based on session boundaries
+    df_with_trade_date = df.copy()
+    
+    # Use searchsorted on 'first' timestamps to find which session each bar belongs to
+    # side='right' means bars >= session start belong to that session
+    session_indices = di['first'].searchsorted(df.index, side='right') - 1
+    
+    # Clip indices to valid range
+    session_indices = np.clip(session_indices, 0, len(di) - 1)
+    
+    # Map session indices to trade dates
+    df_with_trade_date['trade_date'] = di.index[session_indices]
+    
+    # Group by trade date and calculate volume and bar count
+    daily_stats = df_with_trade_date.groupby('trade_date').agg({
+        'volume': 'sum',
+        'trade_date': 'size'  # Count of bars
+    }).rename(columns={'trade_date': 'bars'})
+    
+    # Create summary table
+    table = Table(title="Combined Data Summary", show_header=True, header_style="bold magenta")
+    table.add_column("Trade Date", style="cyan", no_wrap=True)
+    table.add_column("Bars", justify="right", style="blue")
+    table.add_column("Volume", justify="right", style="green")
+    table.add_column("Duration (min)", justify="right", style="yellow")
+    
+    for trade_date, row in di.iterrows():
+        stats = daily_stats.loc[trade_date] if trade_date in daily_stats.index else None
+        bars = int(stats['bars']) if stats is not None else 0
+        volume = int(stats['volume']) if stats is not None else 0
+        duration = int(row['duration'])
+        table.add_row(
+            trade_date.strftime('%Y-%m-%d'),
+            f"{bars:,}",
+            f"{volume:,.0f}",
+            f"{duration:,}"
+        )
+    
+    # Add totals row
+    table.add_section()
+    table.add_row(
+        "TOTAL",
+        f"{daily_stats['bars'].sum():,.0f}",
+        f"{daily_stats['volume'].sum():,.0f}",
+        f"{di['duration'].sum():,.0f}",
+        style="bold"
+    )
+    
+    console.print(table)
+    console.print(f"\nTotal trading days: {len(di)}")
+    return df, di
 
 
 if __name__ == "__main__":
     # whole_day_concat(Path("c:/temp/z"), 'esu5*.csv', 'zesu5')
     # test_tick()
-    check_overlap(Path.home() / "Documents" / "data", "nqu5*.csv")
+    check_overlap(Path.home() / "Documents" / "data", "esz5*")
+    df, di = print_combined_summary(Path.home() / "Documents" / "data", "esz5*")
+    # s = di.at["2025-09-08", "first"]
+    # e = di.at["2025-12-18", "last"]
+    # save_m1_timeseries(df[s:e], "zESZ5-combined")
     # check_overlap(Path("c:/temp/z"), "esu5*.csv")
     # df_es = load_overlapping_files(Path("c:/temp/ultra"), "esu5*.csv")
-    df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esu5*.csv")
-    print_summary(df_es)
+    # df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esh5*.csv")
+    # print_summary(df_es)
     # compare_emas()
     # df_tick = simple_concat('ztick-nyse*.csv', 'x')
     # di = day_index(df_tick)
-    # breakpoint()
-#   test_load('zesu4*.csv')
