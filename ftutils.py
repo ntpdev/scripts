@@ -172,7 +172,7 @@ def evaluate_expression(expression: str) -> str:
     return str(result)
 
 
-def retrieve_article(url: str) -> str:
+def retrieve_article(url: str) -> str | ErrorInfo:
     if not url:
         return ErrorInfo(error=True, type="invalid argument", message="url required", url="")
 
@@ -421,7 +421,6 @@ def retrieve_wsj_article(url: str) -> str:
 def retrieve_bloomberg_article(url: str) -> str:
     content, cite = retrieve_archive(url)
     soup = BeautifulSoup(content, "html.parser").find("article")
-    breakpoint()
 
     # remove some divs before extracting text
     if divs := soup.find_all("div", style=lambda x: x and "align-items" in x):
@@ -929,9 +928,11 @@ def tool_call_handler(fnname: str, args: dict) -> str:
     pass
 
 
-def retrieve_ft_article(url: str) -> str:
+def retrieve_ft_article(url: str) -> str | ErrorInfo:
     content, citation = retrieve_archive(url)
     pprint(citation)
+    if citation.title == "Subscribe to read":
+        return ErrorInfo(error=True, type="article cannot be retrieved at this time.", message=citation.title, url=url)
 
     text = ""
     if content:
@@ -1005,6 +1006,10 @@ def test_eval():
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
+
+    x = retrieve_ft_article("https://www.ft.com/content/9643e9b8-a4d8-49e2-8c16-20c1a1c5ca4b")
+    pprint(x)
+    exit(0)
 
     # for site in SITE_CONFIGS.keys():
     for site in ["bloomberg"]:

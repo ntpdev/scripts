@@ -292,7 +292,7 @@ def test_overlap() -> None:
 if __name__ == "__main__":
     # exportNinja(df, make_filename('ES 09-22.Last.txt'))
     p = Path.home() / "Documents" / "data"
-    df = ts.load_overlapping_files(p, "zesz5*.csv")
+    df = ts.load_overlapping_files(p, "zesh6*.csv")
     df['vwap'] = ts.calc_vwap(df)
     export_summary(df)
     # ts.save_m1_timeseries(df, "ESH6a")

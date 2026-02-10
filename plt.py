@@ -246,55 +246,6 @@ def plot_minvol_price_chart(data: PlotData) -> None:
     fig.show()
 
 
-def _make_date_range(idx: pd.Index, dt_str: str, n: int) -> tuple[int, int]:
-    """Resolve dt and n to inclusive positional index range.
-
-    Args:
-        idx: DatetimeIndex of trade dates
-        dt_str: Index value (e.g., "-1") or date string (e.g., "20250615")
-        n: Number of days. Positive means dt is start, negative means dt is end.
-           n=0 is treated as n=1.
-
-    Returns:
-        Tuple of (start_pos, end_pos) as inclusive indexes into idx
-    """
-    length = len(idx)
-    pos = None
-
-    # Try as integer index
-    try:
-        i = int(dt_str)
-        if -length <= i < length:
-            pos = i if i >= 0 else length + i
-    except ValueError:
-        pass
-
-    # Try as date string if not resolved
-    if pos is None:
-        try:
-            target = pd.to_datetime(dt_str)
-            pos = idx.searchsorted(target, side="right") - 1
-            pos = max(0, pos)
-        except ValueError:
-            pos = length - 1  # Default to last
-
-    # Normalize n=0 to n=1
-    if n == 0:
-        n = 1
-
-    # Calculate range based on sign of n
-    if n > 0:
-        # dt is start, range extends forward
-        start_pos = pos
-        end_pos = min(length - 1, pos + n - 1)
-    else:
-        # dt is end, range extends backward
-        start_pos = max(0, pos + n + 1)
-        end_pos = pos
-
-    return start_pos, end_pos
-
-
 def _slice_trading_days(df: pd.DataFrame, dt: str, n: int) -> pd.DataFrame:
     """Slice trading days from df including prior day for reference.
 
@@ -307,11 +258,9 @@ def _slice_trading_days(df: pd.DataFrame, dt: str, n: int) -> pd.DataFrame:
         Sliced DataFrame with requested days + 1 prior day for reference lines
     """
     idx = ts.day_index(df)
-    console.print(
-        f"Loaded {len(idx)} trading days from {idx.index[0].date()} to {idx.index[-1].date()}"
-    )
+    console.print(f"Loaded {len(idx)} trading days from {idx.index[0].date()} to {idx.index[-1].date()}")
 
-    start_pos, end_pos = _make_date_range(idx.index, dt, n)
+    start_pos, end_pos = ts.find_date_range(idx.index, dt, n)
 
     # Include prior day for reference (hi-lo-close lines)
     start_pos = max(0, start_pos - 1)
@@ -321,6 +270,7 @@ def _slice_trading_days(df: pd.DataFrame, dt: str, n: int) -> pd.DataFrame:
     console.print(f"Slicing data from {start_ts} to {end_ts} ({end_pos - start_pos + 1} days)")
 
     return df[start_ts:end_ts]
+
 
 def load_timeseries_from_csv(data_dir: Path, pattern: str, dt: str, n: int) -> PlotData:
     """Load and augment data from CSV files. Returns slice of data for plotting.
@@ -347,7 +297,7 @@ def load_timeseries_from_csv(data_dir: Path, pattern: str, dt: str, n: int) -> P
 
 def load_timeseries_from_mongo(symbol: str, dt_str: str, n: int) -> PlotData:
     """Load and transform data from MongoDB."""
-    df = load_price_history(symbol, dt_str, n)
+    df = load_price_history(symbol, dt_str, n, True)
     return _create_plot_data(df, min_vol=2500 if abs(n) < 3 else 5000)
 
 
@@ -448,6 +398,7 @@ def plot_tick(days: int):
 
 def create_min_vol_index(df_min_vol, day_index) -> list[MinVolDay]:
     """create list of MinVolDay from day_index and a df containing volume aggregated bars"""
+
     # first bar will either be at 23:00 most of the time but 22:00 when US/UK clocks change at different dates
     def floor_index(tm):
         """return index of interval that includes tm"""
@@ -634,20 +585,20 @@ def main():
     parser.add_argument("--index", type=int, default=-1, help="Index of day to plot e.g. -1 for last")
     parser.add_argument("--tlb", type=str, default="", help="Display three line break [fname]")
     parser.add_argument("--volp", action="store_true", help="Display volume profile for day")
-    parser.add_argument("--mdb", type=str, default="", help="Load from MongoDB [yyyymmdd]")
+    parser.add_argument("--mdb", action="store_true", help="Load from MongoDB")
     parser.add_argument("--atr", action="store_true", help="Display ATR")
     parser.add_argument("--cumvol", action="store_true", help="plot relative cumulative volume")
     parser.add_argument("--tick", action="store_true", help="Display tick")
     parser.add_argument("--days", type=int, default=1, help="Number of days")
-    parser.add_argument("--sym", type=str, default="esu5", help="Index symbol")
+    parser.add_argument("--sym", type=str, default="esh6", help="Index symbol")
 
     argv = parser.parse_args()
     console.print(argv)
     if len(argv.tlb) > 0:
         plot_3lb(argv.tlb)
-    elif argv.volp and len(argv.mdb) > 0:
+    elif argv.volp and argv.mdb:
         plot_volp(argv.sym, argv.dt, argv.days)
-    elif len(argv.mdb) > 0:
+    elif argv.mdb:
         plot_mongo(argv.sym, argv.dt, argv.days)
     elif argv.atr:
         plot_atr(5)

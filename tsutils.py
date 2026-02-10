@@ -250,6 +250,54 @@ def day_index(df: pd.DataFrame) -> pd.DataFrame:
 
     return idx
 
+def find_date_range(idx: pd.Index, dt_str: str, n: int) -> tuple[int, int]:
+    """Resolve dt and n to inclusive positional index range.
+
+    Args:
+        idx: DatetimeIndex of trade dates
+        dt_str: Index value (e.g., "-1") or date string (e.g., "20250615")
+        n: Number of days. Positive means dt is start, negative means dt is end.
+           n=0 is treated as n=1.
+
+    Returns:
+        Tuple of (start_pos, end_pos) as inclusive indexes into idx
+    """
+    length = len(idx)
+    pos = None
+
+    # Try as integer index
+    try:
+        i = int(dt_str)
+        if -length <= i < length:
+            pos = i if i >= 0 else length + i
+    except ValueError:
+        pass
+
+    # Try as date string if not resolved
+    if pos is None:
+        try:
+            target = pd.to_datetime(dt_str)
+            pos = idx.searchsorted(target, side="right") - 1
+            pos = max(0, pos)
+        except ValueError:
+            pos = length - 1  # Default to last
+
+    # Normalize n=0 to n=1
+    if n == 0:
+        n = 1
+
+    # Calculate range based on sign of n
+    if n > 0:
+        # dt is start, range extends forward
+        start_pos = pos
+        end_pos = min(length - 1, pos + n - 1)
+    else:
+        # dt is end, range extends backward
+        start_pos = max(0, pos + n + 1)
+        end_pos = pos
+
+    return int(start_pos), int(end_pos)
+
 
 def create_day_summary(df: pd.DataFrame, di: pd.DataFrame) -> pd.DataFrame:
     """
@@ -602,6 +650,43 @@ def save_m1_timeseries(df: pd.DataFrame, symbol: str) -> None:
     df_copy.reset_index(names="Date", inplace=True)
     df_copy["Date"] = df_copy["Date"].dt.strftime("%Y%m%d %H:%M:%S")
     df_copy.to_csv(fout)
+
+def sort_futures_contracts(contracts: list[str]) -> list[str]:
+    """
+    Sort CME futures contract symbols by contract name then month (ascending).
+    
+    Format: ABMY where:
+    - AB: symbol (e.g., 'es', 'nq')
+    - M: month code (F, G, H, J, K, M, N, Q, U, V, X, Z)
+    - Y: single digit year (0-9)
+    """
+    
+    # CME month codes in chronological order
+    month_order = {
+        'F': 1,  # January
+        'G': 2,  # February
+        'H': 3,  # March
+        'J': 4,  # April
+        'K': 5,  # May
+        'M': 6,  # June
+        'N': 7,  # July
+        'Q': 8,  # August
+        'U': 9,  # September
+        'V': 10, # October
+        'X': 11, # November
+        'Z': 12  # December
+    }
+    
+    def key(contract) -> tuple[str, int]:
+        contract = contract.upper()
+        symbol = contract[:-2]
+        month_code = contract[-2]
+        month_num = month_order[month_code]
+        year_digit = int(contract[-1])       
+        
+        return (symbol, year_digit * 100 + month_num)
+    
+    return sorted(contracts, key=key)
 
 
 def create_volume_profile(df: pd.DataFrame, prominence: float | int = 40, smoothing_period: int = 1) -> pd.DataFrame:

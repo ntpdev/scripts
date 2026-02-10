@@ -50,6 +50,20 @@ class MDBRepository:
         self.client = None
 
     def collection(self):
+        """
+        m1 collection with documents
+        {
+          '_id': ObjectId('697dd328aa9a7a5511ba646c'),
+          'timestamp': datetime.datetime(2024, 9, 15, 23, 0),
+          'symbol': 'esz4',
+          'open': 5684.0,
+          'high': 5690.25,
+          'low': 5684.0,
+          'close': 5689.5,
+          'volume': 321.0,
+          'vwap': 5687.125
+        }
+        """
         if self.client is None:
             self.client = MongoClient(self.host, 27017)
             self.coll = self.client[self.db].m1
@@ -71,13 +85,12 @@ class MDBRepository:
 
     def load_timeseries(self, symbol: str, tm_start: pd.Timestamp, tm_end: pd.Timestamp) -> pd.DataFrame:
         """Load time series data for a specific symbol within a time range with exclusive end and calculate EMA."""
-        print(f"loading {symbol} {tm_start} to {tm_end}")
+        console.print(f"loading {symbol} {tm_start} to {tm_end}")
 
         cursor = self.collection().find(filter={"symbol": symbol, "timestamp": {"$gte": tm_start, "$lt": tm_end}}, sort=["timestamp"])
 
         df = pd.DataFrame(map(lambda d: {"date": d["timestamp"], "open": d["open"], "high": d["high"], "low": d["low"], "close": d["close"], "volume": d["volume"], "vwap": d["vwap"]}, cursor)).set_index("date")
-
-        df["ema"] = ts.calc_ema(df.close, span=87)
+        df["ema"] = ts.calc_ema(df, length=87)
         return df
 
     def load_trading_days(self, symbol: str, min_vol: int) -> pd.DataFrame:
@@ -129,6 +142,56 @@ class MDBRepository:
             ]
         )
         return pd.DataFrame(map(lambda r: {"last_bar": r["lastTm"], "first_bar": r["timestamp"], "gap": r["gap"]}, cursor))
+
+
+    def load_contiguous_regions(self, symbol: str, gap_mins: int = 30) -> pd.DataFrame:
+        """MongoDB aggregation to get contiguous regions."""
+        pipeline = [
+            {"$match": {"symbol": symbol}},
+            {"$sort": {"timestamp": 1}},
+            {"$setWindowFields": {
+                "sortBy": {"timestamp": 1},
+                "output": {
+                    "prevTm": {"$shift": {"output": "$timestamp", "by": -1}},
+                    "docNum": {"$documentNumber": {}}
+                }
+            }},
+            {"$set": {
+                "isNewRegion": {"$gt": [
+                    {"$dateDiff": {"startDate": "$prevTm", "endDate": "$timestamp", "unit": "minute"}},
+                    gap_mins
+                ]}
+            }},
+            {"$setWindowFields": {
+                "sortBy": {"timestamp": 1},
+                "output": {"region": {"$sum": {"$cond": ["$isNewRegion", 1, 0]}, "window": {"documents": ["unbounded", "current"]}}}
+            }},
+            {"$group": {
+                "_id": "$region",
+                "start": {"$min": "$timestamp"},
+                "end": {"$max": "$timestamp"},
+                # OHLCV aggregations
+                "open": {"$first": "$open"},
+                "high": {"$max": "$high"},
+                "low": {"$min": "$low"},
+                "close": {"$last": "$close"},
+                "volume": {"$sum": "$volume"},
+                "vwap": {"$last": "$vwap"},
+            }},
+            {"$sort": {"start": 1}},
+            {"$project": {
+                "_id": 0,
+                "start": 1,
+                "end": 1,
+                "open": 1,
+                "high": 1,
+                "low": 1,
+                "close": 1,
+                "volume": 1,
+                "vwap": 1,
+            }}
+        ]
+        return pd.DataFrame(self.collection().aggregate(pipeline))
 
 
 def lookup_trade_date(idx: pd.Index, dt_input: str) -> pd.Timestamp:
@@ -194,13 +257,20 @@ def calculate_trading_hours(df_trade_days: pd.DataFrame, dt: pd.Timestamp | date
     return None
 
 
-def load_price_history(symbol: str, dt_str: str, n: int = 1) -> pd.DataFrame:
-    """return m1 bars for n days. dt_str is either a date or and index value. if n is negative dt_str is the last day loaded"""
+def load_price_history(symbol: str, dt_str: str, n: int = 1, prior: bool = False) -> pd.DataFrame:
+    """return m1 bars for n days. dt_str is either a date YYYYHHMM or an index value. if n is negative dt_str is the last day loaded"""
     mdb = MDBRepository("localhost", "futures")
     df_summary = mdb.load_summary()
     df_gaps = mdb.load_gaps(symbol, 30)
     df_trade_days = make_trade_dates(df_summary.at[symbol, "start"], df_summary.at[symbol, "end"], df_gaps)
-    s, e = find_datetime_range(df_trade_days, lookup_trade_date(df_trade_days.index, dt_str), n)
+    start_pos, end_pos = ts.find_date_range(df_trade_days.index, dt_str, n)
+
+    # Include prior day for reference (hi-lo-close lines)
+    if prior:
+        start_pos = max(0, start_pos - 1)
+
+    s = df_trade_days.iat[start_pos, 0]
+    e = df_trade_days.iat[end_pos, 1]
     return mdb.load_timeseries(symbol, s, e)
 
 
@@ -310,6 +380,9 @@ def main(symbol: str):
     console.print(f"\n\n--- gaps for {symbol}", style="yellow")
     console.print(df_gaps)
 
+    df_contig = mdb.load_contiguous_regions("esh6")
+    console.print(df_contig)
+
     # this is like day_index but uses the gaps mdb query
     df_trade_days = make_trade_dates(df_summary.at[symbol, "start"], df_summary.at[symbol, "end"], df_gaps)
     console.print(f"\n\n--- trade date index for {symbol}", style="yellow")
@@ -338,4 +411,4 @@ def main(symbol: str):
 
 
 if __name__ == "__main__":
-    main("esu5")
+    main("esh6")

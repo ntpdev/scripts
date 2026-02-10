@@ -497,11 +497,12 @@ def print_combined_summary(p: Path, spec: str) -> tuple[pd.DataFrame, pd.DataFra
 if __name__ == "__main__":
     # whole_day_concat(Path("c:/temp/z"), 'esu5*.csv', 'zesu5')
     # test_tick()
-    check_overlap(Path.home() / "Documents" / "data", "esz5*")
-    df, di = print_combined_summary(Path.home() / "Documents" / "data", "esz5*")
-    # s = di.at["2025-09-08", "first"]
-    # e = di.at["2025-12-18", "last"]
-    # save_m1_timeseries(df[s:e], "zESZ5-combined")
+    spec = "nqh5*.csv"
+    check_overlap(Path.home() / "Documents" / "data", spec)
+    df, di = print_combined_summary(Path.home() / "Documents" / "data", spec)
+    # s = di.at["2024-12-13", "first"]
+    # e = di.at["2025-03-20", "last"]
+    # save_m1_timeseries(df[s:e], "NQH5")
     # check_overlap(Path("c:/temp/z"), "esu5*.csv")
     # df_es = load_overlapping_files(Path("c:/temp/ultra"), "esu5*.csv")
     # df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esh5*.csv")
@@ -509,3 +510,5 @@ if __name__ == "__main__":
     # compare_emas()
     # df_tick = simple_concat('ztick-nyse*.csv', 'x')
     # di = day_index(df_tick)
+    #TODO combine and slice NQ?5 data . Get ES?4 data
+    # check 1 day where there a 2 mins data missing
