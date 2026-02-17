@@ -250,6 +250,109 @@ def day_index(df: pd.DataFrame) -> pd.DataFrame:
 
     return idx
 
+
+def mad_volume_filter(
+    volumes: np.ndarray,
+    threshold: float = 2.0,
+) -> dict:
+    """
+    Flag days whose log-volume is >threshold MADs below the median.
+    MAD is robust to the very outliers we're trying to find.
+    """
+    log_vols = np.log(volumes)
+    median = np.median(log_vols)
+    mad = np.median(np.abs(log_vols - median))
+    # scale MAD to be consistent with std for normal data
+    mad_std = 1.4826 * mad
+
+    z_scores = (log_vols - median) / mad_std
+    is_low = z_scores < -threshold
+
+    cutoff = np.exp(median - threshold * mad_std)
+    # console.print(f"Median volume: {np.exp(median):>12,.0f}")
+    # console.print(f"MAD (log):     {mad:.4f}")
+    console.print(f"Cutoff ({threshold}σ):  {cutoff:>12,.0f}")
+    # console.print(f"Flagged:       {is_low.sum()} days")
+    # console.print(f"Values: {np.sort(volumes[is_low])}")
+
+    return {"cutoff": cutoff, "is_low": is_low, "z_scores": z_scores}
+
+
+def calculate_lower_outlier_threshold(data: np.ndarray, impact_threshold: float = 0.005) -> tuple[float, np.ndarray]:
+    """
+    Iteratively removes low outliers if removing them reduces the
+    Standard Deviation by more than (impact_threshold * Median).
+
+    impact_threshold: 0.005 means removing the point must tighten the
+                      spread by at least 0.5% of the median magnitude.
+    """
+    # 1. Sort and clean (work on a copy to avoid modifying original)
+    arr = np.sort(data.copy())
+    arr = arr[arr > 0]
+
+    if len(arr) < 10:
+        return 0, np.array([])  # Too small to calculate stats
+
+    # We lock the median to the original dataset to prevent drift
+    original_median = np.median(arr)
+
+    # We will iterate through the bottom 50% of data max
+    # (Assumption: You aren't throwing away >50% of data)
+    max_iterations = int(len(arr) / 2)
+
+    outliers = []
+
+    # Current working set
+    current_data = arr.copy()
+
+    for i in range(max_iterations):
+        # Current spread
+        current_std = np.std(current_data)
+
+        # Tentative next set (remove lowest)
+        next_data = current_data[1:]
+        next_std = np.std(next_data)
+
+        # Calculate Impact Score
+        # How much did StdDev drop relative to the scale of the data?
+        diff = current_std - next_std
+        score = diff / original_median
+
+        if score > impact_threshold:
+            # It's an outlier
+            outliers.append(current_data[0])
+            current_data = next_data
+        else:
+            # The drop in variance wasn't significant enough.
+            # We have hit the valid data cluster.
+            break
+
+    outliers = np.array(outliers)
+    threshold = outliers[-1] + 1 if len(outliers) > 0 else 0
+    return threshold, outliers
+
+
+# add trade_date and bar_number fields to df for easy groupby
+# filter df, di to liquid sessions only (excludes holidays and off-roll days)
+def filter_to_liquid_sessions(df: pd.DataFrame, di: pd.DataFrame, min_vol: int = 0) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = df.copy()
+    intervals = pd.IntervalIndex.from_arrays(di["first"], di["last"], closed="both")
+    session_idx = intervals.get_indexer(df.index)
+    df["trade_date"] = pd.Series(di.index[session_idx], index=df.index)
+    df["bar_number"] = df.groupby("trade_date").cumcount()
+
+    # filter di
+    daily_volume = df.groupby("trade_date")["volume"].sum()
+    if min_vol == 0:
+        d = mad_volume_filter(daily_volume.to_numpy())
+        min_vol = d["cutoff"]
+
+    filtered_index = di[daily_volume >= min_vol].index
+
+    # return filtered dataframes
+    return df[df["trade_date"].isin(filtered_index)], di.loc[filtered_index]
+
+
 def find_date_range(idx: pd.Index, dt_str: str, n: int) -> tuple[int, int]:
     """Resolve dt and n to inclusive positional index range.
 
@@ -402,10 +505,10 @@ def print_day_summary(df_summary: pd.DataFrame) -> None:
 
     for trade_date, row in df_summary.iterrows():
         date_str = trade_date.strftime("%Y-%m-%d")
-        rth_open = f"{row['rth_open']:.2f}" if pd.notna(row['rth_open']) else "-"
-        rth_high = f"{row['rth_high']:.2f}" if pd.notna(row['rth_high']) else "-"
-        rth_low = f"{row['rth_low']:.2f}" if pd.notna(row['rth_low']) else "-"
-        rth_close = f"{row['close']:.2f}" if pd.notna(row['close']) else "-"
+        rth_open = f"{row['rth_open']:.2f}" if pd.notna(row["rth_open"]) else "-"
+        rth_high = f"{row['rth_high']:.2f}" if pd.notna(row["rth_high"]) else "-"
+        rth_low = f"{row['rth_low']:.2f}" if pd.notna(row["rth_low"]) else "-"
+        rth_close = f"{row['close']:.2f}" if pd.notna(row["close"]) else "-"
 
         table.add_row(date_str, rth_open, rth_high, rth_low, rth_close)
 
@@ -651,41 +754,42 @@ def save_m1_timeseries(df: pd.DataFrame, symbol: str) -> None:
     df_copy["Date"] = df_copy["Date"].dt.strftime("%Y%m%d %H:%M:%S")
     df_copy.to_csv(fout)
 
+
 def sort_futures_contracts(contracts: list[str]) -> list[str]:
     """
     Sort CME futures contract symbols by contract name then month (ascending).
-    
+
     Format: ABMY where:
     - AB: symbol (e.g., 'es', 'nq')
     - M: month code (F, G, H, J, K, M, N, Q, U, V, X, Z)
     - Y: single digit year (0-9)
     """
-    
+
     # CME month codes in chronological order
     month_order = {
-        'F': 1,  # January
-        'G': 2,  # February
-        'H': 3,  # March
-        'J': 4,  # April
-        'K': 5,  # May
-        'M': 6,  # June
-        'N': 7,  # July
-        'Q': 8,  # August
-        'U': 9,  # September
-        'V': 10, # October
-        'X': 11, # November
-        'Z': 12  # December
+        "F": 1,  # January
+        "G": 2,  # February
+        "H": 3,  # March
+        "J": 4,  # April
+        "K": 5,  # May
+        "M": 6,  # June
+        "N": 7,  # July
+        "Q": 8,  # August
+        "U": 9,  # September
+        "V": 10,  # October
+        "X": 11,  # November
+        "Z": 12,  # December
     }
-    
+
     def key(contract) -> tuple[str, int]:
         contract = contract.upper()
         symbol = contract[:-2]
         month_code = contract[-2]
         month_num = month_order[month_code]
-        year_digit = int(contract[-1])       
-        
+        year_digit = int(contract[-1])
+
         return (symbol, year_digit * 100 + month_num)
-    
+
     return sorted(contracts, key=key)
 
 

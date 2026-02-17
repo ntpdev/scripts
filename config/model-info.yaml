@@ -21,10 +21,7 @@ providers:
     env_var: null  # No API key needed
     url: "http://localhost:11434/v1"
 models:
-  gpt4o:
-    name: gpt-4o
-    provider: openai
-  gptm:
+  gpt5m:
     name: gpt-5-mini
     provider: openai
     reasoning: True
@@ -70,11 +67,11 @@ models:
   qwen3:
     name: Qwen/Qwen3-235B-A22B-Instruct-2507-tput
     provider: togetherai
-  coder:
-    name: Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8
+  glm:
+    name: zai-org/GLM-5.0
     provider: togetherai
   kimi:
-    name: moonshotai/Kimi-K2-Instruct-0905
+    name: moonshotai/Kimi-K2.5
     provider: togetherai
   oss:
     name: gpt-oss-120b

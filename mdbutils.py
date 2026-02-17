@@ -5,6 +5,7 @@ from datetime import date, datetime
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.mongo_client import MongoClient
+from pymongo.collection import Collection
 from rich.console import Console
 from rich.table import Table
 
@@ -23,6 +24,20 @@ class SummaryResults(BaseModel):
     start: datetime
     end: datetime
 
+class TradeDateIndex(BaseModel):
+    """Model for trade_date_index collection."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    symbol: str
+    date: datetime
+    bars: int
+    volume: int
+    start: datetime
+    end: datetime
+    rthStart: datetime | None = None
+    rthEnd: datetime | None = None
+
 
 def print_symbol_summary_table(symbol_summaries: list[SummaryResults]):
     # Create a table instance
@@ -34,6 +49,7 @@ def print_symbol_summary_table(symbol_summaries: list[SummaryResults]):
     table.add_column("start", justify="center", style="green")
     table.add_column("end", justify="center", style="green")
 
+    symbol_summaries = sorted(symbol_summaries, key=lambda s: s.symbol[:-2] + s.symbol[-1] + s.symbol[-2])
     # Add rows to the table
     for s in symbol_summaries:
         table.add_row(s.symbol, str(s.count), s.start.strftime("%Y-%m-%d %H:%M:%S"), s.end.strftime("%Y-%m-%d %H:%M:%S"))
@@ -43,51 +59,48 @@ def print_symbol_summary_table(symbol_summaries: list[SummaryResults]):
 
 
 class MDBRepository:
-    def __init__(self, host: str, database: str):
+    def __init__(self, host: str, database: str, port: int = 27017):
         self.host = host
+        self.port = port
         self.db = database
-        self.coll = None
-        self.client = None
+        self._client: MongoClient | None = None
 
-    def collection(self):
-        """
-        m1 collection with documents
-        {
-          '_id': ObjectId('697dd328aa9a7a5511ba646c'),
-          'timestamp': datetime.datetime(2024, 9, 15, 23, 0),
-          'symbol': 'esz4',
-          'open': 5684.0,
-          'high': 5690.25,
-          'low': 5684.0,
-          'close': 5689.5,
-          'volume': 321.0,
-          'vwap': 5687.125
-        }
-        """
-        if self.client is None:
-            self.client = MongoClient(self.host, 27017)
-            self.coll = self.client[self.db].m1
-        return self.coll
+    def _collection(self, name: str) -> Collection:
+        if self._client is None:
+            self._client = MongoClient(self.host, self.port)
+        return self._client[self.db][name]
+
+    @property
+    def m1(self) -> Collection:
+        return self._collection("m1")
+
+    @property
+    def trade_date_index(self) -> Collection:
+        return self._collection("trade_date_index")
 
     def load_summary(self):
         """Return a summary of all symbols in the collection as a DataFrame with columns [count, start, end], indexed by symbol."""
 
         pipeline = [{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$min": "$timestamp"}, "end": {"$max": "$timestamp"}}}, {"$sort": {"_id": 1}}]
 
-        df = pd.DataFrame(self.collection().aggregate(pipeline))
+        df = pd.DataFrame(self.m1.aggregate(pipeline))
         df.rename(columns={"_id": "symbol"}, inplace=True)
         return df.set_index("symbol")
 
     def load_summary_ex(self) -> list[SummaryResults]:
         """Return a summary of all symbols in the collection as a pydantic model."""
         pipeline = [{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$min": "$timestamp"}, "end": {"$max": "$timestamp"}}}, {"$sort": {"_id": 1}}]
-        return [SummaryResults(**doc) for doc in self.collection().aggregate(pipeline)]
+        return [SummaryResults.model_validate(doc) for doc in self.m1.aggregate(pipeline)]
+    
+    def find_trade_dates(self, symbol: str, limit: int = 128) -> list[TradeDateIndex]:
+        cursor = self.trade_date_index.find(filter={"symbol": symbol}, sort=["date"]).limit(limit)
+        return [TradeDateIndex.model_validate(doc) for doc in cursor]
 
     def load_timeseries(self, symbol: str, tm_start: pd.Timestamp, tm_end: pd.Timestamp) -> pd.DataFrame:
         """Load time series data for a specific symbol within a time range with exclusive end and calculate EMA."""
         console.print(f"loading {symbol} {tm_start} to {tm_end}")
 
-        cursor = self.collection().find(filter={"symbol": symbol, "timestamp": {"$gte": tm_start, "$lt": tm_end}}, sort=["timestamp"])
+        cursor = self.m1.find(filter={"symbol": symbol, "timestamp": {"$gte": tm_start, "$lt": tm_end}}, sort=["timestamp"])
 
         df = pd.DataFrame(map(lambda d: {"date": d["timestamp"], "open": d["open"], "high": d["high"], "low": d["low"], "close": d["close"], "volume": d["volume"], "vwap": d["vwap"]}, cursor)).set_index("date")
         df["ema"] = ts.calc_ema(df, length=87)
@@ -95,7 +108,7 @@ class MDBRepository:
 
     def load_trading_days(self, symbol: str, min_vol: int) -> pd.DataFrame:
         """return df of complete trading days. the bars are aggregated by calendar date [date, bar-count, volume, standardised-volume]"""
-        cursor = self.collection().aggregate(
+        cursor = self.m1.aggregate(
             [{"$match": {"symbol": symbol}}, {"$group": {"_id": {"$dateTrunc": {"date": "$timestamp", "unit": "day"}}, "count": {"$sum": 1}, "volume": {"$sum": "$volume"}}}, {"$match": {"volume": {"$gte": min_vol}}}, {"$sort": {"_id": 1}}]
         )
         df = pd.DataFrame(cursor)
@@ -107,7 +120,7 @@ class MDBRepository:
 
     def load_gaps(self, symbol: str, gap_mins: int) -> pd.DataFrame:
         """return table of gaps in m1 time series. last bar of day and first bar of next day [last_bar, first_bar, gap]"""
-        cursor = self.collection().aggregate(
+        cursor = self.m1.aggregate(
             [
                 {
                     "$match": {"symbol": symbol},
@@ -143,55 +156,44 @@ class MDBRepository:
         )
         return pd.DataFrame(map(lambda r: {"last_bar": r["lastTm"], "first_bar": r["timestamp"], "gap": r["gap"]}, cursor))
 
-
     def load_contiguous_regions(self, symbol: str, gap_mins: int = 30) -> pd.DataFrame:
         """MongoDB aggregation to get contiguous regions."""
         pipeline = [
             {"$match": {"symbol": symbol}},
             {"$sort": {"timestamp": 1}},
-            {"$setWindowFields": {
-                "sortBy": {"timestamp": 1},
-                "output": {
-                    "prevTm": {"$shift": {"output": "$timestamp", "by": -1}},
-                    "docNum": {"$documentNumber": {}}
+            {"$setWindowFields": {"sortBy": {"timestamp": 1}, "output": {"prevTm": {"$shift": {"output": "$timestamp", "by": -1}}, "docNum": {"$documentNumber": {}}}}},
+            {"$set": {"isNewRegion": {"$gt": [{"$dateDiff": {"startDate": "$prevTm", "endDate": "$timestamp", "unit": "minute"}}, gap_mins]}}},
+            {"$setWindowFields": {"sortBy": {"timestamp": 1}, "output": {"region": {"$sum": {"$cond": ["$isNewRegion", 1, 0]}, "window": {"documents": ["unbounded", "current"]}}}}},
+            {
+                "$group": {
+                    "_id": "$region",
+                    "start": {"$min": "$timestamp"},
+                    "end": {"$max": "$timestamp"},
+                    # OHLCV aggregations
+                    "open": {"$first": "$open"},
+                    "high": {"$max": "$high"},
+                    "low": {"$min": "$low"},
+                    "close": {"$last": "$close"},
+                    "volume": {"$sum": "$volume"},
+                    "vwap": {"$last": "$vwap"},
                 }
-            }},
-            {"$set": {
-                "isNewRegion": {"$gt": [
-                    {"$dateDiff": {"startDate": "$prevTm", "endDate": "$timestamp", "unit": "minute"}},
-                    gap_mins
-                ]}
-            }},
-            {"$setWindowFields": {
-                "sortBy": {"timestamp": 1},
-                "output": {"region": {"$sum": {"$cond": ["$isNewRegion", 1, 0]}, "window": {"documents": ["unbounded", "current"]}}}
-            }},
-            {"$group": {
-                "_id": "$region",
-                "start": {"$min": "$timestamp"},
-                "end": {"$max": "$timestamp"},
-                # OHLCV aggregations
-                "open": {"$first": "$open"},
-                "high": {"$max": "$high"},
-                "low": {"$min": "$low"},
-                "close": {"$last": "$close"},
-                "volume": {"$sum": "$volume"},
-                "vwap": {"$last": "$vwap"},
-            }},
+            },
             {"$sort": {"start": 1}},
-            {"$project": {
-                "_id": 0,
-                "start": 1,
-                "end": 1,
-                "open": 1,
-                "high": 1,
-                "low": 1,
-                "close": 1,
-                "volume": 1,
-                "vwap": 1,
-            }}
+            {
+                "$project": {
+                    "_id": 0,
+                    "start": 1,
+                    "end": 1,
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "volume": 1,
+                    "vwap": 1,
+                }
+            },
         ]
-        return pd.DataFrame(self.collection().aggregate(pipeline))
+        return pd.DataFrame(self.m1.aggregate(pipeline))
 
 
 def lookup_trade_date(idx: pd.Index, dt_input: str) -> pd.Timestamp:
@@ -408,6 +410,19 @@ def main(symbol: str):
     console.print(f"\n\n--- last rows", style="yellow")
     print_summary_row(summ, -2)
     print_summary_row(summ, -1)
+    days = mdb.find_trade_dates("esh6")
+    console.print(days[-2:])
+    x = TradeDateIndex(symbol='esh6',
+        date=datetime(2026, 2, 12, 0, 0),
+        bars=1380,
+        volume=1450674,
+        start=datetime(2026, 2, 11, 23, 0),
+        end=datetime(2026, 2, 12, 11, 34)
+    )
+    mdb.trade_date_index.insert_one(x.model_dump(by_alias=True, exclude_none=True))
+
+    days = mdb.find_trade_dates("esh6")
+    console.print(days[-2:])
 
 
 if __name__ == "__main__":

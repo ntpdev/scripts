@@ -497,13 +497,13 @@ def print_combined_summary(p: Path, spec: str) -> tuple[pd.DataFrame, pd.DataFra
 if __name__ == "__main__":
     # whole_day_concat(Path("c:/temp/z"), 'esu5*.csv', 'zesu5')
     # test_tick()
-    spec = "nqh5*.csv"
+    spec = "nqh4*.csv"
     check_overlap(Path.home() / "Documents" / "data", spec)
     df, di = print_combined_summary(Path.home() / "Documents" / "data", spec)
-    # s = di.at["2024-12-13", "first"]
-    # e = di.at["2025-03-20", "last"]
-    # save_m1_timeseries(df[s:e], "NQH5")
-    # check_overlap(Path("c:/temp/z"), "esu5*.csv")
+    # s = di.at["2023-12-07", "first"]
+    # e = di.at["2024-03-14", "last"]
+    # save_m1_timeseries(df[s:e], "NQH4")
+    # # check_overlap(Path("c:/temp/z"), "esu5*.csv")
     # df_es = load_overlapping_files(Path("c:/temp/ultra"), "esu5*.csv")
     # df_es = load_overlapping_files(Path.home() / "Documents" / "data", "esh5*.csv")
     # print_summary(df_es)
