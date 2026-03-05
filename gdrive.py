@@ -25,7 +25,7 @@ console = Console()
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 # created by following https://developers.google.com/drive/api/quickstart/python
-Credentials_JSON = Path.home() / "client_secret_32374387863-e7jikh2ktb31m25l27liebbunt0nfnkv.apps.googleusercontent.com.json"
+Credentials_JSON = Path.home() / "client_secret_400071456185-tk7tdm2uckmhsqpdjgbe654t7jlluh5u.apps.googleusercontent.com.json"
 
 TOKEN_FILE = Path.home() / "Downloads" / "token.json"
 
@@ -37,29 +37,6 @@ mime_types = {
     ".md":  "text/plain",
     ".txt": "text/plain",
 }
-
-
-def print_table(items: list[dict[str, Any]]) -> None:
-    # items.sort(key=lambda e: e["name"])
-    table = Table(title="Files")
-    table.add_column("Name", style="cyan", no_wrap=True, max_width=32)
-    table.add_column("Size (kb)", justify="right", style="cyan")
-    table.add_column("Modified", style="yellow")
-    table.add_column("Type", style="cyan")
-    table.add_column("ID", style="cyan", no_wrap=True, max_width=10)
-
-    for item in items:
-        dt = datetime.strptime(item["modifiedTime"], "%Y-%m-%dT%H:%M:%S.%fZ")
-        sz = round(int(item.get("size", 0)) / 1024)
-        table.add_row(
-            Text(item["name"], style="red" if item["trashed"] else "cyan"),  # Inline style
-            str(sz),
-            str(dt.strftime("%Y-%m-%d %H:%M")),
-            item["mimeType"],
-            item["id"],
-        )
-
-    console.print(table)
 
 
 def login(token_file: Path) -> Credentials | None:
@@ -85,6 +62,29 @@ def login(token_file: Path) -> Credentials | None:
             token.write(creds.to_json())
 
     return creds
+
+
+def print_table(items: list[dict[str, Any]]) -> None:
+    # items.sort(key=lambda e: e["name"])
+    table = Table(title="Files")
+    table.add_column("Name", style="cyan", no_wrap=True, max_width=32)
+    table.add_column("Size (kb)", justify="right", style="cyan")
+    table.add_column("Modified", style="yellow")
+    table.add_column("Type", style="cyan")
+    table.add_column("ID", style="cyan", no_wrap=True, max_width=10)
+
+    for item in items:
+        dt = datetime.strptime(item["modifiedTime"], "%Y-%m-%dT%H:%M:%S.%fZ")
+        sz = round(int(item.get("size", 0)) / 1024)
+        table.add_row(
+            Text(item["name"], style="red" if item["trashed"] else "cyan"),  # Inline style
+            str(sz),
+            str(dt.strftime("%Y-%m-%d %H:%M")),
+            item["mimeType"],
+            item["id"],
+        )
+
+    console.print(table)
 
 
 def download_file(drive_service: Resource, file_id: str, fn: Path) -> None:
@@ -147,9 +147,10 @@ def find_file(drive_service: Resource, spec: str) -> str | None:
     if existing:
         existing.sort(key=lambda e: int(e.get("version", 0)), reverse=True)
         for f in (e["id"] for e in existing if not e["trashed"]):
+            console.print(f"File {spec} found {f}", style="yellow")
             return f
     else:
-        console.print(f"File {spec} not found", style="yellow")
+        console.print(f"File {spec} not found on drive", style="yellow")
 
     return None
 

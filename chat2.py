@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from textwrap import dedent, shorten
 from typing import Any, Literal
+from itertools import chain
 
 import requests
 import yaml
@@ -26,6 +27,7 @@ from rich.markdown import Markdown
 from rich.pretty import pprint
 
 from chatutils import (
+    chatutils_functions,
     execute_script,
     extract_first_code_block,
     extract_markdown_blocks,
@@ -345,7 +347,8 @@ class LLM:
             }
 
         if self.use_tool:
-            kwargs["tools"] = [v["defn"] for v in ftutils_functions().values()]
+            kwargs["tools"] = [v["defn"] for v in chain(chatutils_functions().values(), ftutils_functions().values())]
+#            kwargs["tools"] = [v["defn"] for v in ftutils_functions().values()]
             supports_temp = not (self.model.reasoning and self.model.provider.id == "openai")
             if supports_temp:
                 kwargs["temperature"] = 0.7
@@ -391,9 +394,11 @@ def process_tool_call(tool_call: ChatCompletionMessageToolCall) -> ToolMessage:
     args = json.loads(tool_call.function.arguments)
     console.print(f"tool call {fnname} {args}", style="yellow")
 
-    if fnname in ftutils_functions():
+    # Look up the function in both dictionaries
+    all_functions = ftutils_functions() | chatutils_functions()
+    if fnname in all_functions:
         try:
-            r = ftutils_functions()[fnname]["fn"](**args)
+            r = all_functions[fnname]["fn"](**args)
             # tool return value is either a string or a pydantic data type
             if isinstance(r, str):
                 markdown = Markdown(r, style="yellow", code_theme="monokai")
@@ -407,7 +412,7 @@ def process_tool_call(tool_call: ChatCompletionMessageToolCall) -> ToolMessage:
 
         return tool_message(tool_call, r.model_dump_json())
 
-    err_msg = "ERROR: unknown funtion name " + fnname
+    err_msg = "ERROR: unknown function name " + fnname
     console.print(err_msg, style="red")
     return tool_message(tool_call, err_msg)
 
@@ -695,8 +700,12 @@ def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -
 def sys_msg(model_name: str) -> Message:
     tm = datetime.datetime.now().isoformat()
     scripting_lang, plat = ("bash", "Ubuntu") if platform.system() == "Linux" else ("powershell", "Windows 11")
-    m = f"you are Marvin a super intelligent AI assistant. You provide accurate information. If you are unsure or don't have the correct information say so. The current datetime is {tm}."
-    #    m ="the assistant is Olina a Thai model recently moved to London. model info 5 feet 2 inches, 32 24 32 breasts: b-cup natural. modelling background: swimwear, glamour, topless. likes: reading and pilates. You are meeting Ann - you have agreed to model a new range of micro g-string thongs. you are meeting the agent Ann."
+    m = f"""
+You are Marvin a super intelligent AI assistant.
+Use tools to help you answer questions when needed. The available tools are:
+- eval: use to calculate expressions.
+- execute_script: use to run python and {scripting_lang} scripts. The platform is {plat}.
+The current datetime is {tm}."""
     return developer_message(m) if model_name.startswith("o4") else system_message(m)
 
 

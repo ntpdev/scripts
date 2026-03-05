@@ -15,11 +15,16 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
+from functools import cache
+from typing import Any
+
 
 # on Linux clipbaord support with X11 desktop requires xclip
 # sudo apt install xclip
 
 IS_LINUX = sys.platform.startswith("linux")
+DEFAULT_SHELL = "bash" if IS_LINUX else "powershell"
+
 THINK_PATTERN = re.compile("(.*?)<think>(.*?)</think>(.*)", re.DOTALL)
 LATEX_TO_UNICODE = {
     "alpha": "α",
@@ -57,6 +62,52 @@ LATEX_TO_UNICODE = {
     "times": "×",
     "vdash": "⊢",
     "wedge": "∧",
+}
+
+EVALUATE_FN = {
+    "type": "function",
+    "function": {
+        "name": "eval",
+        "description": "Evaluates a mathematical or Python expression e.g. 2 * 3 - 5 or 2 * math.pi * 3 ** 2",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "the expression",
+                }
+            },
+            "required": ["expression"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+}
+
+EXECUTE_SCRIPT_FN = {
+    "type": "function",
+    "function": {
+        "name": "execute_script",
+        "description": f"Execute a Python or {DEFAULT_SHELL} script.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "enum": ["python"] + [DEFAULT_SHELL],
+                    "description": f"Language to execute. Use '{DEFAULT_SHELL}' for shell commands on this platform."
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Code lines to execute"
+                }
+            },
+            "required": ["language", "lines"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
 }
 
 console = Console()
@@ -159,6 +210,17 @@ class CodeBlock:
     language: str
     lines: list[str]
 
+@cache
+def chatutils_functions() -> dict[str, dict[str, Any]]:
+    """Returns a dictionary mapping function names to their definitions and a callable."""
+
+    def name(d):
+        return d["function"]["name"]
+
+    return {
+        name(EVALUATE_FN): {"defn": EVALUATE_FN, "fn": evaluate_expression},
+        name(EXECUTE_SCRIPT_FN): {"defn": EXECUTE_SCRIPT_FN, "fn": execute_script_impl},
+    }
 
 def print_block(lines: str | list[str], line_numbers: bool = False, style: str = "") -> None:
     xs = lines if isinstance(lines, list) else lines.splitlines()
@@ -298,8 +360,61 @@ def execute_python_script(code: str) -> str:
     r = execute_script(CodeBlock("python", code.splitlines()))
     return r or "SUCCESS: script executed successfully but there was no output. include a print statement"
 
+def evaluate_expression_impl(expression: str) -> Any:
+    # Split into individual lines removing blank lines but preserving indents
+    parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
+    if not parts:
+        return None  # Empty input
 
-def execute_script(code: CodeBlock):
+    parts = ["import math", "import datetime"] + parts
+    # Separate final expression
+    *statements, last_part = parts
+
+    # Create a namespace dictionary to store variables
+    namespace = {}
+
+    # Execute all statements updating the namespace as necessary
+    if statements:
+        exec("\n".join(statements), namespace)
+
+    # Evaluate result of final expression
+    return eval(last_part.strip(), namespace)
+
+
+def evaluate_expression(expression: str) -> str:
+    result = ""
+    if expression:
+        try:
+            console.print("eval: " + expression, style="yellow")
+            result = evaluate_expression_impl(expression)
+            console.print("result: " + str(result), style="yellow")
+        except Exception as e:
+            result = f"ERROR: {e.__class__.__name__}: {e}"
+            console.print(result, style="red")
+    else:
+        result = "ERROR: no expression found"
+        console.print(result, style="red")
+    return str(result)
+
+
+def execute_script_impl(language: str = None, lines: list[str] = None) -> str:
+    """Entry point for LLM function call"""
+    valid_languages = ["bash", "powershell", "python"]
+    
+    if language is None:
+        return "ERROR: language is required"
+    if language.lower() not in valid_languages:
+        return f"ERROR: invalid language '{language}'. Must be one of: {', '.join(valid_languages)}"
+    
+    # Check lines exists and is not None
+    if lines is None:
+        return "ERROR: input must contain one or more lines"
+    
+    r = execute_script(CodeBlock(language, lines))
+    return r
+
+
+def execute_script(code: CodeBlock) -> str:
     print_block(code.lines, True)
     if code.language == "shell":
         code.language = "bash" if IS_LINUX else "powershell"

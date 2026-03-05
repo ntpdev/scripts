@@ -114,63 +114,6 @@ retrieve_stock_quotes_fn = {
     },
 }
 
-evaluate_expression_fn = {
-    "type": "function",
-    "function": {
-        "name": "eval",
-        "description": "Evaluates a mathematical or Python expression",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "the expression",
-                }
-            },
-            "required": ["expression"],
-            "additionalProperties": False,
-        },
-        "strict": True,
-    },
-}
-
-
-def evaluate_expression_impl(expression: str) -> Any:
-    # Split into individual lines removing blank lines but preserving indents
-    parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
-    if not parts:
-        return None  # Empty input
-
-    parts = ["import math", "import datetime"] + parts
-    # Separate final expression
-    *statements, last_part = parts
-
-    # Create a namespace dictionary to store variables
-    namespace = {}
-
-    # Execute all statements updating the namespace as necessary
-    if statements:
-        exec("\n".join(statements), namespace)
-
-    # Evaluate result of final expression
-    return eval(last_part.strip(), namespace)
-
-
-def evaluate_expression(expression: str) -> str:
-    result = ""
-    if expression:
-        try:
-            console.print("eval: " + expression, style="yellow")
-            result = evaluate_expression_impl(expression)
-            console.print("result: " + str(result), style="yellow")
-        except Exception as e:
-            result = f"ERROR: {e.__class__.__name__}: {e}"
-            console.print(result, style="red")
-    else:
-        result = "ERROR: no expression found"
-        console.print(result, style="red")
-    return str(result)
-
 
 def retrieve_article(url: str) -> str | ErrorInfo:
     if not url:
@@ -180,6 +123,8 @@ def retrieve_article(url: str) -> str | ErrorInfo:
         return retrieve_ft_article(url)
     if "www.wsj.com" in url:
         return retrieve_wsj_article(url)
+    if "www.nytimes.com" in url:
+        return retrieve_nyt_article(url)
     if "www.bloomberg.com" in url:
         return retrieve_bloomberg_article(url)
     return retrieve_bbc_article(url)
@@ -223,7 +168,6 @@ def ftutils_functions() -> dict[str, dict[str, Any]]:
         return d["function"]["name"]
 
     return {
-        name(evaluate_expression_fn): {"defn": evaluate_expression_fn, "fn": evaluate_expression},
         name(retrieve_headlines_fn): {"defn": retrieve_headlines_fn, "fn": retrieve_headlines},
         name(retrieve_article_fn): {"defn": retrieve_article_fn, "fn": retrieve_article},
         name(retrieve_stock_quotes_fn): {"defn": retrieve_stock_quotes_fn, "fn": retrieve_stock_quotes},
@@ -432,6 +376,24 @@ def retrieve_bloomberg_article(url: str) -> str:
             d.decompose()
 
     md = html_to_markdown(soup=soup, href_base="https://www.bloomberg.com/")
+    md = add_citation(md, cite)
+    save_markdown_article(cite.title, md)
+    return md
+
+def retrieve_nyt_article(url: str) -> str:
+    content, cite = retrieve_archive(url)
+    soup = BeautifulSoup(content, "html.parser").find("article")
+    # remove some divs before extracting text
+    if divs := soup.find_all("aside"):
+        #    if divs := soup.find_all("div"):
+        # xs = [d for d in divs if "background-position:/*x=*/0% /*y=*/0%;" in d.get("style")]
+        xs = list(divs)
+        console.print(f"removing asides {len(xs)}", style="red")
+        for d in xs:
+            d.decompose()
+
+    save_soup(soup, Path("~/Downloads/temp.html").expanduser())
+    md = html_to_markdown(soup=soup.find("section"), href_base="https://www.nytimes.com/")
     md = add_citation(md, cite)
     save_markdown_article(cite.title, md)
     return md
@@ -910,14 +872,19 @@ def retrieve_archive(url: str):
 
         # Wait until at least one <img> is present inside the thumbs container
         # page.locator("#row0 .THUMBS-BLOCK img").wait_for()
+        # use latest link but try upto last 3 if not found
+        for nth in [-1,-2,-3]:
+            # must wait for a unique element then can click the last <img> inside the thumbs block
+            page.locator("#row0 .THUMBS-BLOCK img >> nth=0").wait_for(state="attached")
+            page.locator(f"#row0 .THUMBS-BLOCK img >> nth={nth}").click()
 
-        # must wait for a unique element then can click the last <img> inside the thumbs block
-        page.locator("#row0 .THUMBS-BLOCK img >> nth=0").wait_for(state="attached")
-        page.locator("#row0 .THUMBS-BLOCK img >> nth=-1").click()
-
-        # wait for target page
-        page.wait_for_load_state("domcontentloaded")
-        content = page.content()
+            # wait for target page
+            page.wait_for_load_state("domcontentloaded")
+            content = page.content()
+            cit = parse_citation(content)
+            if not cit.title.startswith("Subscribe"):
+                break
+            page.go_back()
 
         browser.close()
 
@@ -1007,7 +974,7 @@ if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
 
-    x = retrieve_ft_article("https://www.ft.com/content/9643e9b8-a4d8-49e2-8c16-20c1a1c5ca4b")
+    x = retrieve_nyt_article("https://www.nytimes.com/2026/02/24/opinion/china-america-manufacturing-ai.html")
     pprint(x)
     exit(0)
 

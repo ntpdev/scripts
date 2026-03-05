@@ -1,11 +1,13 @@
 #!/usr/bin/python3
 
+from collections.abc import Iterable
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
-from pymongo.mongo_client import MongoClient
 from pymongo.collection import Collection
+from pymongo.mongo_client import MongoClient
 from rich.console import Console
 from rich.table import Table
 
@@ -23,6 +25,7 @@ class SummaryResults(BaseModel):
     count: int
     start: datetime
     end: datetime
+
 
 class TradeDateIndex(BaseModel):
     """Model for trade_date_index collection."""
@@ -91,7 +94,7 @@ class MDBRepository:
         """Return a summary of all symbols in the collection as a pydantic model."""
         pipeline = [{"$group": {"_id": "$symbol", "count": {"$sum": 1}, "start": {"$min": "$timestamp"}, "end": {"$max": "$timestamp"}}}, {"$sort": {"_id": 1}}]
         return [SummaryResults.model_validate(doc) for doc in self.m1.aggregate(pipeline)]
-    
+
     def find_trade_dates(self, symbol: str, limit: int = 128) -> list[TradeDateIndex]:
         cursor = self.trade_date_index.find(filter={"symbol": symbol}, sort=["date"]).limit(limit)
         return [TradeDateIndex.model_validate(doc) for doc in cursor]
@@ -194,6 +197,12 @@ class MDBRepository:
             },
         ]
         return pd.DataFrame(self.m1.aggregate(pipeline))
+
+    def query_column(self, symbol: str, column: str, start: datetime, end: datetime, count: int) -> np.ndarray:
+        return np.fromiter((doc[column] for doc in self.m1.find({"symbol": symbol, "timestamp": {"$gte": start, "$lte": end}}, {"_id": 0, column: 1}, sort=[("timestamp", 1)])), dtype=np.float64, count=count)
+
+    def query_column_by_date(self, column: str, xs: Iterable[TradeDateIndex]) -> np.ndarray:
+        return np.array([self.query_column(x.symbol, column, x.start, x.end, x.bars) for x in xs])
 
 
 def lookup_trade_date(idx: pd.Index, dt_input: str) -> pd.Timestamp:
@@ -302,7 +311,7 @@ def print_summary_row(df: pd.DataFrame, row_idx: int | str | pd.Timestamp) -> No
     sorted_prices = sorted(price_to_labels.keys(), reverse=True)
 
     # Prepare rich console and table
-    trade_date = row.name.strftime("%Y-%m-%d") if isinstance(row.name, (pd.Timestamp, pd.DatetimeIndex)) else str(row.name)
+    trade_date = row.name.strftime("%Y-%m-%d") if isinstance(row.name, pd.Timestamp | pd.DatetimeIndex) else str(row.name)
     console.print(f"\n[bold]Trade date {trade_date}[/bold]\n")
 
     table = Table(show_header=True, header_style="bold")
@@ -407,23 +416,31 @@ def main(symbol: str):
     console.print("\n\n--- day summary", style="yellow")
     summ = ts.create_day_summary(df, df_di)
     console.print(summ)
-    console.print(f"\n\n--- last rows", style="yellow")
+    console.print("\n\n--- last rows", style="yellow")
     print_summary_row(summ, -2)
     print_summary_row(summ, -1)
     days = mdb.find_trade_dates("esh6")
     console.print(days[-2:])
-    x = TradeDateIndex(symbol='esh6',
-        date=datetime(2026, 2, 12, 0, 0),
-        bars=1380,
-        volume=1450674,
-        start=datetime(2026, 2, 11, 23, 0),
-        end=datetime(2026, 2, 12, 11, 34)
-    )
-    mdb.trade_date_index.insert_one(x.model_dump(by_alias=True, exclude_none=True))
 
-    days = mdb.find_trade_dates("esh6")
-    console.print(days[-2:])
+
+def test():
+    mdb = MDBRepository("localhost", "futures")
+    xs = mdb.find_trade_dates("esh6")
+    ys = [x for x in xs if x.bars == 1380]
+    ns = mdb.query_column_by_date("volume", ys[-10:])
+
+    console.print(f"ns shape: {ns.shape}")
+    console.print(f"ns dtype: {ns.dtype}")
+
+    cumvol = ns.cumsum(axis=1)
+    console.print(f"\ncumvol shape: {cumvol.shape}")
+    console.print(f"First row first 10 values (raw): {ns[0, :10]}")
+    console.print(f"First row first 10 values (cumsum): {cumvol[0, :10]}")
+
+    means = cumvol.mean(axis=0)
+    console.print(f"\nmeans shape: {means.shape}")
 
 
 if __name__ == "__main__":
-    main("esh6")
+    # main("esh6")
+    test()
