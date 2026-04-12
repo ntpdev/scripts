@@ -419,8 +419,8 @@ def main(symbol: str):
     console.print("\n\n--- last rows", style="yellow")
     print_summary_row(summ, -2)
     print_summary_row(summ, -1)
-    days = mdb.find_trade_dates("esh6")
-    console.print(days[-2:])
+    # days = mdb.find_trade_dates("esm6")
+    # console.print(days[-2:])
 
 
 def test():
@@ -442,5 +442,5 @@ def test():
 
 
 if __name__ == "__main__":
-    # main("esh6")
-    test()
+    main("esm6")
+    # test()

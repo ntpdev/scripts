@@ -36,22 +36,12 @@ models:
     name: o4-mini
     provider: openai
     reasoning: True
-  groq:
-    name: moonshotai/kimi-k2-instruct-0905
-    provider: groq
   groqo:
     name: openai/gpt-oss-120b
     provider: groq
-  llama4:
-    name: meta-llama/llama-4-maverick-17b-128e-instruct
+  llama:
+    name: llama-3.3-70b-versatile
     provider: groq
-  groq-r1:
-    name: deepseek-r1-distill-llama-70b
-    provider: groq
-  qwq:
-    name: qwen-qwq-32b
-    provider: groq
-    reasoning: True
   llama:
     name: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
     provider: togetherai
@@ -83,16 +73,16 @@ models:
     name: DeepSeek-R1
     provider: sambanova
     reasoning: True
+  mmax:
+    name: MiniMax-M2.5
+    provider: sambanova
+    reasoning: True
   llama3:
     name: Meta-Llama-3.3-70B-Instruct
     provider: sambanova
   grok4f:
     name: x-ai/grok-4-fast:free
     provider: openrouter
-  mini:
-    name: minimax/minimax-m2:free
-    provider: openrouter
-    reasoning: True
   qwenm:
     name: qwen3-max
     provider: alibaba  

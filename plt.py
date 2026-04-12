@@ -358,7 +358,7 @@ def color_bars(df, tm, bar_colour: str):
 
 
 def plot_atr(n: int):
-    df = ts.load_files(Path("/temp/ultra"), "zesm5*.csv")
+    df = ts.load_files(Path.home / "Documents" / "data", "zesm5*.csv")
     atr = ts.calc_atr(df, n)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=atr.index, y=atr, mode="lines", name="ATR5"))
@@ -368,7 +368,7 @@ def plot_atr(n: int):
 
 def plot_cumulative_volume():
     # df = ts.load_files(Path("~/documents/data").expanduser(), "esm5*.csv")
-    df = ts.load_overlapping_files(Path("/temp/ultra"), "zesm5*.csv")
+    df = ts.load_overlapping_files(Path.home() / "Documents" / "data", "zesh6*.csv")
     di = ts.day_index(df)
     df_pivot = ts.pivot_cum_vol_avg_by_day(df, di)
     fig = plot_cumulative_volume_by_day(df_pivot)
@@ -581,16 +581,15 @@ def plot_stdvol(df: pd.DataFrame) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Plot daily chart")
+    parser.add_argument("--days", type=int, default=1, help="Number of days")
     parser.add_argument("--dt", type=str, default="-1", help="Start date (yyyymmdd) or index")
-    parser.add_argument("--index", type=int, default=-1, help="Index of day to plot e.g. -1 for last")
     parser.add_argument("--tlb", type=str, default="", help="Display three line break [fname]")
     parser.add_argument("--volp", action="store_true", help="Display volume profile for day")
     parser.add_argument("--mdb", action="store_true", help="Load from MongoDB")
     parser.add_argument("--atr", action="store_true", help="Display ATR")
     parser.add_argument("--cumvol", action="store_true", help="plot relative cumulative volume")
     parser.add_argument("--tick", action="store_true", help="Display tick")
-    parser.add_argument("--days", type=int, default=1, help="Number of days")
-    parser.add_argument("--sym", type=str, default="esh6", help="Index symbol")
+    parser.add_argument("--sym", type=str, default="esm6", help="Index symbol")
 
     argv = parser.parse_args()
     console.print(argv)

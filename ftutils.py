@@ -974,12 +974,12 @@ if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
 
-    x = retrieve_nyt_article("https://www.nytimes.com/2026/02/24/opinion/china-america-manufacturing-ai.html")
-    pprint(x)
-    exit(0)
+    # x = retrieve_nyt_article("https://www.nytimes.com/2026/02/24/opinion/china-america-manufacturing-ai.html")
+    # pprint(x)
+    # exit(0)
 
     # for site in SITE_CONFIGS.keys():
-    for site in ["bloomberg"]:
+    for site in ["ft"]:
         items = retrieve_headlines(site)
         if isinstance(items, ArticleList):
             print_most_read_table(items)

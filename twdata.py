@@ -130,6 +130,58 @@ def plot_3lb(symbol, df):
     fig.show()
 
 
+def find_drawdown_crossings(drawdown: pd.Series, threshold: float = -5.0) -> pd.DatetimeIndex:
+    crossings = (drawdown.shift(1) > threshold) & (drawdown <= threshold)
+    return drawdown[crossings].index
+
+
+def filter_close_dates(dates: pd.DatetimeIndex, min_days: int = 10) -> pd.DatetimeIndex:
+    if len(dates) == 0:
+        return dates
+    filtered = [dates[0]]
+    for dt in dates[1:]:
+        if (dt - filtered[-1]).days >= min_days:
+            filtered.append(dt)
+    return pd.DatetimeIndex(filtered)
+
+
+def plot_drawdown(symbol, df) -> None:
+    close = df["close"]
+    # df contains a timeseries with datetime index
+    # calculate % drawdown from from cumulative high
+    # last/cummulative_max - 1
+    # plot as an area with fixed grid lines at 5% intervals and tick marks at 2.5%
+
+    cummax = close.cummax()
+    drawdown = (close / cummax - 1) * 100
+
+    max_dd = drawdown.min()
+    y_min = int(max_dd // 5 * 5)
+
+    crossing_dates = filter_close_dates(find_drawdown_crossings(drawdown))
+
+    fig = subp.make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
+
+    fig.add_trace(go.Scatter(x=close.index, y=close, mode="lines", name="Close", line=dict(color="black")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown, fill="tozeroy", fillcolor="rgba(66, 135, 245, 0.3)", mode="lines", line=dict(color="blue"), name="Drawdown"), row=2, col=1)
+
+    for dt in crossing_dates:
+        fig.add_vline(x=dt, line_dash="dash", line_color="red", row=1, col=1)
+
+    for pct in range(0, y_min - 1, -5):
+        fig.add_hline(y=pct, line_dash="dash", line_color="gray", row=2, col=1)
+
+    fig.update_yaxes(tickmode="linear", dtick=2.5, gridcolor="lightgray", title="Drawdown (%)", range=[y_min, 0], row=2, col=1)
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+
+    all_dates = pd.date_range(drawdown.index[0], drawdown.index[-1])
+    missing_dates = all_dates.difference(drawdown.index)
+    fig.update_xaxes(rangebreaks=[dict(values=missing_dates)])
+
+    fig.update_layout(title=f"{symbol} Price & Drawdown")
+    fig.show()
+
+
 def plot_cumulative(df):
     # Create a barchart using the 'perc' column from the same dataframe
     fig = subp.make_subplots(specs=[[{"secondary_y": True}]])
@@ -216,6 +268,7 @@ def load_twelve_data(symbol, days=255):
     fname = make_filename(symbol, df.index[-1].date())
     df["change"] = pd.Series.diff(df.close).round(2)
     df["pct_chg"] = (pd.Series.pct_change(df.close) * 100).round(2)
+    df["ddown"] = (df["close"] / df["close"].cummax() - 1).round(4)
     df["voln"] = normalise_as_perc(df.volume)
     # df['perc'] = percFromMin(df.close)
     df["hilo"] = tsutils.calc_hilo(df["close"])
@@ -675,10 +728,10 @@ def print_summary_information(symbol: str, df: pd.DataFrame, mas: list[str]):
     pct_off_low = round((last_value / low_value - 1) * 100, 2)
 
     def calculate_returns(start_date, end_date):
-        close_start = df.loc[start_date, 'close']
-        close_end = df.loc[end_date, 'close']
+        close_start = df.loc[start_date, "close"]
+        close_end = df.loc[end_date, "close"]
         num_days = (end_date - start_date).days
-        total_return = (close_end / close_start - 1)
+        total_return = close_end / close_start - 1
         return total_return, (1 + total_return) ** (365 / num_days) - 1 if num_days > 0 else 0
 
     _, ann_whole = calculate_returns(df.index[0], df.index[-1])
@@ -766,27 +819,49 @@ def print_summary_information(symbol: str, df: pd.DataFrame, mas: list[str]):
 
 def calculate_monthly_investment_returns(df: pd.DataFrame) -> tuple[float, float]:
     """Calculate returns from investing $100 on the first trading day of each month.
-    
+
     Assumes fractional shares can be held.
-    
+
     Args:
         df: DataFrame with datetime index and 'close' column.
-        
+
     Returns:
         Tuple of (total_invested, current_value)
     """
     df = df.copy()
-    df['month'] = df.index.to_period('M')
+    df["month"] = df.index.to_period("M")
     # Get the first trading day of each month
-    first_days = df.groupby('month').head(1).index
-    first_closes = df.loc[first_days, 'close']
+    first_days = df.groupby("month").head(1).index
+    first_closes = df.loc[first_days, "close"]
     # Shares bought each month
     shares_bought = 100 / first_closes
     total_shares = shares_bought.sum()
     total_invested = 100 * len(first_closes)
-    last_close = df['close'].iloc[-1]
+    last_close = df["close"].iloc[-1]
     current_value = total_shares * last_close
     return total_invested, current_value
+
+
+def print_runs_table(symbol: str, df: pd.DataFrame) -> None:
+    mask = get_run_mask(df["pct_chg"])
+    if not mask.any():
+        return
+
+    run_groups = (mask != mask.shift()).cumsum()
+
+    table = Table(title=f"{symbol} Runs of Down Days", style="white")
+    table.add_column("Date", style="cyan")
+    table.add_column("Days", justify="right")
+    table.add_column("Sum %", justify="right")
+
+    for _, group in df[mask].groupby(run_groups[mask]):
+        start = group.index[0].strftime("%Y-%m-%d")
+        count = len(group)
+        total = group["pct_chg"].sum()
+        table.add_row(start, str(count), f"{total:.2f}%")
+
+    console.print(table)
+
 
 def process(symbol: str, df: pd.DataFrame, sw_perc: float = 5.0):
     print_summary_information(symbol, df, ["ema19", "sma50", "sma150"])
@@ -794,6 +869,8 @@ def process(symbol: str, df: pd.DataFrame, sw_perc: float = 5.0):
     console.print("\n-- 3 line break", style="yellow")
     tlb, rev = tsutils.calc_tlb(df.close, 3)
     print(tlb[-5:])
+    console.print(f"\n-- runs", style="yellow")
+    print_runs_table(symbol, df)
     console.print(f"\n-- swings {sw_perc}", style="yellow")
     swings = tsutils.find_swings(df.close, sw_perc)
     print(swings)
@@ -838,6 +915,15 @@ def plot_latest_ind(symbol: str) -> pd.DataFrame | None:
     return None
 
 
+def plot_latest_drawdown(symbol: str) -> pd.DataFrame | None:
+    xs = list_cached_files(symbol)
+    if len(xs) > 0:
+        df = load_file(xs[0])
+        plot_drawdown(symbol, df)
+        return df
+    return None
+
+
 def plot_relative(symbol: str):
     xs = list_cached_files("spy")
     ys = list_cached_files(symbol)
@@ -869,6 +955,27 @@ def list_cached(symbol: str):
         print(str(p))
 
 
+def get_run_mask(series: pd.Series, threshold: float = -0.1, min_run: int = 3) -> pd.Series:
+    below = series < threshold
+    # Each time below changes value, increment a group counter
+    run_id = (below != below.shift()).cumsum()
+    # Count run lengths, broadcast back to original index
+    run_lengths = below.groupby(run_id).transform("count")
+    return below & (run_lengths >= min_run)
+
+
+def highlight_consecutive_drops(worksheet, workbook, df, col_name, threshold=-0.1, min_run=3):
+    fmt_run_red = workbook.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006", "num_format": "#,##0.00"})
+
+    col_idx = df.columns.get_loc(col_name) + 1
+    values = df[col_name].tolist()
+    mask = get_run_mask(df[col_name], threshold, min_run)
+
+    for row_idx, flagged in enumerate(mask):
+        if flagged:
+            worksheet.write(row_idx + 1, col_idx, values[row_idx], fmt_run_red)
+
+
 def save_excel(symbol: str, df: pd.DataFrame):
     fn = make_fullpath(symbol + ".xlsx")
     writer = pd.ExcelWriter(fn, engine="xlsxwriter")
@@ -885,8 +992,16 @@ def save_excel(symbol: str, df: pd.DataFrame):
     # Add a format. Green fill with dark green text.
     fmt_green = workbook.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
 
+    highlight_consecutive_drops(worksheet, workbook, df, "pct_chg")
+
     worksheet.conditional_format(rng, {"type": "cell", "criteria": ">", "value": 19, "format": fmt_green})
     worksheet.conditional_format(rng, {"type": "cell", "criteria": "<", "value": -19, "format": fmt_red})
+
+    voln_col = df.columns.get_loc("voln") + 1
+    voln_rng = xl_range(1, voln_col, df.shape[0], voln_col)
+    fmt_gold = workbook.add_format({"bg_color": "#EEE8AA"})
+    worksheet.conditional_format(voln_rng, {"type": "cell", "criteria": ">=", "value": 100, "format": fmt_gold})
+
     worksheet.set_column("A:A", None, fmt_date)
     worksheet.set_column("B:E", None, fmt_decimal)
     worksheet.set_column("G:K", None, fmt_decimal)
@@ -937,6 +1052,8 @@ if __name__ == "__main__":
         plot_latest_3lb(args.symbol)
     elif args.action == "plotind":
         plot_latest_ind(args.symbol)
+    elif args.action == "plotdd":
+        plot_latest_drawdown(args.symbol)
     elif args.action == "plotrel":
         plot_relative(args.symbol)
 
