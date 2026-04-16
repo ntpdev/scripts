@@ -1,5 +1,6 @@
 """Fetch historical stock price data from Yahoo Finance using Playwright."""
 
+import argparse
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
@@ -11,6 +12,9 @@ import pandas as pd
 from bs4 import BeautifulSoup, Tag
 from playwright.sync_api import Page, sync_playwright
 from rich.console import Console
+from rich.table import Table
+
+import tsutils
 
 console = Console()
 
@@ -24,7 +28,7 @@ class SymbolData:
     long_name: str = ""
     dividends: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         start_date = self.df.index[0].strftime("%Y-%m-%d")
         end_date = self.df.index[-1].strftime("%Y-%m-%d")
         return f"symbol: {self.symbol}, name: {self.long_name}, rows: {len(self.df)}, data: from {start_date} to {end_date}"
@@ -37,7 +41,6 @@ def accept_consent(page: Page) -> None:
 
 def fetch_rest(page: Page, symbols: list[str], start: date, end: date) -> list[SymbolData]:
     results: list[SymbolData] = []
-    accept_consent(page)
     for symbol in symbols:
         api_url = make_data_url(symbol, start, end)
         console.print(f"javascript fetch {api_url}")
@@ -59,6 +62,7 @@ def scrape_data(symbols: list[str], start: date, end: date, headless: bool = Tru
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context()
         page = context.new_page()
+        accept_consent(page)
         if use_html_table:
             results = fetch_html_scrape(page, symbols)
         else:
@@ -80,7 +84,6 @@ def clean_header(text: str) -> str:
 
 
 def fetch_html_scrape(page: Page, symbols: list[str]) -> list[SymbolData]:
-    accept_consent(page)
     results: list[SymbolData] = []
 
     for symbol in symbols:
@@ -111,44 +114,45 @@ def parse_table(table: Tag) -> tuple[pd.DataFrame, pd.DataFrame]:
         if len(cells) == 7:
             records.append(cells)
         elif len(cells) == 2 and (m := re.match(r"([\d.]+)\s*Dividend", cells[1])):
-            dividend_records.append({"Date": cells[0], "dividend": float(m.group(1))})
+            dividend_records.append({"date": cells[0], "dividend": float(m.group(1))})
 
     df = pd.DataFrame(records, columns=header)
 
     df = df.rename(
         columns={
-            "Close*": "Close",
-            "Adj Close**": "Adj Close",
+            "Close*": "close",
+            "Adj Close**": "adj close",
         }
     )
+    df.columns = df.columns.str.lower()
 
-    numeric_cols = ["Open", "High", "Low", "Close", "Volume"]
+    numeric_cols = ["open", "high", "low", "close", "volume"]
     for col in numeric_cols:
         df[col] = pd.to_numeric(
             df[col].str.replace(",", "", regex=False),
             errors="coerce",
         )
 
-    df["Date"] = pd.to_datetime(
-        df["Date"].str.replace("Sept", "Sep", regex=False),
+    df["date"] = pd.to_datetime(
+        df["date"].str.replace("Sept", "Sep", regex=False),
         format="%d %b %Y",
     )
 
-    df = df.set_index("Date")
-    df.index.name = "Date"
-    df = df[["Open", "High", "Low", "Close", "Volume"]]
+    df = df.set_index("date")
+    df.index.name = "date"
+    df = df[["open", "high", "low", "close", "volume"]]
 
     dividends = pd.DataFrame(dividend_records)
     if dividends.empty:
         dividends = pd.DataFrame(columns=["dividend"])
-        dividends.index.name = "Date"
+        dividends.index.name = "date"
     else:
-        dividends["Date"] = pd.to_datetime(
-            dividends["Date"].str.replace("Sept", "Sep", regex=False),
+        dividends["date"] = pd.to_datetime(
+            dividends["date"].str.replace("Sept", "Sep", regex=False),
             format="%d %b %Y",
         )
-        dividends = dividends.set_index("Date")
-        dividends.index.name = "Date"
+        dividends = dividends.set_index("date")
+        dividends.index.name = "date"
 
     return df, dividends
 
@@ -166,16 +170,16 @@ def parse_json(data: dict, symbol: str) -> SymbolData:
     quote = result["indicators"]["quote"][0]
     df = pd.DataFrame(
         {
-            "Open": quote_col("open"),
-            "High": quote_col("high"),
-            "Low": quote_col("low"),
-            "Close": quote_col("close"),
-            "Volume": pd.array(quote["volume"], dtype="Int64"),
+            "open": quote_col("open"),
+            "high": quote_col("high"),
+            "low": quote_col("low"),
+            "close": quote_col("close"),
+            "volume": pd.array(quote["volume"], dtype="Int64"),
         },
         index=to_index(result["timestamp"]),
     )
-    df.index.name = "Date"
-    df = df.dropna(subset=["Close"])
+    df.index.name = "date"
+    df = df.dropna(subset=["close"])
     divs = result.get("events", {}).get("dividends", {})
     if divs:
         div_records = sorted(divs.values(), key=lambda d: d["date"])
@@ -183,10 +187,10 @@ def parse_json(data: dict, symbol: str) -> SymbolData:
             {"dividend": [d["amount"] for d in div_records]},
             index=to_index([d["date"] for d in div_records]),
         )
-        dividends.index.name = "Date"
+        dividends.index.name = "date"
     else:
         dividends = pd.DataFrame()
-    return SymbolData(symbol=symbol, df=df, long_name=long_name, dividends=dividends)
+    return SymbolData(symbol=result["meta"].get("symbol", symbol), df=df, long_name=long_name, dividends=dividends)
 
 
 def make_data_url(symbol: str, start: date, end: date) -> str:
@@ -209,7 +213,6 @@ def make_data_url(symbol: str, start: date, end: date) -> str:
 
 
 def save_data(items: list[SymbolData]) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for item in items:
         cleaned = item.symbol.replace(".", "-")
         prices_path = OUTPUT_DIR / f"{cleaned}.csv"
@@ -221,13 +224,261 @@ def save_data(items: list[SymbolData]) -> None:
             console.print(f"Saved {dividends_path}", style="cyan")
 
 
+def augment_data(items: list[SymbolData]) -> None:
+    for item in items:
+        _augment_data(item.df)
+
+
+def _augment_data(df: pd.DataFrame) -> None:
+    close = df["close"]
+    df["sma150"] = close.rolling(window=150).mean().round(2)
+    df["sma50"] = close.rolling(window=50).mean().round(2)
+    df["ema19"] = close.ewm(span=19, adjust=False).mean().round(2)
+    df["change"] = close.diff().round(2)
+    df["pct_chg"] = (close.pct_change() * 100).round(2)
+    df["ddown"] = (close / close.cummax() - 1).round(4)
+    df["voln"] = (100 * (df["volume"] - df["volume"].rolling(window=20).mean()) / df["volume"].rolling(window=20).std()).fillna(0).round(0).astype(int)
+    df["hilo"] = tsutils.calc_hilo(close)
+    df["strat"] = df["high"].diff().gt(0).astype(int) + df["low"].diff().lt(0) * 2
+    tlb, _ = tsutils.calc_tlb(close, 3)
+    ys = (tlb.close - tlb.open).apply(lambda e: 1 if e > 0 else -1)
+    ys.rename("tlb", inplace=True)
+    merged = pd.merge(close, ys, how="left", left_index=True, right_index=True)
+    df["tlb"] = merged.tlb.ffill().fillna(0).astype("int32")
+
+
+#     print_summary_information(symbol, df, ["ema19", "sma50", "sma150"])
+def print_summary_information(symbolData: SymbolData, mas: list[str]):
+    # Summary Information Table
+    df = symbolData.df
+    close = df["close"]
+    date_range = f"{df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}"
+    trading_days = len(df)
+
+    high_idx = close.idxmax()
+    high_value = close.max()
+    high_date = high_idx.strftime("%Y-%m-%d")
+
+    low_idx = close.idxmin()
+    low_value = close.min()
+    low_date = low_idx.strftime("%Y-%m-%d")
+
+    last_value = close.iloc[-1]
+    avg_vol = int(df["volume"].iloc[-20:].mean())
+
+    pct_in_range = round(((last_value - low_value) / (high_value - low_value)) * 100)
+    pct_drawdown = round(((last_value / high_value) - 1) * 100, 2)
+    pct_off_low = round((last_value / low_value - 1) * 100, 2)
+
+    def calculate_returns(start_date, end_date):
+        close_start = df.loc[start_date, "close"]
+        close_end = df.loc[end_date, "close"]
+        num_days = (end_date - start_date).days
+        total_return = close_end / close_start - 1
+        return total_return, (1 + total_return) ** (365 / num_days) - 1 if num_days > 0 else 0
+
+    _, ann_whole = calculate_returns(df.index[0], df.index[-1])
+    ann_whole_pct = round(ann_whole * 100, 2)
+
+    if high_idx < low_idx:
+        _, ann_hl = calculate_returns(high_idx, low_idx)
+    else:
+        _, ann_hl = calculate_returns(low_idx, high_idx)
+    ann_hl_pct = round(ann_hl * 100, 2)
+
+    # Monthly investment returns
+    total_invested, current_value = calculate_monthly_investment_returns(df)
+    dca_return_pct = round(((current_value / total_invested - 1) * 100), 2)
+    dca_annualized = round(100 * ((current_value / total_invested) ** (365 / (df.index[-1] - df.index[0]).days) - 1), 2)
+
+    # Create summary table
+    summary_table = Table(title="Summary Information", style="white")
+
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Value", justify="right")
+
+    summary_table.add_row("Symbol", symbolData.symbol)
+    summary_table.add_row("Range", date_range)
+    summary_table.add_row("Trading Days", str(trading_days))
+    summary_table.add_row("First", f"{close.iloc[0]:.2f}")
+    summary_table.add_row("High", f"{high_date} {high_value:.2f}")
+    summary_table.add_row("Low", f"{low_date} {low_value:.2f}")
+    summary_table.add_row("Last", f"{last_value:.2f}")
+    summary_table.add_row("Volume Avg", f"{avg_vol:,d}")
+    summary_table.add_row("% in range", f"{pct_in_range}%")
+    summary_table.add_row("% drawdown", f"{pct_drawdown}%")
+    summary_table.add_row("% off low", f"{pct_off_low}%")
+    summary_table.add_row("Ann %", f"{ann_whole_pct}%")
+    summary_table.add_row("Ann H-L %", f"{ann_hl_pct}%")
+    summary_table.add_row("DCA (Monthly $100)", f"${total_invested:.2f}")
+    summary_table.add_row("Current Value", f"${current_value:.2f}")
+    summary_table.add_row("DCA Return", f"{dca_return_pct}%")
+    summary_table.add_row("DCA Ann", f"{dca_annualized}%")
+
+    # Current price info calculations
+    price_data = {"name": ["high", "low", "last"] + mas, "value": [high_value, low_value, last_value] + [df[ma].iloc[-1] for ma in mas]}
+
+    # Create DataFrame
+    price_df = pd.DataFrame(price_data)
+
+    price_df["pct_diff"] = ((price_df["value"] - last_value) / last_value) * 100
+
+    # Formatting functions as vectorized operations
+    def format_pct_diff(row):
+        if row["name"] == "last":
+            return "-"
+        if abs(row["pct_diff"]) < 0.01:
+            return "~0.00%"
+
+        colour = "[white]"
+        arrow = ""
+        if row["pct_diff"] > 0:
+            colour = "[green]"
+            arrow = " ▲"
+        elif row["pct_diff"] < 0:
+            colour = "[red]"
+            arrow = " ▼"
+
+        return f"{colour}{row['pct_diff']:>8.2f}%{arrow}[/]"
+
+    price_df["formatted_value"] = price_df["value"].apply(lambda x: f"{x:.2f}")
+    price_df["formatted_pct_diff"] = price_df.apply(format_pct_diff, axis=1)
+
+    # Sort by value descending
+    price_df.sort_values("value", ascending=False, inplace=True)
+    # Create current price table (assuming you're using Rich Table)
+    current_price_table = Table(title="Current Price Information", style="white")
+    current_price_table.add_column("Metric", style="cyan")
+    current_price_table.add_column("Value", justify="right")
+    current_price_table.add_column("% Difference", justify="right")
+
+    for _, row in price_df.iterrows():
+        current_price_table.add_row(row["name"], row["formatted_value"], row["formatted_pct_diff"])
+
+    # Print both tables using rich
+    console.print(summary_table)
+    console.print(current_price_table)
+
+    # Bad data detection via robust z-score on High/Low ratio
+    ratio = df["high"] / df["low"]
+    median = ratio.median()
+    mad = (ratio - median).abs().median()
+    robust_z = 0.6745 * (ratio - median) / mad
+    z_threshold = 10
+    flagged = robust_z.abs() > z_threshold
+    if flagged.any():
+        flag_table = Table(title=f"Potential Bad Data (robust |z| > {z_threshold})", style="red")
+        flag_table.add_column("Date", style="cyan")
+        flag_table.add_column("High", justify="right")
+        flag_table.add_column("Low", justify="right")
+        flag_table.add_column("H/L Ratio", justify="right")
+        flag_table.add_column("Robust Z", justify="right")
+        for idx in flagged[flagged].index:
+            flag_table.add_row(
+                idx.strftime("%Y-%m-%d"),
+                f"{df.loc[idx, 'high']:.2f}",
+                f"{df.loc[idx, 'low']:.2f}",
+                f"{ratio.loc[idx]:.4f}",
+                f"{robust_z.loc[idx]:.2f}",
+            )
+        console.print(flag_table)
+
+
+def print_range_table(sd: SymbolData, xs):
+    df = sd.df
+    last = df["close"].iat[-1]
+
+    headers = ["Range", "High", "Low", "Last", "% Ddown", "% HVol", "% Range"]
+    tbl = Table(title="Range / Volatilty data", style="cyan")
+    for h in headers:
+        tbl.add_column(h, justify="right")
+
+    log_returns = np.log(df["close"] / df["close"].shift(1)).dropna()
+    for n in xs:
+        mx_cl = df["close"].iloc[-n:].max()
+        mx = df["high"].iloc[-n:].max()
+        mn = df["low"].iloc[-n:].min()
+        rng = 100.0 * (last - mn) / (mx - mn)
+        volatility = log_returns.rolling(window=n).std() * np.sqrt(252)
+        tbl.add_row(f"{n}d", f"{mx:.2f}", f"{mn:.2f}", f"{last:.2f}", f"{(last / mx_cl - 1) * 100:.2f}", f"{100 * volatility.iloc[-1]:.1f}", f"{rng:.1f}")
+
+    console.print(tbl)
+
+
+def print_tlb(sd: SymbolData):
+    df = sd.df
+    tlb, rev = tsutils.calc_tlb(df.close, 3)
+    # tlb = tlb2[-100:]
+    tlb["height"] = tlb["close"] - tlb["open"]
+    tlb["dirn"] = np.sign(tlb["height"])
+    last_dirn = tlb.iat[-1, 3]
+
+    trend = "uptrend" if last_dirn > 0 else "downtrend"
+    console.print(f"\n--- 3 Line Break\n{trend}, reversal {rev}", style="yellow")
+    console.print(tlb[-5:])
+
+
+def calculate_monthly_investment_returns(df: pd.DataFrame) -> tuple[float, float]:
+    """Calculate returns from investing $100 on the first trading day of each month.
+
+    Assumes fractional shares can be held.
+
+    Args:
+        df: DataFrame with datetime index and 'close' column.
+
+    Returns:
+        Tuple of (total_invested, current_value)
+    """
+    df = df.copy()
+    df["month"] = df.index.to_period("M")
+    # Get the first trading day of each month
+    first_days = df.groupby("month").head(1).index
+    first_closes = df.loc[first_days, "close"]
+    # Shares bought each month
+    shares_bought = 100 / first_closes
+    total_shares = shares_bought.sum()
+    total_invested = 100 * len(first_closes)
+    last_close = df["close"].iloc[-1]
+    current_value = total_shares * last_close
+    return total_invested, current_value
+
+
+def load_from_csv(symbols: list[str]) -> list[SymbolData]:
+    results: list[SymbolData] = []
+    for symbol in symbols:
+        cleaned = symbol.replace(".", "-")
+        prices_path = OUTPUT_DIR / f"{cleaned}.csv"
+        df = pd.read_csv(prices_path, index_col="date", parse_dates=True)
+        dividends_path = OUTPUT_DIR / f"{cleaned}-dividends.csv"
+        dividends = pd.read_csv(dividends_path, index_col="date", parse_dates=True) if dividends_path.exists() else pd.DataFrame()
+        results.append(SymbolData(symbol=symbol, df=df, dividends=dividends))
+    return results
+
+
 def main() -> None:
-    start = date(2025, 4, 14)
-    end = date(2026, 4, 10)
-    data = scrape_data(["ISF.L"], start, end, headless=False)
-    save_data(data)
+    parser = argparse.ArgumentParser(description="Fetch historical stock price data from Yahoo Finance")
+    parser.add_argument("action", choices=["load", "view"], help="Action to perform")
+    parser.add_argument("symbols", nargs="+", help="One or more stock symbols")
+    parser.add_argument("--years", type=int, default=2, help="Number of years of history to fetch (default: 2)")
+    args = parser.parse_args()
+
+    if args.action == "load":
+        today = date.today()
+        start = today.replace(year=today.year - args.years)
+        end = today
+        data = scrape_data(args.symbols, start, end, headless=False)
+        augment_data(data)
+        save_data(data)
+    elif args.action == "view":
+        data = load_from_csv(args.symbols)
+    else:
+        parser.error(f"unsupported action: {args.action}")
+
     for item in data:
-        console.print(item)
+        console.print(str(item))
+        print_summary_information(item, ["ema19", "sma50", "sma150"])
+        print_range_table(item, [5, 10, 20, 50, 200])
+        print_tlb(item)
 
 
 if __name__ == "__main__":

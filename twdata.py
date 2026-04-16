@@ -15,7 +15,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.subplots as subp
 import requests as req
-from lightweight_charts import Chart
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
@@ -80,33 +80,27 @@ def plot(symbol: str, df: pd.DataFrame, mas: list[str], n: int = 250) -> None:
 
 
 def plot_tv(symbol: str, df: pd.DataFrame, mas: list[str]) -> None:
-    """plot using lightweight charts"""
-    chart = Chart(toolbox=True)
-    chart.watermark(symbol, color="rgba(180, 180, 240, 0.7)")
-    chart.set(df)
+    fig = go.Figure()
 
-    # add p/b limits
-    last = df[-20:]["close"].max()
+    fig.add_trace(go.Scatter(x=df.index, y=df["close"], mode="lines", name=symbol))
+
+    high20 = df[-20:]["close"].max()
     for y in [0.975, 0.95, 0.9]:
-        chart.horizontal_line(last * y, text=f"{(1 - y) * 100:.1f}%", color="rgba(133,153,0,0.5)")
+        fig.add_hline(y=high20 * y, line_dash="dash", line_color="rgba(133,153,0,0.5)", annotation_text=f"{(1 - y) * 100:.1f}%", annotation_position="bottom left")
 
-    # add ma lines
     colours = ["rgba(42,161,152,0.6)", "rgba(203, 75, 22, 0.6)", "rgba(211,54,130,0.6)"]
-    ic = itertools.cycle(colours)
-    for ma in mas:
-        line = chart.create_line(name=ma, color=next(ic))
-        line.set(df[[ma]])  # requires a df with the column
+    for ma, colour in zip(mas, itertools.cycle(colours)):
+        fig.add_trace(go.Scatter(x=df.index, y=df[ma], mode="lines", name=ma, line=dict(color=colour)))
 
-    # hi lo markers - added in time order
     n = 19
-    markers = df[(df["hilo"] > n) | (df["hilo"] < -n)]
-    for i, r in markers.iterrows():
-        if r["hilo"] > n:
-            chart.marker(i, "above", "arrow_up", "rgb(133,153,0)")
-        else:  # r['hilo'] < -19
-            chart.marker(i, "above", "arrow_down", "rgb(220,50,47)")
+    markers_hi = df[df["hilo"] > n]
+    markers_lo = df[df["hilo"] < -n]
+    fig.add_trace(go.Scatter(x=markers_hi.index, y=markers_hi["high"] * 1.01, mode="markers", name="20d high", marker=dict(color="rgb(133,153,0)", symbol="triangle-up")))
+    fig.add_trace(go.Scatter(x=markers_lo.index, y=markers_lo["low"] * 0.99, mode="markers", name="20d low", marker=dict(color="rgb(220,50,47)", symbol="triangle-down")))
 
-    chart.show(block=True)
+    fig.update_layout(title=symbol)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    fig.show()
 
 
 def plot_3lb(symbol, df):
@@ -264,16 +258,17 @@ def load_twelve_data(symbol, days=255):
     df = ts.with_ma(ma_type="SMA", time_period=150).with_ma(ma_type="SMA", time_period=50).with_ma(ma_type="EMA", time_period=19).as_pandas()
 
     df.rename(columns={"ma1": "sma150", "ma2": "sma50", "ma3": "ema19"}, inplace=True)
+    close = df["close"]
     print(df.tail())
     fname = make_filename(symbol, df.index[-1].date())
-    df["change"] = pd.Series.diff(df.close).round(2)
-    df["pct_chg"] = (pd.Series.pct_change(df.close) * 100).round(2)
-    df["ddown"] = (df["close"] / df["close"].cummax() - 1).round(4)
+    df["change"] = pd.Series.diff(close).round(2)
+    df["pct_chg"] = (pd.Series.pct_change(close) * 100).round(2)
+    df["ddown"] = (close / close.cummax() - 1).round(4)
     df["voln"] = normalise_as_perc(df.volume)
-    # df['perc'] = percFromMin(df.close)
-    df["hilo"] = tsutils.calc_hilo(df["close"])
+    # df['perc'] = percFromMin(close)
+    df["hilo"] = tsutils.calc_hilo(close)
     df["strat"] = strat(df.high, df.low)
-    df["tlb"] = three_line_break(df.close)
+    df["tlb"] = three_line_break(close)
     df.to_csv(fname)
     console.print(f"saved {symbol} {df.index[0].date()} to {df.index[-1].date()} shape={df.shape}", style="green")
     console.print(fname, style="green")
@@ -915,6 +910,25 @@ def plot_latest_ind(symbol: str) -> pd.DataFrame | None:
     return None
 
 
+def describe_stats(symbol: str) -> pd.DataFrame | None:
+    xs = list_cached_files(symbol)
+    if len(xs) > 0:
+        df = load_file(xs[0])
+        df["pos_in_range"] = (df["close"] - df["low"]) / (df["high"] - df["low"])
+        total = len(df["pos_in_range"].dropna())
+        hist, bin_edges = np.histogram(df["pos_in_range"].dropna(), bins=10, range=(0, 1))
+        hist = hist / total * 100
+        bin_labels = [f"{bin_edges[i]:.1f}-{bin_edges[i + 1]:.1f}" for i in range(len(hist))]
+        cumulative = (df["pos_in_range"] - 0.5).cumsum()
+        fig = subp.make_subplots(rows=2, cols=1, row_heights=[0.5, 0.5], subplot_titles=("Histogram", "Cumulative (pos_in_range - 0.5)"))
+        fig.add_trace(go.Bar(x=bin_labels, y=hist, name=symbol), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=cumulative, mode="lines", name="cumulative"), row=2, col=1)
+        fig.update_layout(title=f"{symbol} Close Position in Daily Range")
+        fig.show()
+        return df
+    return None
+
+
 def plot_latest_drawdown(symbol: str) -> pd.DataFrame | None:
     xs = list_cached_files(symbol)
     if len(xs) > 0:
@@ -1033,7 +1047,7 @@ def concat(filename1, filename2, output_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load EoD data from twelvedata.com")
-    parser.add_argument("action", type=str, help="The action to perform [load|view|list|earliest|plot|plot3lb|plotind|plotrel]")
+    parser.add_argument("action", type=str, help="The action to perform [load|view|list|earliest|plot|plot3lb|plotind|plotrel|desc]")
     parser.add_argument("symbol", type=str, help="The symbol to use in the action")
     args = parser.parse_args()
     if args.action == "load":
@@ -1056,6 +1070,8 @@ if __name__ == "__main__":
         plot_latest_drawdown(args.symbol)
     elif args.action == "plotrel":
         plot_relative(args.symbol)
+    elif args.action == "desc":
+        describe_stats(args.symbol)
 
     # load_earliest_date('spy')
     # df = load_file('c:\\users\\niroo\\downloads\\spy 2023-12-15.csv')

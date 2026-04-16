@@ -14,6 +14,9 @@ providers:
   sambanova:
     env_var: SAMBANOVA_API_KEY
     url: "https://api.sambanova.ai/v1"
+  tetrate:
+    env_var: TETRATE_API_KEY
+    url: "https://api.router.tetrate.ai/v1"
   openrouter:
     env_var: OPENROUTER_API_KEY
     url: "https://openrouter.ai/api/v1"
@@ -36,7 +39,7 @@ models:
     name: o4-mini
     provider: openai
     reasoning: True
-  groqo:
+  groq:
     name: openai/gpt-oss-120b
     provider: groq
   llama:
@@ -64,10 +67,13 @@ models:
     name: moonshotai/Kimi-K2.5
     provider: togetherai
   oss:
+    name: deepinfra/openai/gpt-oss-120b
+    provider: tetrate
+  gptoss:
     name: gpt-oss-120b
     provider: sambanova
   samba:
-    name: DeepSeek-V3.1-Terminus
+    name: DeepSeek-V3.2
     provider: sambanova
   samba-r1:
     name: DeepSeek-R1
