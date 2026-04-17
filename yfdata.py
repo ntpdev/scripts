@@ -158,7 +158,7 @@ def parse_table(table: Tag) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def parse_json(data: dict, symbol: str) -> SymbolData:
-    def to_index(timestamps) -> pd.DatetimeIndex:
+    def to_index(timestamps: list[int]) -> pd.DatetimeIndex:
         ts = np.array(timestamps, dtype="int64")
         return pd.to_datetime(ts, unit="s", utc=True).normalize().tz_localize(None)
 
@@ -248,9 +248,9 @@ def _augment_data(df: pd.DataFrame) -> None:
 
 
 #     print_summary_information(symbol, df, ["ema19", "sma50", "sma150"])
-def print_summary_information(symbolData: SymbolData, mas: list[str]):
+def print_summary_information(sd: SymbolData, mas: list[str]) -> None:
     # Summary Information Table
-    df = symbolData.df
+    df = sd.df
     close = df["close"]
     date_range = f"{df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}"
     trading_days = len(df)
@@ -270,7 +270,7 @@ def print_summary_information(symbolData: SymbolData, mas: list[str]):
     pct_drawdown = round(((last_value / high_value) - 1) * 100, 2)
     pct_off_low = round((last_value / low_value - 1) * 100, 2)
 
-    def calculate_returns(start_date, end_date):
+    def calculate_returns(start_date: pd.Timestamp, end_date: pd.Timestamp) -> tuple[float, float]:
         close_start = df.loc[start_date, "close"]
         close_end = df.loc[end_date, "close"]
         num_days = (end_date - start_date).days
@@ -297,7 +297,7 @@ def print_summary_information(symbolData: SymbolData, mas: list[str]):
     summary_table.add_column("Metric", style="cyan")
     summary_table.add_column("Value", justify="right")
 
-    summary_table.add_row("Symbol", symbolData.symbol)
+    summary_table.add_row("Symbol", sd.symbol)
     summary_table.add_row("Range", date_range)
     summary_table.add_row("Trading Days", str(trading_days))
     summary_table.add_row("First", f"{close.iloc[0]:.2f}")
@@ -324,7 +324,7 @@ def print_summary_information(symbolData: SymbolData, mas: list[str]):
     price_df["pct_diff"] = ((price_df["value"] - last_value) / last_value) * 100
 
     # Formatting functions as vectorized operations
-    def format_pct_diff(row):
+    def format_pct_diff(row: pd.Series) -> str:
         if row["name"] == "last":
             return "-"
         if abs(row["pct_diff"]) < 0.01:
@@ -384,7 +384,7 @@ def print_summary_information(symbolData: SymbolData, mas: list[str]):
         console.print(flag_table)
 
 
-def print_range_table(sd: SymbolData, xs):
+def print_range_table(sd: SymbolData, xs: list[int]) -> None:
     df = sd.df
     last = df["close"].iat[-1]
 
