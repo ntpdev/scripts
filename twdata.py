@@ -226,7 +226,7 @@ def strat(hs, ls):
 def print_range_table(df, xs):
     last = df["close"].iat[-1]
 
-    headers = ["Range", "High", "Low", "Last", "% Drawdown", "Volatility", "% Range"]
+    headers = ["Range", "High", "Low", "Last", "Ddown %", "HVol %", "ATR", "% Range"]
     tbl = f"| {' | '.join(headers)} |\n| {' | '.join(['---'] * len(headers))} |\n"
 
     log_returns = np.log(df["close"] / df["close"].shift(1)).dropna()
@@ -236,7 +236,8 @@ def print_range_table(df, xs):
         mn = df["low"].iloc[-n:].min()
         rng = 100.0 * (last - mn) / (mx - mn)
         volatility = log_returns.rolling(window=n).std() * np.sqrt(252)
-        tbl += f"| {n}d | {mx:.2f} | {mn:.2f} | {last:.2f} | {(last / mx_cl - 1) * 100:.2f} | {100 * volatility.iloc[-1]:.1f} | {rng:.1f} |\n"
+        atr = tsutils.calculate_atr(df, n)
+        tbl += f"| {n}d | {mx:.2f} | {mn:.2f} | {last:.2f} | {(last / mx_cl - 1) * 100:.2f} | {100 * volatility.iloc[-1]:.1f} | {atr.iloc[-1]:.2f}  | {rng:.1f} |\n"
 
     console.print("\n--- ranges", style="yellow")
     console.print(Markdown(tbl), style="cyan")
@@ -330,6 +331,168 @@ def scan(df, entry_hi, exit_lo, stop_perc, target_perc):
         "lossC": pts[losses].count(),
         "lossT": pts[losses].sum(),
     }
+
+
+def calculate_roc_zscore(
+    df: pd.DataFrame,
+    roc_window: int = 5,
+    vol_window: int = 60,
+    entry_threshold: float = -1.5,
+    trend_filter: bool = True,
+    trend_window: int = 200,
+) -> pd.DataFrame:
+    """
+    Z-score normalised return signal for mean reversion.
+
+    Replaces a fixed ROC threshold (e.g. -5%) with a volatility-normalised
+    equivalent: z = ROC(n) / rolling_std(ROC(n), vol_window)
+
+    Parameters
+    ----------
+    df               : OHLCV DataFrame with DatetimeIndex
+    roc_window       : lookback for return calculation (default 5)
+    vol_window       : rolling window for std normalisation (default 60)
+    entry_threshold  : z-score level to trigger signal (default -1.5)
+    trend_filter     : if True, only signal when close > trend_ma
+    trend_window     : MA window for trend filter (default 200)
+
+    Returns
+    -------
+    DataFrame with added columns:
+        roc          - raw n-day return
+        roc_zscore   - volatility-normalised z-score
+        trend_ma     - trend filter MA (if enabled)
+        signal       - 1 where oversold condition met, else 0
+    """
+    out = df.copy()
+
+    # --- Raw n-day return (equivalent to your ROC) ---
+    out["roc"] = out["close"].pct_change(roc_window)
+
+    # --- Rolling z-score: normalise by rolling std of the ROC series ---
+    rolling_mean = out["roc"].rolling(vol_window).mean()
+    rolling_std = out["roc"].rolling(vol_window).std()
+    out["roc_zscore"] = (out["roc"] - rolling_mean) / rolling_std
+
+    # --- Trend filter ---
+    if trend_filter:
+        out["trend_ma"] = out["close"].rolling(trend_window).mean()
+        trend_condition = out["close"] > out["trend_ma"]
+    else:
+        out["trend_ma"] = np.nan
+        trend_condition = pd.Series(True, index=out.index)
+
+    # --- Signal: z-score below threshold AND above trend MA ---
+    out["signal"] = ((out["roc_zscore"] < entry_threshold) & trend_condition).astype(int)
+
+    return out
+
+
+def scan2(
+    df: pd.DataFrame,
+    roc_window: int = 5,
+    vol_window: int = 60,
+    entry_threshold: float = -1.5,
+    stop_perc: float = 0.975,
+    target_perc: float = 1.05,
+    trend_filter: bool = False,
+    trend_window: int = 200,
+) -> dict:
+    df2 = calculate_roc_zscore(df, roc_window, vol_window, entry_threshold, trend_filter, trend_window)
+
+    fig = subp.make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+
+    fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price", increasing_line_color="green", decreasing_line_color="red"), row=1, col=1)
+    if trend_filter and "trend_ma" in df2.columns:
+        fig.add_trace(go.Scatter(x=df2.index, y=df2["trend_ma"], name="Trend MA", line=dict(color="orange", width=1)), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df2.index, y=df2["roc_zscore"], name="ROC Z-Score", line=dict(color="teal", width=1.5)), row=2, col=1)
+    fig.add_hline(y=entry_threshold, line_dash="dash", line_color="red", annotation_text=f"Entry {entry_threshold}", row=2, col=1)
+    fig.add_hline(y=0, line_dash="dot", line_color="gray", row=2, col=1)
+
+    signal_buys = df2[df2["signal"] == 1]
+    fig.add_trace(go.Scatter(x=signal_buys.index, y=signal_buys["low"] * 0.99, mode="markers", name="Buy Signal", marker=dict(color="green", symbol="triangle-up", size=8)), row=1, col=1)
+
+    xs = []
+    state = 0
+    stop = None
+    for i, row in df2.iterrows():
+        if state == 0 and row["signal"] == 1:
+            entry = i
+            state = 1
+            stop = row["close"] * stop_perc
+            target = row["close"] * target_perc
+        elif state == 1:
+            if row["close"] < stop or row["close"] > target:
+                xs.append((entry, i))
+                state = 0
+
+    ys = []
+    for ent, ex in xs:
+        ys.append({"dtOpen": ent, "dtClose": ex, "open": df2.at[ent, "close"], "close": df2.at[ex, "close"]})
+    trades = pd.DataFrame(ys)
+    if trades.empty:
+        console.print("No trades generated", style="yellow")
+        fig.show()
+        return {"system": "roc_zscore", "trades": 0}
+
+    trades["points"] = trades["close"] - trades["open"]
+    trades["perc"] = (trades["points"] / trades["open"]) * 100.0
+    trades["cumulative"] = (trades["close"] / trades["open"]).cumprod()
+    trades["drawdown"] = trades["cumulative"] - trades["cumulative"].expanding().max()
+
+    for _, t in trades.iterrows():
+        fig.add_vline(x=t["dtOpen"], line_dash="dot", line_color="green", row=1, col=1)
+        fig.add_vline(x=t["dtClose"], line_dash="dot", line_color="red", row=1, col=1)
+
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    fig.update_layout(title="ROC Z-Score Mean Reversion Scan")
+    fig.show()
+
+    pts = trades["points"]
+    wins = pts > 0
+    losses = pts < 0
+    result = {
+        "system": f"roc_z{roc_window},{vol_window},z<{entry_threshold},s{stop_perc},t{target_perc}",
+        "trades": len(trades),
+        "pts": pts.sum(),
+        "cumulative": trades["cumulative"].iat[-1],
+        "maxdd": round(trades["drawdown"].min() * 100.0, 2),
+        "winC": pts[wins].count(),
+        "winT": pts[wins].sum(),
+        "lossC": pts[losses].count(),
+        "lossT": pts[losses].sum(),
+    }
+    console.print(
+        Markdown(
+            f"## Scan2 Results\n| Metric | Value |\n|---|---|\n| System | {result['system']} |\n| Trades | {result['trades']} |\n| Total Pts | {result['pts']:.2f} |\n| Cumulative | {result['cumulative']:.4f} |\n| Max DD | {result['maxdd']:.2f}% |\n| Wins | {result['winC']} ({result['winT']:.2f}) |\n| Losses | {result['lossC']} ({result['lossT']:.2f}) |"
+        )
+    )
+
+    tbl = Table(title="Scan2 Trades", style="white")
+    tbl.add_column("Entry Date", style="cyan")
+    tbl.add_column("Exit Date", style="cyan")
+    tbl.add_column("Entry Price", justify="right")
+    tbl.add_column("Exit Price", justify="right")
+    tbl.add_column("Change", justify="right")
+    tbl.add_column("% Change", justify="right")
+
+    for _, t in trades.iterrows():
+        change = t["close"] - t["open"]
+        pct = t["perc"]
+        clr = "[green]" if change > 0 else "[red]" if change < 0 else ""
+        end = "[/]" if clr else ""
+        tbl.add_row(
+            t["dtOpen"].strftime("%Y-%m-%d"),
+            t["dtClose"].strftime("%Y-%m-%d"),
+            f"{t['open']:.2f}",
+            f"{t['close']:.2f}",
+            f"{clr}{change:+.2f}{end}",
+            f"{clr}{pct:+.2f}%{end}",
+        )
+
+    console.print(tbl)
+    return result
 
 
 def plot_swings(df):
@@ -823,11 +986,8 @@ def calculate_monthly_investment_returns(df: pd.DataFrame) -> tuple[float, float
     Returns:
         Tuple of (total_invested, current_value)
     """
-    df = df.copy()
-    df["month"] = df.index.to_period("M")
-    # Get the first trading day of each month
-    first_days = df.groupby("month").head(1).index
-    first_closes = df.loc[first_days, "close"]
+    mask = pd.Series(df.index.month, index=df.index).diff() != 0
+    first_closes = df.loc[mask, "close"]
     # Shares bought each month
     shares_bought = 100 / first_closes
     total_shares = shares_bought.sum()
@@ -1054,8 +1214,9 @@ if __name__ == "__main__":
         load(args.symbol)
     elif args.action == "view":
         df = view(args.symbol)
-        xs = scan(df, 19, -39, 0.95, 1.4)
-        print(xs)
+        # xs = scan(df, 19, -39, 0.95, 1.4)
+        # print(xs)
+        scan2(df)
     elif args.action == "earliest":
         load_earliest_date(args.symbol)
     elif args.action == "list":

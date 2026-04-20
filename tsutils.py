@@ -84,6 +84,31 @@ def find_swings(s: pd.Series, perc_rev: float) -> list[int] | pd.DataFrame:
     return df
 
 
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Calculate Average True Range (ATR), exponential moving average of true range
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: Lookback period (default: 14)
+
+    Returns:
+        pd.Series of ATR values
+    """
+    high = df["high"]
+    low = df["low"]
+    prev_close = df["close"].shift(1)
+
+    # True Range components
+    tr1 = high - low  # Current candle range
+    tr2 = (high - prev_close).abs()  # Gap up scenario
+    tr3 = (low - prev_close).abs()  # Gap down scenario
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    return true_range.ewm(span=period, adjust=False).mean()
+
+
 def calculate_mae(s: pd.Series) -> float:
     """calculate the mae for the series"""
     if s.iloc[0] < s.iloc[-1]:  # uptrend
@@ -659,7 +684,8 @@ def calc_strat(df: pd.DataFrame) -> pd.Series:
 def calc_standardized_volume(df: pd.DataFrame, n: int) -> pd.Series:
     # Calculate the normalized volume (z-score for volume)
     # ((volume - rolling_mean) / rolling_std) * 100, rounded to 0 decimal places
-    nvol = (((df["volume"] - df["volume"].rolling(window=n).mean()) / df["volume"].rolling(window=n).std()) * 100).round()
+    vol = df["volume"]
+    nvol = (((vol - vol.rolling(window=n).mean()) / vol.rolling(window=n).std()) * 100).round()
     return nvol.fillna(0).astype(int)
 
 

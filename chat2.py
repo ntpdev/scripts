@@ -8,10 +8,10 @@ import platform
 # import sympy # used by eval
 import re
 from dataclasses import asdict, dataclass, field
+from itertools import chain
 from pathlib import Path
 from textwrap import dedent, shorten
 from typing import Any, Literal
-from itertools import chain
 
 import requests
 import yaml
@@ -29,10 +29,10 @@ from rich.pretty import pprint
 from chatutils import (
     chatutils_functions,
     execute_script,
+    execute_shell_command,
     extract_first_code_block,
     extract_markdown_blocks,
     input_multi_line,
-    load_textfile,
     make_fullpath,
     save_content,
     translate_latex,
@@ -344,11 +344,11 @@ class LLM:
             "model": self.model.name,
             "messages": [clean_asdict(m) for m in messages],
             "max_completion_tokens": 16384 if self.model.reasoning else 8192,
-            }
+        }
 
         if self.use_tool:
             kwargs["tools"] = [v["defn"] for v in chain(chatutils_functions().values(), ftutils_functions().values())]
-#            kwargs["tools"] = [v["defn"] for v in ftutils_functions().values()]
+            #            kwargs["tools"] = [v["defn"] for v in ftutils_functions().values()]
             supports_temp = not (self.model.reasoning and self.model.provider.id == "openai")
             if supports_temp:
                 kwargs["temperature"] = 0.7
@@ -693,6 +693,14 @@ def process_commands(client: LLM, cmd: str, inp: str, history: MessageHistory) -
         console.print(f"tool use changed to {state}", style="yellow")
     elif cmd == "exec":
         next_action = check_and_process_code_block(history)
+    elif cmd == "shell":
+        if not inp:
+            console.print("Usage: %shell <command string>", style="yellow")
+        else:
+            output = execute_shell_command(inp)
+            text = f"## shell command\n`{inp}`\n\n## output\n{output}"
+            console.print(Markdown(text), width=80)
+            history.append(user_message(text=text))
 
     return next_action
 

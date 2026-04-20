@@ -4,8 +4,10 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from textwrap import shorten
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app
@@ -15,9 +17,6 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
-from functools import cache
-from typing import Any
-
 
 # on Linux clipbaord support with X11 desktop requires xclip
 # sudo apt install xclip
@@ -92,25 +91,18 @@ EXECUTE_SCRIPT_FN = {
         "parameters": {
             "type": "object",
             "properties": {
-                "language": {
-                    "type": "string",
-                    "enum": ["python"] + [DEFAULT_SHELL],
-                    "description": f"Language to execute. Use '{DEFAULT_SHELL}' for shell commands on this platform."
-                },
-                "lines": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Code lines to execute"
-                }
+                "language": {"type": "string", "enum": ["python"] + [DEFAULT_SHELL], "description": f"Language to execute. Use '{DEFAULT_SHELL}' for shell commands on this platform."},
+                "lines": {"type": "array", "items": {"type": "string"}, "description": "Code lines to execute"},
             },
             "required": ["language", "lines"],
             "additionalProperties": False,
         },
         "strict": True,
-    }
+    },
 }
 
 console = Console()
+
 
 class ChatInput:
     def __init__(self):
@@ -178,7 +170,7 @@ class ChatInput:
 
     def get_input(self) -> str:
         """Get multi-line input from user. Returns 'x' on exit.
-        
+
         Usage:
         - Press Enter to create new lines
         - Press Esc+Enter to submit
@@ -188,7 +180,7 @@ class ChatInput:
             return self.session.prompt(">>> ", multiline=True)
         except (EOFError, KeyboardInterrupt):
             return "x"
-        
+
 
 def input_multi_line() -> str:
     """Enhanced input with history, multi-line editing, and command completion"""
@@ -210,6 +202,7 @@ class CodeBlock:
     language: str
     lines: list[str]
 
+
 @cache
 def chatutils_functions() -> dict[str, dict[str, Any]]:
     """Returns a dictionary mapping function names to their definitions and a callable."""
@@ -221,6 +214,7 @@ def chatutils_functions() -> dict[str, dict[str, Any]]:
         name(EVALUATE_FN): {"defn": EVALUATE_FN, "fn": evaluate_expression},
         name(EXECUTE_SCRIPT_FN): {"defn": EXECUTE_SCRIPT_FN, "fn": execute_script_impl},
     }
+
 
 def print_block(lines: str | list[str], line_numbers: bool = False, style: str = "") -> None:
     xs = lines if isinstance(lines, list) else lines.splitlines()
@@ -360,6 +354,7 @@ def execute_python_script(code: str) -> str:
     r = execute_script(CodeBlock("python", code.splitlines()))
     return r or "SUCCESS: script executed successfully but there was no output. include a print statement"
 
+
 def evaluate_expression_impl(expression: str) -> Any:
     # Split into individual lines removing blank lines but preserving indents
     parts = [e for e in re.split(r"; |\n", expression) if e.strip()]
@@ -400,16 +395,16 @@ def evaluate_expression(expression: str) -> str:
 def execute_script_impl(language: str = None, lines: list[str] = None) -> str:
     """Entry point for LLM function call"""
     valid_languages = ["bash", "powershell", "python"]
-    
+
     if language is None:
         return "ERROR: language is required"
     if language.lower() not in valid_languages:
         return f"ERROR: invalid language '{language}'. Must be one of: {', '.join(valid_languages)}"
-    
+
     # Check lines exists and is not None
     if lines is None:
         return "ERROR: input must contain one or more lines"
-    
+
     r = execute_script(CodeBlock(language, lines))
     return r
 
@@ -417,7 +412,7 @@ def execute_script_impl(language: str = None, lines: list[str] = None) -> str:
 def execute_script(code: CodeBlock) -> str:
     print_block(code.lines, True)
     if code.language == "shell":
-        code.language = "bash" if IS_LINUX else "powershell"
+        code.language = DEFAULT_SHELL
 
     msg = ""
     if code.language == "python":
@@ -433,6 +428,11 @@ def execute_script(code: CodeBlock) -> str:
         console.print("unrecognised code block found")
 
     return msg.strip()
+
+
+def execute_shell_command(command: str) -> str:
+    """Execute a raw shell command string and return combined output."""
+    return execute_script(CodeBlock(DEFAULT_SHELL, [command]))
 
 
 def translate_thinking(s: str) -> str:
