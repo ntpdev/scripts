@@ -953,6 +953,10 @@ SITE_CONFIGS: dict[str, SiteConfig] = {
     ),
 }
 
+def test_parse() -> None:
+    # TODO
+    # load ~/Downloads/temp.html
+    pass
 
 def test_eval():
     s = "10 - (7 * .52 + 4 * .47)"
@@ -974,9 +978,9 @@ if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
     # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
 
-    # x = retrieve_nyt_article("https://www.nytimes.com/2026/02/24/opinion/china-america-manufacturing-ai.html")
+    x = retrieve_ft_article("https://www.ft.com/content/d62fadb7-2fc6-4c6e-b39f-f6bc642d81db")
     # pprint(x)
-    # exit(0)
+    exit(0)
 
     # for site in SITE_CONFIGS.keys():
     for site in ["ft"]:

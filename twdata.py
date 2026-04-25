@@ -15,7 +15,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.subplots as subp
 import requests as req
-
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
@@ -259,6 +258,7 @@ def load_twelve_data(symbol, days=255):
     df = ts.with_ma(ma_type="SMA", time_period=150).with_ma(ma_type="SMA", time_period=50).with_ma(ma_type="EMA", time_period=19).as_pandas()
 
     df.rename(columns={"ma1": "sma150", "ma2": "sma50", "ma3": "ema19"}, inplace=True)
+    df[["sma150", "sma50", "ema19"]] = df[["sma150", "sma50", "ema19"]].replace(0, np.nan)
     close = df["close"]
     print(df.tail())
     fname = make_filename(symbol, df.index[-1].date())
@@ -1024,7 +1024,7 @@ def process(symbol: str, df: pd.DataFrame, sw_perc: float = 5.0):
     console.print("\n-- 3 line break", style="yellow")
     tlb, rev = tsutils.calc_tlb(df.close, 3)
     print(tlb[-5:])
-    console.print(f"\n-- runs", style="yellow")
+    console.print("\n-- runs", style="yellow")
     print_runs_table(symbol, df)
     console.print(f"\n-- swings {sw_perc}", style="yellow")
     swings = tsutils.find_swings(df.close, sw_perc)
@@ -1129,6 +1129,19 @@ def list_cached(symbol: str):
         print(str(p))
 
 
+def clean_cached(symbol: str):
+    files = list_cached_files(symbol)
+    if len(files) <= 2:
+        print(f"only {len(files)} file(s) cached, nothing to clean")
+        return
+    keep = {files[0], files[-1]}
+    removable = [f for f in files if f not in keep]
+    print(f"removing {len(removable)} file(s) for {symbol} (keeping earliest and latest):")
+    for p in removable:
+        print(str(p))
+        p.unlink()
+
+
 def get_run_mask(series: pd.Series, threshold: float = -0.1, min_run: int = 3) -> pd.Series:
     below = series < threshold
     # Each time below changes value, increment a group counter
@@ -1207,7 +1220,7 @@ def concat(filename1, filename2, output_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load EoD data from twelvedata.com")
-    parser.add_argument("action", type=str, help="The action to perform [load|view|list|earliest|plot|plot3lb|plotind|plotrel|desc]")
+    parser.add_argument("action", type=str, help="The action to perform [load|view|list|clean|earliest|plot|plot3lb|plotind|plotrel|desc]")
     parser.add_argument("symbol", type=str, help="The symbol to use in the action")
     args = parser.parse_args()
     if args.action == "load":
@@ -1221,6 +1234,8 @@ if __name__ == "__main__":
         load_earliest_date(args.symbol)
     elif args.action == "list":
         list_cached(args.symbol)
+    elif args.action == "clean":
+        clean_cached(args.symbol)
     elif args.action == "plot":
         plot_latest(args.symbol)
     elif args.action == "plot3lb":
