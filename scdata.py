@@ -8,8 +8,10 @@ Usage:
 import argparse
 import json
 import logging
+import random
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -35,7 +37,10 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYMBOLS_RAW = """
-spy qqq eem pbw xbi xlb xlc xle xlf xli xlk xlp xlre xlu xlv xly xop xme
+spy qqq
+xlb xlc xle xlf xli xlk xlp xlre xlu xlv xly
+eem pbw xbi xop xme
+isf.l vod.l pct.l mtro.l
 """
 
 # JavaScript injected into the browser page to call the StockCharts data API.
@@ -108,7 +113,7 @@ def json_to_dataframe(json_str: str) -> pd.DataFrame:
           }
         }
 
-    Returns a DataFrame with a ``(symbol, date)`` MultiIndex sorted for fast time-series slicing.
+    Returns a DataFrame with plain columns sorted by ``(symbol, date)``.
     """
     payload: dict = json.loads(json_str)
     symbols_data: dict = payload.get("symbols", {})
@@ -137,12 +142,12 @@ def json_to_dataframe(json_str: str) -> pd.DataFrame:
     return (
         pd.DataFrame(rows)
         .assign(
-            date=lambda d: pd.to_datetime(d["date"]).dt.date.astype("object"),
+            date=lambda d: pd.to_datetime(d["date"]),
             volume=lambda d: pd.to_numeric(d["volume"], errors="coerce"),
         )
         .astype({"symbol": "category", "open": "float32", "high": "float32", "low": "float32", "close": "float32", "volume": "Int64", "sctr_reg": "float32", "sctr_snp": "float32", "sctr_etf": "float32"})
-        .set_index(["symbol", "date"])
-        .sort_index()
+        .sort_values(["symbol", "date"])
+        .reset_index(drop=True)
     )
 
 
@@ -174,20 +179,7 @@ def print_summary(df: pd.DataFrame) -> None:
     """
     Print a per-symbol summary table showing row count, first date, and last date.
     """
-    summary = (
-        df.groupby(level="symbol", observed=True)
-        .apply(
-            lambda g: pd.Series(
-                {
-                    "rows": len(g),
-                    "start": g.index.get_level_values("date").min(),
-                    "end": g.index.get_level_values("date").max(),
-                }
-            ),
-            include_groups=False,
-        )
-        .reset_index()
-    )
+    summary = df.groupby("symbol", observed=True).agg(rows=("date", "size"), start=("date", "min"), end=("date", "max")).reset_index()
     col_widths = {
         "symbol": max(summary["symbol"].str.len().max(), 6),
         "rows": max(summary["rows"].astype(str).str.len().max(), 4),
@@ -201,9 +193,11 @@ def print_summary(df: pd.DataFrame) -> None:
         print(f"{row.symbol:<{col_widths['symbol']}}  {row.rows:>{col_widths['rows']}}  {str(row.start):>{col_widths['start']}}  {str(row.end):>{col_widths['end']}}")
     print(df.info())
 
+
 # ---------------------------------------------------------------------------
 # Browser helpers
 # ---------------------------------------------------------------------------
+
 
 def _dismiss_shadow_dom_popup(page: Page, host_selector: str) -> bool:
     """
@@ -325,7 +319,7 @@ def fetch_stock_data(
     Returns
     -------
     pd.DataFrame
-        Combined DataFrame with a ``(symbol, date)`` MultiIndex.
+        Combined DataFrame with plain columns sorted by ``(symbol, date)``.
     """
     sizes = batch_sizes(len(symbols), batch_max)
     frames: list[pd.DataFrame] = []
@@ -339,7 +333,7 @@ def fetch_stock_data(
         for size in sizes:
             batch = symbols[offset : offset + size]
             offset += size
-
+            time.sleep(random.uniform(2.0, 5.0))
             raw_json = _fetch_batch_json(session.page, batch)
             df_batch = json_to_dataframe(raw_json)
             frames.append(df_batch)
@@ -349,7 +343,7 @@ def fetch_stock_data(
         log.warning("No data retrieved.")
         return pd.DataFrame()
 
-    combined = pd.concat(frames).sort_index()
+    combined = pd.concat(frames, ignore_index=True).sort_values(["symbol", "date"]).reset_index(drop=True)
 
     date_str = date.today().strftime("%y%m%d")
     dest = output_dir / f"stockcharts-{date_str}.parquet"
@@ -381,10 +375,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _cmd_load(args: argparse.Namespace) -> None:
     """
-    multiindex (symbol, date)
-    columns [open high low, close, volume, sctr_reg, sctr_snp, sctr_etf]
+    columns [symbol, date, open, high, low, close, volume, sctr_reg, sctr_snp, sctr_etf]
     """
-    syms = args.symbols if args.symbols else default_symbols()
+    syms = sorted(args.symbols) if args.symbols else default_symbols()
     log.info("Fetching data for %d symbols → %s", len(syms), _OUTPUT_DIR)
     result = fetch_stock_data(syms, _OUTPUT_DIR)
     log.info("Done. DataFrame shape: %s", result.shape)
@@ -396,7 +389,7 @@ def _cmd_view(_args: argparse.Namespace) -> None:
         log.error("No stockcharts-*.parquet files found in %s", _OUTPUT_DIR)
         sys.exit(1)
     log.info("Loading %s", latest)
-    df = pd.read_parquet(latest, engine="pyarrow")
+    df = pd.read_parquet(latest, engine="pyarrow").astype({"symbol": "category"})
     print(f"File: {latest}")
     print(f"Shape: {df.shape}")
     print()
