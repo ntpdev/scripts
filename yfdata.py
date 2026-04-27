@@ -226,7 +226,7 @@ def save_data(items: list[SymbolData]) -> None:
 
 def augment_data(items: list[SymbolData]) -> None:
     for item in items:
-        tsutils.augment_data(item.df)
+        item.df = tsutils.augment_data(item.df)
 
 
 #     print_summary_information(symbol, df, ["ema19", "sma50", "sma150"])

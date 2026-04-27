@@ -960,23 +960,27 @@ def display(df: pd.DataFrame) -> None:
     console.print(table)
 
 
-def augment_data(df: pd.DataFrame) -> None:
+def augment_data(df: pd.DataFrame) -> pd.DataFrame:
     """add analysis columns to daily dataframe"""
+    df = df.copy()
     close = df["close"]
-    df["sma150"] = close.rolling(window=150).mean().round(2)
-    df["sma50"] = close.rolling(window=50).mean().round(2)
-    df["ema19"] = close.ewm(span=19, adjust=False).mean().round(2)
+    if "sma150" not in df.columns:
+        df["sma150"] = close.rolling(window=150).mean().round(2)
+        df["sma50"] = close.rolling(window=50).mean().round(2)
+        df["ema19"] = close.ewm(span=19, adjust=False).mean().round(2)
     df["change"] = close.diff().round(2)
     df["pct_chg"] = (close.pct_change() * 100).round(2)
     df["ddown"] = (close / close.cummax() - 1).round(4)
-    df["voln"] = (100 * (df["volume"] - df["volume"].rolling(window=20).mean()) / df["volume"].rolling(window=20).std()).fillna(0).round(0).astype(int)
+    v = df["volume"]
+    df["voln"] = (100 * (v - v.rolling(window=20).mean()) / v.rolling(window=20).std()).fillna(0).round(0).astype(int)
     df["hilo"] = calc_hilo(close)
-    df["strat"] = df["high"].diff().gt(0).astype(int) + df["low"].diff().lt(0) * 2
+    df["strat"] = calc_strat(df)
     tlb, _ = calc_tlb(close, 3)
     ys = (tlb.close - tlb.open).apply(lambda e: 1 if e > 0 else -1)
     ys.rename("tlb", inplace=True)
     merged = pd.merge(close, ys, how="left", left_index=True, right_index=True)
     df["tlb"] = merged.tlb.ffill().fillna(0).astype("int32")
+    return df
 
 
 @dataclass

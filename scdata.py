@@ -2,23 +2,29 @@
 Fetch OHLCV data from StockCharts.com and store as Parquet.
 
 Usage:
-    python stockcharts_fetcher.py
+    python scdata.py
 """
 
 import argparse
 import json
 import logging
 import random
-import re
 import sys
 import time
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import TypeVar
 
 import pandas as pd
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+from rich.console import Console
+from rich.markdown import Markdown
+
+import tsutils as ts
+
+console = Console()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -39,7 +45,7 @@ log = logging.getLogger(__name__)
 _SYMBOLS_RAW = """
 spy qqq
 xlb xlc xle xlf xli xlk xlp xlre xlu xlv xly
-eem pbw xbi xop xme
+eem pbw xbi xop xme gld
 isf.l vod.l pct.l mtro.l
 """
 
@@ -66,30 +72,52 @@ def default_symbols() -> list[str]:
     return sorted(_SYMBOLS_RAW.split())
 
 
-def batch_sizes(total: int, max_batch: int) -> list[int]:
-    """
-    Split *total* into the fewest evenly-sized batches each ≤ *max_batch*.
+T = TypeVar("T")
 
-    >>> batch_sizes(10, 4)
-    [3, 3, 4]
-    >>> batch_sizes(12, 4)
-    [4, 4, 4]
+
+def iter_batches(items: Sequence[T], max_batch: int) -> Iterator[Sequence[T]]:
     """
-    if total <= 0 or max_batch <= 0:
-        return []
+    Yield evenly-sized slices of *items*, each with at most *max_batch* elements.
+
+    >>> list(iter_batches(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"], 4))
+    [['a', 'b', 'c'], ['d', 'e', 'f'], ['g', 'h', 'i', 'j']]
+    """
+    total = len(items)
+    if total <= 0 or max_batch < 1:
+        return
     n_batches = (total + max_batch - 1) // max_batch  # ceil division
     base, extra = divmod(total, n_batches)
-    return [base + (1 if i < extra else 0) for i in range(n_batches)]
+    offset = 0
+    for size in [base + 1] * extra + [base] * (n_batches - extra):
+        yield items[offset : offset + size]
+        offset += size
 
 
-def _float_or_none(value: Any) -> float | None:
+def _float_or_none(value: object) -> float | None:
     """Return float, or None when the value is missing / empty."""
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    match value:
+        case None | "":
+            return None
+        case _:
+            try:
+                return float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return None
+
+
+_COLUMN_DTYPES = {
+    "symbol": "category",
+    "open": "float32",
+    "high": "float32",
+    "low": "float32",
+    "close": "float32",
+    "volume": "Int64",
+    "sctr_reg": "float32",
+    "sctr_snp": "float32",
+    "sctr_etf": "float32",
+}
+
+_COLUMNS = ["symbol", "date", *(_COLUMN_DTYPES.keys())]
 
 
 def json_to_dataframe(json_str: str) -> pd.DataFrame:
@@ -113,66 +141,63 @@ def json_to_dataframe(json_str: str) -> pd.DataFrame:
           }
         }
 
-    Returns a DataFrame with plain columns sorted by ``(symbol, date)``.
+    Returns a DataFrame with plain columns.
     """
     payload: dict = json.loads(json_str)
     symbols_data: dict = payload.get("symbols", {})
 
-    rows: list[dict] = []
-    for symbol, body in symbols_data.items():
-        for entry in body.get("dailyData", []):
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "date": entry.get("date"),
-                    "open": _float_or_none(entry.get("openPrice")),
-                    "high": _float_or_none(entry.get("highPrice")),
-                    "low": _float_or_none(entry.get("lowPrice")),
-                    "close": _float_or_none(entry.get("closePrice")),
-                    "volume": entry.get("volume"),
-                    "sctr_reg": _float_or_none(entry.get("sctrReg")),
-                    "sctr_snp": _float_or_none(entry.get("sctrSnp")),
-                    "sctr_etf": _float_or_none(entry.get("sctrEtf")),
-                }
-            )
+    records = [
+        {
+            "symbol": symbol,
+            "date": entry.get("date"),
+            "open": _float_or_none(entry.get("openPrice")),
+            "high": _float_or_none(entry.get("highPrice")),
+            "low": _float_or_none(entry.get("lowPrice")),
+            "close": _float_or_none(entry.get("closePrice")),
+            "volume": entry.get("volume"),
+            "sctr_reg": _float_or_none(entry.get("sctrReg")),
+            "sctr_snp": _float_or_none(entry.get("sctrSnp")),
+            "sctr_etf": _float_or_none(entry.get("sctrEtf")),
+        }
+        for symbol, body in symbols_data.items()
+        for entry in body.get("dailyData", [])
+    ]
 
-    if not rows:
-        return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume", "sctr_reg", "sctr_snp", "sctr_etf"])
+    if not records:
+        return pd.DataFrame(columns=_COLUMNS)
 
     return (
-        pd.DataFrame(rows)
+        pd.DataFrame.from_records(records)
         .assign(
             date=lambda d: pd.to_datetime(d["date"]),
             volume=lambda d: pd.to_numeric(d["volume"], errors="coerce"),
         )
-        .astype({"symbol": "category", "open": "float32", "high": "float32", "low": "float32", "close": "float32", "volume": "Int64", "sctr_reg": "float32", "sctr_snp": "float32", "sctr_etf": "float32"})
-        .sort_values(["symbol", "date"])
+        .astype(_COLUMN_DTYPES)
         .reset_index(drop=True)
     )
 
 
-def save_dataframe(df: pd.DataFrame, dest: Path) -> None:
+def save(df: pd.DataFrame, output_dir: Path) -> Path:
     """
-    Write *df* to *dest* as a Parquet file using the PyArrow engine.
+    Write *df* to *output_dir* as a Parquet file using the PyArrow engine.
+    """
+    dest = output_dir / f"stockcharts-{date.today().strftime('%y%m%d')}.parquet"
 
-    Snappy compression is used for a good size/speed trade-off.
-    """
-    dest.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(dest, engine="pyarrow", compression="snappy")
     log.info("Saved %d rows → %s", len(df), dest)
+    return dest
 
 
-def find_latest_parquet(directory: Path) -> Path | None:
-    """Find the most recent ``stockcharts-YYMMDD.parquet`` file in *directory*."""
-    pattern = re.compile(r"^stockcharts-(\d{6})\.parquet$")
-    best: Path | None = None
-    best_date = ""
-    for p in directory.glob("stockcharts-*.parquet"):
-        m = pattern.match(p.name)
-        if m and m.group(1) > best_date:
-            best_date = m.group(1)
-            best = p
-    return best
+def find_latest(directory: Path) -> Path | None:
+    if files := list(directory.glob("stockcharts-*.parquet")):
+        return max(files, key=lambda p: p.stem)
+    return None
+
+
+def find_latest_sctr(directory: Path) -> Path | None:
+    if files := list(directory.glob("stockcharts-sctr-*.csv")):
+        return max(files, key=lambda p: p.stem)
+    return None
 
 
 def print_summary(df: pd.DataFrame) -> None:
@@ -319,22 +344,18 @@ def fetch_stock_data(
     Returns
     -------
     pd.DataFrame
-        Combined DataFrame with plain columns sorted by ``(symbol, date)``.
+        Combined DataFrame with plain columns.
     """
-    sizes = batch_sizes(len(symbols), batch_max)
     frames: list[pd.DataFrame] = []
-    offset = 0
 
     with _BrowserSession() as session:
         session.page.goto("https://stockcharts.com/")
         session.page.wait_for_load_state("domcontentloaded")
         _dismiss_shadow_dom_popup(session.page, "#cmpwrapper")
 
-        for size in sizes:
-            batch = symbols[offset : offset + size]
-            offset += size
+        for batch in iter_batches(symbols, batch_max):
             time.sleep(random.uniform(2.0, 5.0))
-            raw_json = _fetch_batch_json(session.page, batch)
+            raw_json = _fetch_batch_json(session.page, list(batch))
             df_batch = json_to_dataframe(raw_json)
             frames.append(df_batch)
             log.info("Batch done: %d rows accumulated", sum(len(f) for f in frames))
@@ -343,13 +364,97 @@ def fetch_stock_data(
         log.warning("No data retrieved.")
         return pd.DataFrame()
 
-    combined = pd.concat(frames, ignore_index=True).sort_values(["symbol", "date"]).reset_index(drop=True)
+    combined = pd.concat(frames, ignore_index=True).reset_index(drop=True)
 
-    date_str = date.today().strftime("%y%m%d")
-    dest = output_dir / f"stockcharts-{date_str}.parquet"
-    save_dataframe(combined, dest)
+    save(combined, output_dir)
 
     return combined
+
+
+# ---------------------------------------------------------------------------
+# SCTR data fetcher
+# ---------------------------------------------------------------------------
+
+_FETCH_SCTR_JS = """\
+(async () => {
+    const url = `https://stockcharts.com/j-sum/sum?cmd=sctr&view=L&timeframe=W&r=${Date.now()}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    return JSON.stringify(data);
+})()
+"""
+
+
+def fetch_sctr_data(output_dir: Path) -> pd.DataFrame:
+    """
+    Launch a browser, navigate to StockCharts, dismiss the cookie popup, then
+    fetch SCTR data and save to CSV.
+
+    The CSV file is named ``stockcharts-sctr-YYMMDD.csv`` where the date comes
+    from the first element of the JSON response.
+
+    Parameters
+    ----------
+    output_dir:
+        Directory where the CSV file is written.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns [symbol, close, volume, mcap, SCTR, delta, name, industry, sector].
+    """
+    with _BrowserSession() as session:
+        session.page.goto("https://stockcharts.com/")
+        session.page.wait_for_load_state("domcontentloaded")
+        _dismiss_shadow_dom_popup(session.page, "#cmpwrapper")
+
+        result: str = session.page.evaluate(_FETCH_SCTR_JS)
+        log.info("Fetched SCTR JSON (%d chars)", len(result))
+
+    payload: list[dict] = json.loads(result)
+    if not payload:
+        log.warning("No SCTR data retrieved.")
+        return pd.DataFrame()
+
+    # Extract date from the first object
+    date_str = payload[0].get("date", "")
+    try:
+        file_date = pd.to_datetime(date_str)
+        date_label = file_date.strftime("%y%m%d")
+    except (ValueError, TypeError):
+        log.warning("Could not parse date '%s', using today.", date_str)
+        date_label = date.today().strftime("%y%m%d")
+
+    records = []
+    for entry in payload[1:]:
+        market_cap = _float_or_none(entry.get("marketCap"))
+        mcap = round(market_cap / 1e9, 2) if market_cap is not None else None
+        records.append(
+            {
+                "symbol": entry.get("symbol"),
+                "close": _float_or_none(entry.get("close")),
+                "volume": _float_or_none(entry.get("vol")),
+                "mcap": mcap,
+                "SCTR": entry.get("SCTR"),
+                "delta": _float_or_none(entry.get("delta")),
+                "name": entry.get("name"),
+                "industry": entry.get("industry"),
+                "sector": entry.get("sector"),
+            }
+        )
+
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        log.warning("No SCTR records parsed.")
+        return df
+
+    df = df[["symbol", "close", "volume", "mcap", "SCTR", "delta", "name", "industry", "sector"]]
+
+    dest = output_dir / f"stockcharts-sctr-{date_label}.csv"
+    df.to_csv(dest, index=False)
+    log.info("Saved %d rows → %s", len(df), dest)
+
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +473,12 @@ def _build_parser() -> argparse.ArgumentParser:
     load = sub.add_parser("load", help="Fetch data from StockCharts and save to Parquet")
     load.add_argument("symbols", nargs="*", default=None, help="Ticker symbols (default: built-in watchlist)")
 
-    sub.add_parser("view", help="Load the latest Parquet file and print summary info")
+    view = sub.add_parser("view", help="Load the latest Parquet file and print summary info")
+    view.add_argument("symbol", nargs="?", default=None, help="Optional single ticker to print tail for")
+
+    sub.add_parser("sctr", help="Fetch SCTR data from StockCharts and save to CSV")
+
+    sub.add_parser("rank", help="Load the latest SCTR CSV and print the top 12 rows")
 
     return parser
 
@@ -383,8 +493,49 @@ def _cmd_load(args: argparse.Namespace) -> None:
     log.info("Done. DataFrame shape: %s", result.shape)
 
 
-def _cmd_view(_args: argparse.Namespace) -> None:
-    latest = find_latest_parquet(_OUTPUT_DIR)
+def _cmd_sctr(_args: argparse.Namespace) -> None:
+    log.info("Fetching SCTR data → %s", _OUTPUT_DIR)
+    result = fetch_sctr_data(_OUTPUT_DIR)
+    log.info("Done. DataFrame shape: %s", result.shape)
+
+
+def _cmd_rank(_args: argparse.Namespace) -> None:
+    latest = find_latest_sctr(_OUTPUT_DIR)
+    if latest is None:
+        log.error("No stockcharts-sctr-*.csv files found in %s", _OUTPUT_DIR)
+        sys.exit(1)
+    log.info("Loading %s", latest)
+    df = pd.read_csv(latest)
+    print(f"File: {latest}")
+    print(f"Shape: {df.shape}")
+    print()
+
+    # Compute display columns for all rows so both tables can select from them.
+    display = df.copy()
+    display["dtv"] = ((display["close"] * display["volume"]) / 1e9).round(2)
+    display["volume"] = (display["volume"] / 1e6).round(2)
+    display_cols = ["symbol", "close", "volume", "dtv", "mcap", "SCTR", "delta", "name", "industry", "sector"]
+    display = display[display_cols]
+
+    def _to_markdown(subset: pd.DataFrame) -> str:
+        headers = list(subset.columns)
+        tbl = f"| {' | '.join(headers)} |\n| {' | '.join(['---'] * len(headers))} |\n"
+        for row in subset.itertuples(index=False):
+            tbl += f"| {' | '.join(str(v) for v in row)} |\n"
+        return tbl
+
+    # Table 1 – top 12 by SCTR (already ordered in the file)
+    console.print(Markdown("## Top 12 SCTR stocks"))
+    console.print(Markdown(_to_markdown(display.head(12))))
+
+    # Table 2 – top 12 by DTV, then sorted by SCTR
+    top_dtv = display.sort_values("dtv", ascending=False).head(12).sort_values("SCTR", ascending=False)
+    console.print(Markdown("## Top 12 DTV stocks sorted by SCTR"))
+    console.print(Markdown(_to_markdown(top_dtv)))
+
+
+def _cmd_view(args: argparse.Namespace) -> None:
+    latest = find_latest(_OUTPUT_DIR)
     if latest is None:
         log.error("No stockcharts-*.parquet files found in %s", _OUTPUT_DIR)
         sys.exit(1)
@@ -393,9 +544,31 @@ def _cmd_view(_args: argparse.Namespace) -> None:
     print(f"File: {latest}")
     print(f"Shape: {df.shape}")
     print()
-    print_summary(df)
+
+    if args.symbol:
+        sym = args.symbol.upper()
+        subset = df[df["symbol"] == sym]
+        if subset.empty:
+            log.error("Symbol %s not found in %s", sym, latest)
+            sys.exit(1)
+        print(f"Symbol: {sym}  Rows: {len(subset)}")
+        subset = ts.augment_data(subset)
+        print(subset.tail().to_string(index=False))
+    else:
+        print_summary(df)
 
 
 if __name__ == "__main__":
     args = _build_parser().parse_args()
-    {"load": _cmd_load, "view": _cmd_view}[args.command](args)
+    match args.command:
+        case "load":
+            _cmd_load(args)
+        case "view":
+            _cmd_view(args)
+        case "sctr":
+            _cmd_sctr(args)
+        case "rank":
+            _cmd_rank(args)
+        case _:
+            log.error("Unknown command: %s", args.command)
+            sys.exit(1)

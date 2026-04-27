@@ -215,13 +215,6 @@ def normalise_as_perc(series: pd.Series, n: int = 20) -> pd.Series:
     return (100 * (series - series.rolling(window=n).mean()) / series.rolling(window=n).std()).fillna(0).round(0).astype(int)
 
 
-def strat(hs, ls):
-    """return a series categorising bar by its strat bar type 0 - inside, 1 up, 2 down, 3 outside"""
-    x = hs.diff().gt(0)
-    y = ls.diff().lt(0)
-    return x.astype(int) + y * 2
-
-
 def print_range_table(df, xs):
     last = df["close"].iat[-1]
 
@@ -259,17 +252,9 @@ def load_twelve_data(symbol, days=255):
 
     df.rename(columns={"ma1": "sma150", "ma2": "sma50", "ma3": "ema19"}, inplace=True)
     df[["sma150", "sma50", "ema19"]] = df[["sma150", "sma50", "ema19"]].replace(0, np.nan)
-    close = df["close"]
     print(df.tail())
+    df = tsutils.augment_data(df)
     fname = make_filename(symbol, df.index[-1].date())
-    df["change"] = pd.Series.diff(close).round(2)
-    df["pct_chg"] = (pd.Series.pct_change(close) * 100).round(2)
-    df["ddown"] = (close / close.cummax() - 1).round(4)
-    df["voln"] = normalise_as_perc(df.volume)
-    # df['perc'] = percFromMin(close)
-    df["hilo"] = tsutils.calc_hilo(close)
-    df["strat"] = strat(df.high, df.low)
-    df["tlb"] = three_line_break(close)
     df.to_csv(fname)
     console.print(f"saved {symbol} {df.index[0].date()} to {df.index[-1].date()} shape={df.shape}", style="green")
     console.print(fname, style="green")
