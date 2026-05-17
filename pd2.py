@@ -13,7 +13,7 @@ from rich.table import Table
 from tsutils import aggregate_to_time_bars, calc_vwap, day_index, load_file, load_files, load_files_as_dict, load_overlapping_files, save_m1_timeseries
 
 console = Console()
-
+DATA_DIR = Path.home() / "Documents" / "data"
 
 def test_tick():
     # load the string tick into a pandas dataframe. make the column Date the index
@@ -131,7 +131,7 @@ class RmseCompare:
 
 def compare_emas():
     """compare 19 ema on M5 to emas on M1. Nearest is around 83-90 depends on data"""
-    df = load_file("c:\\users\\niroo\\documents\\data\\ESM4 20240304.csv")
+    df = load_file(Path.home() / "Documents" / "data"/ "ESM4 20240304.csv")
     a = df.close.resample("5T").first()
     # adjust=False is needed to match usual ema calc
     b = a.ewm(span=19, adjust=False).mean()
@@ -498,8 +498,9 @@ if __name__ == "__main__":
     # whole_day_concat(Path("c:/temp/z"), 'esu5*.csv', 'zesu5')
     # test_tick()
     spec = "esm6*.csv"
-    check_overlap(Path.home() / "Documents" / "data", spec)
-    df, di = print_combined_summary(Path.home() / "Documents" / "data", spec)
+    check_overlap(DATA_DIR, spec)
+    df, di = print_combined_summary(DATA_DIR, spec)
+    print_summary(df)
     # s = di.at["2025-12-12", "first"]
     # e = di.at["2026-03-19", "last"]
     # save_m1_timeseries(df[s:e], "zNQH6")

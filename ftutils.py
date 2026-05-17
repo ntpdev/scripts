@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import argparse
 import json
 import math
 import re
@@ -21,6 +22,8 @@ from rich.markdown import Markdown
 
 # from chatutils import execute_python_script
 from rich.pretty import pprint
+from rich.table import Table
+from rich.text import Text
 
 from htm2md import html_to_markdown
 
@@ -380,6 +383,7 @@ def retrieve_bloomberg_article(url: str) -> str:
     save_markdown_article(cite.title, md)
     return md
 
+
 def retrieve_nyt_article(url: str) -> str:
     content, cite = retrieve_archive(url)
     soup = BeautifulSoup(content, "html.parser").find("article")
@@ -451,7 +455,6 @@ class SiteConfig:
     extract_function: Callable[[BeautifulSoup], ArticleList]
     filename_stem: str
 
-
     def _get_dir(self) -> Path:
         """Get the download directory path."""
         return Path.home() / "Downloads"
@@ -461,6 +464,7 @@ class SiteConfig:
 
     def make_cookie_filename(self) -> Path:
         return self._get_dir() / f"{self.filename_stem}-cookies.json"
+
 
 SESSION_COOKIE_PATTERNS = frozenset(
     {
@@ -814,23 +818,73 @@ def retrieve_headlines(source: str) -> ArticleList | ErrorInfo:
         return ErrorInfo(error=True, type=e.__class__.__name__, message=str(e), url=source)
 
 
-def print_most_read_table(most_read: ArticleList):
+def print_stock_quotes(quote_list: QuoteList) -> None:
+    """
+    Render a QuoteList as a styled Rich table, then print the retrieval timestamp.
+    """
+    table = Table(
+        title="Stock Quotes",
+        show_header=True,
+        header_style="bold magenta",
+        border_style="bright_black",
+    )
+
+    table.add_column("Symbol", style="cyan", no_wrap=True)
+    table.add_column("Name", style="green", width=40, overflow="ellipsis")
+    table.add_column("Close", justify="right", style="yellow")
+    table.add_column("% Chg", justify="right")
+    table.add_column("Yield", justify="right", style="blue")
+
+    for quote in quote_list.quotes:
+        symbol = quote.get("symbol", "N/A")
+        name = quote.get("name", "N/A")
+        close = quote.get("close")
+        prev = quote.get("previousClose")
+        yld = quote.get("yield")
+
+        # --- Close ---
+        close_str = f"{close:.2f}" if close is not None else "N/A"
+
+        # --- % Change ---
+        if close is not None and prev is not None and prev != 0:
+            pct_change = ((close - prev) / prev) * 100
+            pct_text = Text(f"{pct_change:+.2f}%")
+            if pct_change > 0:
+                pct_text.style = "bold green"
+            elif pct_change < 0:
+                pct_text.style = "bold red"
+            else:
+                pct_text.style = "white"
+        else:
+            pct_text = Text("N/A", style="dim")
+
+        # --- Yield ---
+        yield_str = f"{yld:.2f}%" if yld is not None else "N/A"
+
+        table.add_row(symbol, name, close_str, pct_text, yield_str)
+
+    console.print(table)
+    console.print(f"[dim]Retrieved at: {quote_list.timestamp_retrieved}[/dim]")
+
+
+def print_most_read_table(articles: ArticleList):
     """Prints the list of ArticleLink objects from an ArticleList object as a markdown numbered list."""
     md = ""
 
-    for i, article in enumerate(most_read.articles):
+    xs = articles.articles[:16]
+    for i, a in enumerate(xs, 1):
         # Add headline as the main item
-        md += f"{i + 1}. **{article.headline}**\n"
+        md += f"{i}. **{a.headline}**\n\n"
 
         # Add summary if not blank
-        if len(article.summary):
-            md += f"   {article.summary}\n"
+        if len(a.summary):
+            md += f"   {a.summary}\n"
 
         # Add URL
-        md += f"   {article.url}\n\n"
+        # md += f"   {a.url}\n\n"
 
     # Add footer information
-    md += f"from {most_read.source} retrieved {most_read.timestamp_retrieved}"
+    md += f"from {articles.source} retrieved {articles.timestamp_retrieved}"
 
     # Print as markdown
     console.print(Markdown(md))
@@ -873,7 +927,7 @@ def retrieve_archive(url: str):
         # Wait until at least one <img> is present inside the thumbs container
         # page.locator("#row0 .THUMBS-BLOCK img").wait_for()
         # use latest link but try upto last 3 if not found
-        for nth in [-1,-2,-3]:
+        for nth in [-1, -2, -3]:
             # must wait for a unique element then can click the last <img> inside the thumbs block
             page.locator("#row0 .THUMBS-BLOCK img >> nth=0").wait_for(state="attached")
             page.locator(f"#row0 .THUMBS-BLOCK img >> nth={nth}").click()
@@ -921,6 +975,7 @@ def retrieve_ft_article(url: str) -> str | ErrorInfo:
     save_markdown_article(citation.title, output)
     return output
 
+
 # Site configurations
 SITE_CONFIGS: dict[str, SiteConfig] = {
     "bloomberg": SiteConfig(
@@ -953,10 +1008,12 @@ SITE_CONFIGS: dict[str, SiteConfig] = {
     ),
 }
 
+
 def test_parse() -> None:
     # TODO
     # load ~/Downloads/temp.html
     pass
+
 
 def test_eval():
     s = "10 - (7 * .52 + 4 * .47)"
@@ -976,16 +1033,27 @@ def test_eval():
 
 if __name__ == "__main__":
     pprint(f"force import of module {math.pi}")
-    # pprint(retrieve_stock_quotes(["JNK", "TLT", "SPY", "PBW"]))
 
-    x = retrieve_ft_article("https://www.ft.com/content/d62fadb7-2fc6-4c6e-b39f-f6bc642d81db")
-    # pprint(x)
-    exit(0)
+    parser = argparse.ArgumentParser(description="Retrieve stock quotes, articles, or headlines.")
+    parser.add_argument("--stocks", nargs="+", metavar="SYMBOL", help="One or more stock symbols (e.g. SPY QQQ)")
+    parser.add_argument("--url", metavar="URL", help="A single URL beginning with http")
 
-    # for site in SITE_CONFIGS.keys():
-    for site in ["ft"]:
-        items = retrieve_headlines(site)
-        if isinstance(items, ArticleList):
-            print_most_read_table(items)
-        else:
-            console.print(items, style="red")
+    args = parser.parse_args()
+
+    if args.stocks:
+        quotes = retrieve_stock_quotes(args.stocks)
+        print_stock_quotes(quotes)
+
+    elif args.url:
+        if not args.url.startswith("http"):
+            parser.error("--url must begin with http")
+        x = retrieve_ft_article(args.url)
+        pprint(x)
+
+    else:
+        for site in ["bloomberg", "nyt", "wsj"]:
+            items = retrieve_headlines(site)
+            if isinstance(items, ArticleList):
+                print_most_read_table(items)
+            else:
+                console.print(items, style="red")

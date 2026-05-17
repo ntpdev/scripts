@@ -86,23 +86,16 @@ def find_swings(s: pd.Series, perc_rev: float) -> list[int] | pd.DataFrame:
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """
-    Calculate Average True Range (ATR), exponential moving average of true range
-
-    Args:
-        df: DataFrame with 'high', 'low', 'close' columns
-        period: Lookback period (default: 14)
-
-    Returns:
-        pd.Series of ATR values
+    Calculate Average True Range across period smoothed by an EMA
     """
     high = df["high"]
     low = df["low"]
     prev_close = df["close"].shift(1)
 
     # True Range components
-    tr1 = high - low  # Current candle range
-    tr2 = (high - prev_close).abs()  # Gap up scenario
-    tr3 = (low - prev_close).abs()  # Gap down scenario
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
 
     true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 

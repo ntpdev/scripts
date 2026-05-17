@@ -64,7 +64,7 @@ models:
     name: zai-org/GLM-5.0
     provider: togetherai
   kimi:
-    name: moonshotai/Kimi-K2.5
+    name: moonshotai/Kimi-K2.6
     provider: togetherai
   oss:
     name: deepinfra/openai/gpt-oss-120b

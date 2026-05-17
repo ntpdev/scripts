@@ -12,6 +12,8 @@ from rich.console import Console
 import tsutils as ts
 
 console = Console()
+DATA_DIR = Path.home() / "Documents" / "data"
+
 Price = namedtuple("Price", ["date", "value"])
 
 
@@ -253,16 +255,14 @@ def test() -> None:
     console.print(test_find(df, "2022-09-12", -3))
 
 def create_minvol():
-    p = Path.home() / "Documents" / "data"
-    df = ts.load_overlapping_files(p, "esu5*.csv")
+    df = ts.load_overlapping_files(DATA_DIR, "esu5*.csv")
     export_min_vol(df, ts.make_filename("es-minvol.csv"))
 
 
 def test_overlap() -> None:
     # test()
     # p = Path("c:/temp/ultra")
-    p = Path.home() / "Documents" / "data"
-    df = ts.load_overlapping_files(p, "nqu5*.csv")
+    df = ts.load_overlapping_files(DATA_DIR, "nqu5*.csv")
     export_summary(df)
     di = ts.day_index(df)
     row = di.iloc[-1]
@@ -291,8 +291,7 @@ def test_overlap() -> None:
     # for i,r in day.iterrows():
 if __name__ == "__main__":
     # exportNinja(df, make_filename('ES 09-22.Last.txt'))
-    p = Path.home() / "Documents" / "data"
-    df = ts.load_overlapping_files(p, "esh6*.csv")
+    df = ts.load_overlapping_files(DATA_DIR, "esm6*.csv")
     df['vwap'] = ts.calc_vwap(df)
     export_summary(df)
     # ts.save_m1_timeseries(df, "ESH6a")
