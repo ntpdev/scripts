@@ -52,7 +52,10 @@ models:
     name: meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo
     provider: togetherai
   ds:
-    name: deepseek-ai/DeepSeek-V3.1
+    name: deepseek-ai/DeepSeek-V4-Pro
+    provider: togetherai
+  dsf:
+    name: deepseek-ai/DeepSeek-V4-Flash
     provider: togetherai
   qwen:
     name: Qwen/Qwen2.5-72B-Instruct-Turbo

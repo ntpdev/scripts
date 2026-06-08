@@ -48,11 +48,12 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYMBOLS_RAW = """
-spy qqq
-xlb xlc xle xlf xli xlk xlp xlre xlu xlv xly
-eem pbw xbi xop xme gld rsp
-isf.l vod.l pct.l mtro.l
+spy qqq spsm
+xlb xlc xle xlf xlk xly ibit
+eem pbw xop xme gld smh rsp
 """
+# isf.l vod.l pct.l mtro.l
+
 
 # _SYMBOLS_RAW = "spy qqq"
 
@@ -575,7 +576,7 @@ def _cmd_rank(_args: argparse.Namespace) -> None:
     console.print(Markdown(_to_markdown(top_dtv)))
 
     # Table 3 – largest weekly change by SCTR
-    top_chg = display[(display["delta"] > 10) & (display["dtv"] > 0.5) & (display["SCTR"] > 50)].head(n)
+    top_chg = display[(display["delta"] > 8) & (display["dtv"] > 0.5) & (display["SCTR"] > 60)].head(n)
     console.print(Markdown(f"## Top {n} Large positive change"))
     console.print(Markdown(_to_markdown(top_chg)))
 
@@ -746,8 +747,9 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     warmup_start = one_year_ago - pd.Timedelta(days=80)
     subset = subset[subset["date"] >= warmup_start].copy()
 
-    subset["nvol"] = calc_volume_rank(subset)
+    subset["nvol"] = calc_volume_rank(subset, n = 20)
     subset = subset[subset["date"] >= one_year_ago]
+    ind_name = "VolRank% 20"
 
     fig = make_subplots(rows=2, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
 
@@ -780,7 +782,7 @@ def _cmd_plot(args: argparse.Namespace) -> None:
         go.Bar(
             x=subset["date"],
             y=subset["nvol"],
-            name="Std Volume",
+            name=ind_name,
             marker_color="rgba(100,149,237,0.6)",
         ),
         row=2,
@@ -800,7 +802,7 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     )
 
     fig.update_yaxes(title_text="Close", row=1, col=1)
-    fig.update_yaxes(title_text="Std Volume", row=2, col=1)
+    fig.update_yaxes(title_text=ind_name, row=2, col=1)
     fig.update_layout(
         title=f"{sym} — last 1 year",
         hovermode="x unified",

@@ -112,9 +112,11 @@ def plot_3lb(symbol, df):
     fig = subp.make_subplots(rows=1, cols=2, subplot_titles=([symbol + " 3LB", symbol + " close"]))
     f1 = go.Bar(x=xs.values, y=tlb["height"], base=tlb["open"], name=symbol, marker=dict(color=colours))
     f2 = go.Scatter(x=df.index[-100:], y=df[-100:]["close"], mode="lines", name=symbol, marker=dict(color="blue"))
+    f2_ema = go.Scatter(x=df.index[-100:], y=df[-100:]["ema19"], mode="lines", name="ema19", marker=dict(color="orange"))
 
     fig.add_trace(f1, row=1, col=1)
     fig.add_trace(f2, row=1, col=2)
+    fig.add_trace(f2_ema, row=1, col=2)
     c = "green" if df.loc[df.index[-1], "close"] < rev else "red"
     fig.add_hline(y=rev, line_width=1, line_color=c, line_dash="dash", row=1, col=1)
     fig.add_hline(y=rev, line_width=1, line_color=c, line_dash="dash", row=1, col=2)
