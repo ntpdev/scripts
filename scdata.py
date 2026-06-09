@@ -48,9 +48,9 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYMBOLS_RAW = """
-spy qqq spsm
-xlb xlc xle xlf xlk xly ibit
-eem pbw xop xme gld smh rsp
+spy qqq spsm rsp
+xlb xlc xle xlf xlk xly
+eem pbw xop xme gld smh
 """
 # isf.l vod.l pct.l mtro.l
 
@@ -240,6 +240,24 @@ def find_latest_sctr(directory: Path) -> Path | None:
     if files := list(directory.glob("stockcharts-sctr-*.csv")):
         return max(files, key=lambda p: p.stem)
     return None
+
+
+def clean_files(directory: Path, spec: str) -> None:
+    """
+    Scan `directory` for files matching `spec`, sort them by name, and
+    keep only the first and last.
+    """
+    files = sorted(directory.glob(spec))
+    log.info("Found %d file(s) matching %s", len(files), spec)
+
+    if len(files) <= 2:
+        log.info("No files deleted")
+        return
+
+    to_remove = files[1:-1]
+    for f in to_remove:
+        f.unlink(missing_ok=True)
+    log.info("Deleted %d file(s)", len(to_remove))
 
 
 def _load_latest_parquet(dtype_overrides: dict | None = None) -> tuple[pd.DataFrame, Path]:
@@ -534,6 +552,14 @@ def _cmd_load(args: argparse.Namespace) -> None:
     log.info("Done. DataFrame shape: %s", result.shape)
 
 
+def _cmd_clean(_args: argparse.Namespace) -> None:
+    """
+    Clean up downloaded files.
+    """
+    clean_files(_OUTPUT_DIR, "stockcharts-*.parquet")
+    clean_files(_OUTPUT_DIR, "stockcharts-sctr-*.csv")
+
+
 def _cmd_sctr(_args: argparse.Namespace) -> None:
     log.info("Fetching SCTR data → %s", _OUTPUT_DIR)
     result = fetch_sctr_data(_OUTPUT_DIR)
@@ -579,6 +605,7 @@ def _cmd_rank(_args: argparse.Namespace) -> None:
     top_chg = display[(display["delta"] > 8) & (display["dtv"] > 0.5) & (display["SCTR"] > 60)].head(n)
     console.print(Markdown(f"## Top {n} Large positive change"))
     console.print(Markdown(_to_markdown(top_chg)))
+
 
 def _cmd_view(args: argparse.Namespace) -> None:
     df, latest = _load_latest_parquet(dtype_overrides={"symbol": "category"})
@@ -734,6 +761,150 @@ def _cmd_rs(args: argparse.Namespace) -> None:
         fig.show()
 
 
+@dataclass
+class VolumeRankIndicator:
+    """Calculate volume rank indicator series for plotting."""
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+    marker_extremes: tuple[float, float] | None = field(init=False)
+
+    def __init__(self, df: pd.DataFrame, window: int = 20, threshold: float = 90.0) -> None:
+        self.indicator = calc_volume_rank(df, n=window)
+        self.marker = self.indicator >= threshold
+        self.indicator_label = f"VolRank% {window}"
+        self.marker_label = f"Vol ≥ {threshold}"
+        self.marker_extremes = None
+
+
+@dataclass
+class BollingerBandPositionIndicator:
+    """Calculate position within Bollinger Band indicator series for plotting."""
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+    marker_extremes: tuple[float, float] | None = field(init=False)
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        window: int = 20,
+        multiplier: float = 2.0,
+        threshold: float = 0.0,
+    ) -> None:
+        close = df["close"]
+        rolling_mean = close.rolling(window=window).mean()
+        rolling_std = close.rolling(window=window).std()
+
+        upper_band = rolling_mean + (rolling_std * multiplier)
+        lower_band = rolling_mean - (rolling_std * multiplier)
+
+        band_range = upper_band - lower_band
+        self.indicator = (close - lower_band) / band_range
+        self.marker = self.indicator <= threshold
+        self.indicator_label = f"BB position {window}/{multiplier}"
+        self.marker_label = f"BB pos <= {threshold}"
+        self.marker_extremes = (
+            self.indicator.quantile(0.05),
+            self.indicator.quantile(0.95),
+        )
+
+
+@dataclass
+class RateOfChangeIndicator:
+    """Percentage Rate of Change"""
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        window: int = 10,
+        threshold: float = 5.0,
+    ) -> None:
+        close_n = df["close"].shift(window)
+        self.indicator = 100.0 * (df["close"] - close_n) / close_n
+        self.indicator_label = f"ROC {window}"
+        if threshold > 0:
+            self.marker = self.indicator >= threshold
+            self.marker_label = f"ROC ≥ {threshold:.0%}"
+        else:
+            self.marker = self.indicator <= threshold
+            self.marker_label = f"ROC <= {threshold:.0%}"
+        self.marker_extremes = (
+            self.indicator.quantile(0.05),
+            self.indicator.quantile(0.95),
+        )
+
+@dataclass
+class PeriodLogReturnIndicator:
+    """period-normalised log-return"""
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        window: int = 10,
+        threshold: float = 0.10,
+    ) -> None:
+        close_n = df["close"].shift(window)
+        self.indicator = pd.Series(np.log(df["close"] / close_n), index=df.index)
+        self.indicator_label = f"PLR {window}"
+        if threshold > 0:
+            self.marker = self.indicator >= threshold
+            self.marker_label = f"PLR ≥ {threshold:.2%}"
+        else:
+            self.marker = self.indicator <= threshold
+            self.marker_label = f"PLR ≤ {threshold:.2%}"
+        
+@dataclass
+class PeriodLogReturnRankIndicator:
+    """
+    Calculate and hold period-normalised log-return series.
+    Marker: rolling k-day rank (lowest in last k days).
+    """
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        window: int = 10,
+        threshold: float = 0.10,
+        rank_window: int = 21,
+    ) -> None:
+        # ---- indicator --------------------------------------------------------
+        close_n = df["close"].shift(window)
+        self.indicator = pd.Series(np.log(df["close"] / close_n), index=df.index)
+        self.indicator_label = f"PLR {window}"
+
+        # ---- marker 2: rolling k-day rank (lowest) ----------------------------
+        self.marker = (
+            self.indicator.rolling(rank_window, min_periods=1)
+            .apply(lambda x: x.iloc[-1] == x.min(), raw=False)
+            .astype(bool)
+        )
+        self.marker_label = f"Lowest {rank_window}-day rank"
+       
+        self.marker_extremes = (
+            self.indicator.quantile(0.05),
+            self.indicator.quantile(0.95),
+        )
+
 def _cmd_plot(args: argparse.Namespace) -> None:
     df, _ = _load_latest_parquet()
 
@@ -747,9 +918,8 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     warmup_start = one_year_ago - pd.Timedelta(days=80)
     subset = subset[subset["date"] >= warmup_start].copy()
 
-    subset["nvol"] = calc_volume_rank(subset, n = 20)
+    indicator = PeriodLogReturnRankIndicator(subset, window=2, threshold=-0.0144)
     subset = subset[subset["date"] >= one_year_ago]
-    ind_name = "VolRank% 20"
 
     fig = make_subplots(rows=2, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
 
@@ -764,14 +934,14 @@ def _cmd_plot(args: argparse.Namespace) -> None:
         col=1,
     )
 
-    high_vol = subset[subset["nvol"] >= 90]
+    high_vol = subset[indicator.marker[subset.index]]
     fig.add_trace(
         go.Scatter(
             x=high_vol["date"],
             y=high_vol["close"],
             mode="markers",
             marker=dict(size=6, color="red", symbol="triangle-up"),
-            name="Vol ≥ 90",
+            name=indicator.marker_label,
             showlegend=True,
         ),
         row=1,
@@ -781,13 +951,38 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     fig.add_trace(
         go.Bar(
             x=subset["date"],
-            y=subset["nvol"],
-            name=ind_name,
+            y=indicator.indicator.loc[subset.index],
+            name=indicator.indicator_label,
             marker_color="rgba(100,149,237,0.6)",
         ),
         row=2,
         col=1,
     )
+
+    if indicator.marker_extremes:
+        lower_pct, upper_pct = indicator.marker_extremes
+
+        fig.add_hline(
+            y=lower_pct,
+            line_dash="dash",
+            line_color="gray",
+            opacity=0.6,
+            annotation_text=f"5th percentile {lower_pct:.4f}",
+            annotation_position="bottom left",
+            row=2,
+            col=1,
+        )
+
+        fig.add_hline(
+            y=upper_pct,
+            line_dash="dash",
+            line_color="gray",
+            opacity=0.6,
+            annotation_text=f"95th percentile {upper_pct:.4f}",
+            annotation_position="bottom left",
+            row=2,
+            col=1,
+        )
 
     missing = _missing_dates(subset["date"])
     fig.update_xaxes(
@@ -802,7 +997,7 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     )
 
     fig.update_yaxes(title_text="Close", row=1, col=1)
-    fig.update_yaxes(title_text=ind_name, row=2, col=1)
+    fig.update_yaxes(title_text=indicator.indicator_label, row=2, col=1)
     fig.update_layout(
         title=f"{sym} — last 1 year",
         hovermode="x unified",
@@ -852,6 +1047,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("rank", help="Load the latest SCTR CSV and print the top 12 rows")
 
+    sub.add_parser("clean", help="Clean up old Parquet files")
+
     plotrel = sub.add_parser("plotrel", help="Plot relative performance since SPY's lowest close in last 100 days")
     plotrel.add_argument("--out", default=None, help="Optional path to save HTML instead of opening browser")
     plotrel.add_argument("symbols", nargs="*", default=None, help="Ticker symbols (default: built-in watchlist)")
@@ -871,6 +1068,8 @@ def _build_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = _build_parser().parse_args()
     match args.command:
+        case "clean":
+            _cmd_clean(args)
         case "load":
             _cmd_load(args)
         case "view":

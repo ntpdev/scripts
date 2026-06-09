@@ -36,6 +36,7 @@ mime_types = {
     ".csv": "text/plain",
     ".md":  "text/plain",
     ".txt": "text/plain",
+    ".pdf": "application/pdf"
 }
 
 
