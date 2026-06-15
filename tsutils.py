@@ -646,6 +646,45 @@ def pivot_cum_vol_avg_by_day(df: pd.DataFrame, di: pd.DataFrame, n: int = 30) ->
     return (pivot.div(row_avg, axis=0) * 100).round(2)
 
 
+def average_cumulative_volume(
+    df: pd.DataFrame,
+    df_di: pd.DataFrame,
+    periods: int = 23 * 60,
+    sample_every: int = 5,
+) -> pd.Series:
+    """
+    Calculate the average cumulative volume profile for a set of trading days.
+
+    df must contain already-loaded 1-minute bars with a DatetimeIndex and a
+    `volume` column.
+
+    df_di must contain the trading days to include, with inclusive `start` and
+    `end` columns suitable for direct use with .loc.
+
+    Incomplete days are skipped.
+
+    Returns:
+        Series containing the average cumulative volume, rounded to 0dp.
+        The index is a zero-based sample number.
+    """
+    cumvols = []
+
+    for _, day in df_di.iterrows():
+        rows = df.loc[day["first"] : day["last"]]
+        print(day["first"])
+
+        if len(rows) != periods:
+            continue
+
+        cumvol = rows["volume"].cumsum().iloc[sample_every - 1 :: sample_every]
+        cumvols.append(cumvol.to_numpy())
+
+    if not cumvols:
+        return pd.Series(dtype="float64", name="avg_cumvol")
+
+    return pd.Series(np.mean(cumvols, axis=0), name="avg_cumvol").round(0)
+
+
 def calc_ema(df: pd.DataFrame, length: int) -> pd.Series:
     """calculate ema of close prices."""
     return df["close"].ewm(span=length, adjust=False).mean().round(2)
@@ -711,10 +750,10 @@ def around(df: pd.DataFrame, tmstmp: pd.Timestamp | str, n: int = 9) -> pd.DataF
     return df.loc[tmstmp - offset : tmstmp + offset1]
 
 
-def calc_atr(df: pd.DataFrame, n: int) -> pd.Series:
+def calc_atr(df: pd.DataFrame, n: int, useMean: bool = True) -> pd.Series:
     rng = df["high"].rolling(n).max() - df["low"].rolling(n).min()
     df2 = pd.DataFrame({"tm": df.index.time, "rng": rng}, index=rng.index)
-    return df2.groupby("tm").rng.agg("mean")
+    return df2.groupby("tm").rng.agg("mean") if useMean else df2.groupby("tm").rng.agg("median")
 
 
 def to_date(timestmp: pd.Timestamp) -> date:

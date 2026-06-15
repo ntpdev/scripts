@@ -20,6 +20,9 @@ providers:
   openrouter:
     env_var: OPENROUTER_API_KEY
     url: "https://openrouter.ai/api/v1"
+  opencode:
+    env_var: OPENCODE_API_KEY
+    url: "https://opencode.ai/zen/go/v1"
   ollama:
     env_var: null  # No API key needed
     url: "http://localhost:11434/v1"
@@ -72,6 +75,9 @@ models:
   oss:
     name: deepinfra/openai/gpt-oss-120b
     provider: tetrate
+  opencode:
+    name: kimi-k2.6
+    provider: opencode
   gptoss:
     name: gpt-oss-120b
     provider: sambanova

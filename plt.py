@@ -1,21 +1,21 @@
 #!/usr/bin/python3
-import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import typer
 from plotly.subplots import make_subplots
-from pathlib import Path
 from rich.console import Console
-from rich.pretty import pprint
 
 import tsutils as ts
 from mdbutils import load_price_history
 
 console = Console()
+app = typer.Typer()
 STRAT_BAR_COLOUR: str = "strat"
 
 
@@ -357,20 +357,28 @@ def color_bars(df, tm, bar_colour: str):
     return go.Figure(data=[go.Candlestick(x=tm, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="ES"), go.Scatter(x=tm, y=df["vwap"], line=dict(color="orange"), name="vwap")])
 
 
-def plot_atr(n: int):
-    df = ts.load_files(Path.home / "Documents" / "data", "zesm5*.csv")
+def plot_atr(n: int, smooth: bool = False) -> None:
+    df = ts.load_overlapping_files(Path.home() / "Documents" / "data", "esm6*.csv")
     atr = ts.calc_atr(df, n)
+    atr_median = ts.calc_atr(df, n, False)
+    if smooth:
+        atr = atr.ewm(span=9, adjust=False).mean().round(2)
+        atr_median = atr_median.ewm(span=9, adjust=False).mean().round(2)
+    name = "ATR5 9EMA" if smooth else "ATR5"
+    median_name = "ATR5-median 9EMA" if smooth else "ATR5-median"
+    title = f"rolling {n} minute ATR" + (" (9 EMA)" if smooth else "")
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=atr.index, y=atr, mode="lines", name="ATR5"))
-    fig.layout.title = f"rolling {n} minute ATR"
+    fig.add_trace(go.Scatter(x=atr.index, y=atr, mode="lines", name=name))
+    fig.add_trace(go.Scatter(x=atr.index, y=atr_median, mode="lines", name=median_name))
+    fig.layout.title = title
     fig.show()
 
 
 def plot_cumulative_volume():
     # df = ts.load_files(Path("~/documents/data").expanduser(), "esm5*.csv")
-    df = ts.load_overlapping_files(Path.home() / "Documents" / "data", "zesh6*.csv")
+    df = ts.load_overlapping_files(Path.home() / "Documents" / "data", "esm6*.csv")
     di = ts.day_index(df)
-    df_pivot = ts.pivot_cum_vol_avg_by_day(df, di)
+    df_pivot = ts.pivot_cum_vol_avg_by_day(df, di, 5)
     fig = plot_cumulative_volume_by_day(df_pivot)
     fig.show()
 
@@ -579,39 +587,39 @@ def plot_stdvol(df: pd.DataFrame) -> None:
     fig.show()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Plot daily chart")
-    parser.add_argument("--days", type=int, default=1, help="Number of days")
-    parser.add_argument("--dt", type=str, default="-1", help="Start date (yyyymmdd) or index")
-    parser.add_argument("--tlb", type=str, default="", help="Display three line break [fname]")
-    parser.add_argument("--volp", action="store_true", help="Display volume profile for day")
-    parser.add_argument("--mdb", action="store_true", help="Load from MongoDB")
-    parser.add_argument("--atr", action="store_true", help="Display ATR")
-    parser.add_argument("--cumvol", action="store_true", help="plot relative cumulative volume")
-    parser.add_argument("--tick", action="store_true", help="Display tick")
-    parser.add_argument("--sym", type=str, default="esm6", help="Index symbol")
-
-    argv = parser.parse_args()
-    console.print(argv)
-    if len(argv.tlb) > 0:
-        plot_3lb(argv.tlb)
-    elif argv.volp and argv.mdb:
-        plot_volp(argv.sym, argv.dt, argv.days)
-    elif argv.mdb:
-        plot_mongo(argv.sym, argv.dt, argv.days)
-    elif argv.atr:
-        plot_atr(5)
-    elif argv.cumvol:
+@app.command()
+def main(
+    days: int = typer.Option(1, "--days", help="Number of days"),
+    dt: str = typer.Option("-1", "--dt", help="Start date (yyyymmdd) or index"),
+    tlb: str = typer.Option("", "--tlb", help="Display three line break [fname]"),
+    volp: bool = typer.Option(False, "--volp", help="Display volume profile for day"),
+    mdb: bool = typer.Option(False, "--mdb", help="Load from MongoDB"),
+    atr: bool = typer.Option(False, "--atr", help="Display ATR"),
+    smooth: bool = typer.Option(False, "--smooth", help="Smooth ATR with a 9-period EMA"),
+    cumvol: bool = typer.Option(False, "--cumvol", help="Plot relative cumulative volume"),
+    tick: bool = typer.Option(False, "--tick", help="Display tick"),
+    sym: str = typer.Option("esm6", "--sym", help="Index symbol"),
+) -> None:
+    console.print(f"days={days}, dt={dt}, tlb={tlb}, volp={volp}, mdb={mdb}, atr={atr}, smooth={smooth}, cumvol={cumvol}, tick={tick}, sym={sym}")
+    if len(tlb) > 0:
+        plot_3lb(tlb)
+    elif volp and mdb:
+        plot_volp(sym, dt, days)
+    elif mdb:
+        plot_mongo(sym, dt, days)
+    elif atr:
+        plot_atr(5, smooth)
+    elif cumvol:
         plot_cumulative_volume()
-    elif argv.tick:
-        plot_tick(argv.days)
+    elif tick:
+        plot_tick(days)
     else:
-        plot(argv.dt, argv.days)
+        plot(dt, days)
 
 
 # plot_atr()
 # hilo(df)
 # samp_3lb()
 if __name__ == "__main__":
-    main()
+    app()
     # compare_emas()

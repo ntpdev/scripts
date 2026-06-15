@@ -6,7 +6,6 @@ This folder contains a number of utility Python scripts. Here are some key files
 - chat.py - a command line chat application using the OpenAI responses API
 - chat2.py - a simple command line chat application using the OpenAI chat API
 - twdata.py - a utility script for working with stock data from Twelve Data API
-- yfdata.py - a utility script for working with stock data from Yahoo Finance
 - scdata.py - a utility script for working with stock data from Stockcharts
 
 **Technology Stack:**
@@ -48,7 +47,7 @@ python twdata.py
 # Style Guidelines for Coding Agent
 
 ## 1. Type Annotations — Signatures and Boundaries
-Annotate all function signatures. Use built-in generics (`list[str]`, `dict[str, int]`). Use the most generic type possible so prefer Sequence over list etc. Import `TypeVar`, `Iterator`, `Callable` etc. from `collections.abc`, never `typing`. Do not annotate local variables unless the type is non-obvious.
+Annotate all function signatures. Use built-in generics (`list[str]`, `dict[str, int]`). Use the most generic type possible so prefer Sequence over list etc. Import `TypeVar`, `Iterator`, `Callable` etc. from `collections.abc`, never `typing`. Do not annotate local variables unless fixing a lint warning.
 
 examples
 ```

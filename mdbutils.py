@@ -285,7 +285,7 @@ def load_price_history(symbol: str, dt_str: str, n: int = 1, prior: bool = False
     return mdb.load_timeseries(symbol, s, e)
 
 
-def print_summary_row(df: pd.DataFrame, row_idx: int | str | pd.Timestamp) -> None:
+def print_summary_row(day_summary_df: pd.DataFrame, row_idx: int | str | pd.Timestamp) -> None:
     """
     Print a single row from the DataFrame in the specified format using rich.
 
@@ -294,6 +294,10 @@ def print_summary_row(df: pd.DataFrame, row_idx: int | str | pd.Timestamp) -> No
         row_idx: The index (date or integer) of the row to print.
     """
     # Get the row as a Series
+    df = day_summary_df.copy()
+    df["yc"] = df["close"].shift()
+    df["yh"] = df["rth_high"].shift()
+    df["yl"] = df["rth_low"].shift()
     row = df.loc[row_idx] if not isinstance(row_idx, int) else df.iloc[row_idx]
 
     # Filter only float columns (price columns)
@@ -321,8 +325,17 @@ def print_summary_row(df: pd.DataFrame, row_idx: int | str | pd.Timestamp) -> No
 
     rth_open = row.get("rth_open", None)
 
+    label_style = {
+        "rth_open": "yellow",
+        "close": "cyan",
+        "rth_high": "green",
+        "yh": "green",
+        "rth_low": "red",
+        "yl": "red",
+    }
+
     for price in sorted_prices:
-        labels = ", ".join(sorted(price_to_labels[price]))
+        labels = ", ".join(f"[{label_style[label]}]{label}[/{label_style[label]}]" if label in label_style else label for label in sorted(price_to_labels[price]))
         if pd.notna(rth_open):
             change = price - rth_open
             change_str = f"{change:+.2f}" if change != 0 else ""
@@ -412,6 +425,9 @@ def main(symbol: str):
     df_di = ts.day_index(df)
     console.print("\n\n--- day index", style="yellow")
     console.print(df_di)
+
+    cumvolavg = ts.average_cumulative_volume(df, df_di[-10:])
+    breakpoint()
 
     console.print("\n\n--- day summary", style="yellow")
     summ = ts.create_day_summary(df, df_di)

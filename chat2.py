@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import argparse
 import datetime
 import json
 import os
@@ -14,6 +13,7 @@ from textwrap import dedent, shorten
 from typing import Any, Literal
 
 import requests
+import typer
 import yaml
 from dataclasses_json import dataclass_json
 from firecrawl import Firecrawl
@@ -908,16 +908,23 @@ def test_message_history():
     assert isinstance(loaded_history.messages[4], ToolMessage)
 
 
+app = typer.Typer(help="Chat with LLMs")
+
+
+def _validate_llm(value: str) -> str:
+    if value not in model_info:
+        raise typer.BadParameter(f"invalid choice: {value}. (choose from {', '.join(model_info.keys())})")
+    return value
+
+
+@app.command()
+def main(
+    llm: str = typer.Argument(..., callback=_validate_llm, help="model key"),
+    tool_use: str = typer.Argument("", help="enable tool calls"),
+) -> None:
+    chat(llm, tool_use == "tool")
+
+
 if __name__ == "__main__":
     # test_message_history(); exit(0)
-    parser = argparse.ArgumentParser(description="Chat with LLMs")
-    parser.add_argument(
-        "llm",
-        choices=list(model_info.keys()),
-        type=str,
-        help="model key",
-    )
-    parser.add_argument("tool_use", type=str, nargs="?", default="", help="enable tool calls")
-
-    args = parser.parse_args()
-    chat(args.llm, args.tool_use == "tool")
+    app()

@@ -57,9 +57,12 @@ eem pbw xop xme gld smh
 
 # _SYMBOLS_RAW = "spy qqq"
 
+_OUTPUT_DIR = Path.home() / "Downloads"
+
 # JavaScript injected into the browser page to call the StockCharts data API.
 # __SYMBOLS__ is replaced at runtime with a comma-separated list of tickers.
-_FETCH_JS = """\
+# supports upto 10 symbols. The date range returned will the same for all symbols.
+_FETCH_DAILY_JS = """\
 (async (symbols) => {
     const encoded = encodeURIComponent(symbols);
     const url = `https://stockcharts.com/json/data?cmd=get-daily-data&startDate=1999-01-01\
@@ -68,6 +71,15 @@ _FETCH_JS = """\
     const data = await response.json();
     return JSON.stringify(data);
 })('__SYMBOLS__')
+"""
+
+_FETCH_SCTR_JS = """\
+(async () => {
+    const url = `https://stockcharts.com/j-sum/sum?cmd=sctr&view=L&timeframe=W&r=${Date.now()}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    return JSON.stringify(data);
+})()
 """
 
 # ---------------------------------------------------------------------------
@@ -90,10 +102,14 @@ def iter_batches(items: Sequence[T], max_batch: int) -> Iterator[Sequence[T]]:
     n = len(items)
     if n <= 0 or max_batch < 1:
         return
+
     n_batches = (n + max_batch - 1) // max_batch
     base, extra = divmod(n, n_batches)
+
     offset = 0
-    for size in [base + 1] * extra + [base] * (n_batches - extra):
+
+    for i in range(n_batches):
+        size = base + 1 if i < extra else base
         yield items[offset : offset + size]
         offset += size
 
@@ -147,6 +163,20 @@ def calc_ewm_log_volume_score(
     return (z * scale).fillna(0).round().astype(int)
 
 
+_COLUMNS = [
+    "symbol",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "sctr_reg",
+    "sctr_snp",
+    "sctr_etf",
+]
+
+
 _COLUMN_DTYPES = {
     "symbol": "category",
     "open": "float32",
@@ -159,10 +189,8 @@ _COLUMN_DTYPES = {
     "sctr_etf": "float32",
 }
 
-_COLUMNS = ["symbol", "date", *(_COLUMN_DTYPES.keys())]
 
-
-def json_to_dataframe(json_str: str) -> pd.DataFrame:
+def daily_json_to_dataframe(json_str: str) -> pd.DataFrame:
     """
     Parse the StockCharts OHLCV JSON payload and return a typed DataFrame.
 
@@ -219,18 +247,18 @@ def json_to_dataframe(json_str: str) -> pd.DataFrame:
     )
 
 
-def save(df: pd.DataFrame, output_dir: Path) -> Path:
+def save_daily_data(df: pd.DataFrame, output_dir: Path) -> Path:
     """
-    Write *df* to *output_dir* as a Parquet file using the PyArrow engine.
+    Write daily OHLCV data to *output_dir* as a Parquet file.
     """
     dest = output_dir / f"stockcharts-{date.today().strftime('%y%m%d')}.parquet"
 
     df.to_parquet(dest, engine="pyarrow", compression="snappy")
-    log.info("Saved %d rows → %s", len(df), dest)
+    log.info("Saved %d daily rows → %s", len(df), dest)
     return dest
 
 
-def find_latest(directory: Path) -> Path | None:
+def find_latest_daily(directory: Path) -> Path | None:
     if files := list(directory.glob("stockcharts-*.parquet")):
         return max(files, key=lambda p: p.stem)
     return None
@@ -261,7 +289,7 @@ def clean_files(directory: Path, spec: str) -> None:
 
 
 def _load_latest_parquet(dtype_overrides: dict | None = None) -> tuple[pd.DataFrame, Path]:
-    latest = find_latest(_OUTPUT_DIR)
+    latest = find_latest_daily(_OUTPUT_DIR)
     if latest is None:
         log.error("No stockcharts-*.parquet files found in %s", _OUTPUT_DIR)
         sys.exit(1)
@@ -292,6 +320,141 @@ def print_summary(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Request / Result dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SCFetchRequest:
+    """
+    Request options for fetching StockCharts data.
+
+    daily:
+        Whether to fetch daily OHLCV data.
+    sctr:
+        Whether to fetch SCTR ranking data.
+    symbols:
+        Ticker symbols for daily data. Ignored when daily is False.
+        If None and daily is True, the built-in default watchlist is used.
+    output_dir:
+        Directory where output files are written.
+    batch_max:
+        Maximum number of symbols per daily-data API request.
+    """
+
+    daily: bool = True
+    sctr: bool = True
+    symbols: Sequence[str] | None = None
+    output_dir: Path = field(default_factory=lambda: Path.home() / "Downloads")
+    batch_max: int = 10
+
+    def resolved_symbols(self) -> list[str]:
+        if self.symbols is None:
+            return default_symbols()
+
+        return sorted({symbol for raw in self.symbols if (symbol := str(raw).strip().upper())})
+
+
+@dataclass
+class SCFetchResult:
+    """
+    Result from fetching StockCharts data.
+
+    daily:
+        Daily OHLCV DataFrame, if requested and retrieved.
+    daily_path:
+        Path to saved daily Parquet file, if written.
+    sctr:
+        SCTR DataFrame, if requested and retrieved.
+    sctr_path:
+        Path to saved SCTR CSV file, if written.
+    """
+
+    daily: pd.DataFrame | None = None
+    daily_path: Path | None = None
+    sctr: pd.DataFrame | None = None
+    sctr_path: Path | None = None
+
+
+# ---------------------------------------------------------------------------
+# SCTR parser
+# ---------------------------------------------------------------------------
+
+
+def sctr_json_to_dataframe(json_str: str) -> tuple[pd.DataFrame, str]:
+    """
+    Parse the StockCharts SCTR JSON payload and return a DataFrame plus
+    a YYMMDD date label used for the filename.
+
+    The JSON structure is a list where the first element contains the date
+    and subsequent elements are per-symbol records.
+    """
+    payload: list[dict] = json.loads(json_str)
+
+    if not payload:
+        log.warning("No SCTR data retrieved.")
+        return pd.DataFrame(), date.today().strftime("%y%m%d")
+
+    date_str = payload[0].get("date", "")
+    try:
+        file_date = pd.to_datetime(date_str)
+        date_label = file_date.strftime("%y%m%d")
+    except (ValueError, TypeError):
+        log.warning("Could not parse date '%s', using today.", date_str)
+        date_label = date.today().strftime("%y%m%d")
+
+    records = []
+    for entry in payload[1:]:
+        market_cap = _float_or_none(entry.get("marketCap"))
+        mcap = round(market_cap / 1e9, 2) if market_cap is not None else None
+        records.append(
+            {
+                "symbol": entry.get("symbol"),
+                "close": _float_or_none(entry.get("close")),
+                "volume": _float_or_none(entry.get("vol")),
+                "mcap": mcap,
+                "SCTR": entry.get("SCTR"),
+                "delta": _float_or_none(entry.get("delta")),
+                "name": entry.get("name"),
+                "industry": entry.get("industry"),
+                "sector": entry.get("sector"),
+            }
+        )
+
+    df = pd.DataFrame.from_records(records)
+
+    if df.empty:
+        log.warning("No SCTR records parsed.")
+        return df, date_label
+
+    df = df[
+        [
+            "symbol",
+            "close",
+            "volume",
+            "mcap",
+            "SCTR",
+            "delta",
+            "name",
+            "industry",
+            "sector",
+        ]
+    ]
+
+    return df, date_label
+
+
+def save_sctr_data(df: pd.DataFrame, output_dir: Path, date_label: str) -> Path:
+    """
+    Write SCTR data to *output_dir* as a CSV file.
+    """
+    dest = output_dir / f"stockcharts-sctr-{date_label}.csv"
+    df.to_csv(dest, index=False)
+    log.info("Saved %d SCTR rows → %s", len(df), dest)
+    return dest
+
+
+# ---------------------------------------------------------------------------
 # Browser helpers
 # ---------------------------------------------------------------------------
 
@@ -313,16 +476,35 @@ def _dismiss_shadow_dom_popup(page: Page, host_selector: str) -> bool:
         return False
 
 
-def _fetch_batch_json(page: Page, symbols: Sequence[str]) -> str:
+def _fetch_daily_json(page: Page, symbols: Sequence[str]) -> str:
     """
-    Inject JavaScript into *page* to call the StockCharts data API for
+    Inject JavaScript into *page* to call the StockCharts daily data API for
     *symbols* and return the raw JSON response string.
     """
     ticker_str = ",".join(s.upper() for s in symbols)
-    js = _FETCH_JS.replace("__SYMBOLS__", ticker_str)
+    js = _FETCH_DAILY_JS.replace("__SYMBOLS__", ticker_str)
     result: str = page.evaluate(js)
-    log.info("Fetched JSON for %d symbols (%d chars)", len(symbols), len(result))
+    log.info("Fetched daily JSON for %d symbols (%d chars)", len(symbols), len(result))
     return result
+
+
+def _fetch_sctr_json(page: Page) -> str:
+    """
+    Inject JavaScript into *page* to call the StockCharts SCTR API and return
+    the raw JSON response string.
+    """
+    result: str = page.evaluate(_FETCH_SCTR_JS)
+    log.info("Fetched SCTR JSON (%d chars)", len(result))
+    return result
+
+
+def _prepare_stockcharts_page(page: Page) -> None:
+    """
+    Navigate to StockCharts and dismiss the consent popup if present.
+    """
+    page.goto("https://stockcharts.com/")
+    page.wait_for_load_state("domcontentloaded")
+    _dismiss_shadow_dom_popup(page, "#cmpwrapper")
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +539,7 @@ class _BrowserSession:
         return self
 
     def __exit__(self, *_: object) -> None:
-        for obj in (self.page, self._context, self._browser, self._pw):
+        for obj in (self.page, self._context, self._browser):
             try:
                 obj.close()  # type: ignore[union-attr]
             except Exception as exc:
@@ -387,153 +569,118 @@ class _BrowserSession:
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public fetch orchestration
 # ---------------------------------------------------------------------------
 
 
-def fetch_stock_data(
+def fetch_stockcharts(request: SCFetchRequest) -> SCFetchResult:
+    """
+    Fetch daily data, SCTR data, or both using a single browser session.
+
+    The browser is launched once, StockCharts is opened once, and the requested
+    API calls are made from the same page context.
+    """
+    if not request.daily and not request.sctr:
+        raise ValueError("At least one of request.daily or request.sctr must be True")
+
+    result = SCFetchResult()
+
+    with _BrowserSession() as session:
+        _prepare_stockcharts_page(session.page)
+
+        if request.daily:
+            symbols = request.resolved_symbols()
+            frames: list[pd.DataFrame] = []
+
+            log.info(
+                "Fetching daily data for %d symbols → %s",
+                len(symbols),
+                request.output_dir,
+            )
+
+            for batch in iter_batches(symbols, request.batch_max):
+                time.sleep(random.uniform(2.0, 5.0))
+                raw_json = _fetch_daily_json(session.page, batch)
+                df_batch = daily_json_to_dataframe(raw_json)
+                frames.append(df_batch)
+
+                log.info(
+                    "Daily batch done: %d rows accumulated",
+                    sum(len(f) for f in frames),
+                )
+
+            if not frames:
+                log.warning("No daily data retrieved.")
+            else:
+                daily = pd.concat(frames, ignore_index=True).reset_index(drop=True)
+
+                if daily.empty:
+                    log.warning("No daily data retrieved.")
+                else:
+                    result.daily = daily
+                    result.daily_path = save_daily_data(daily, request.output_dir)
+
+        if request.sctr:
+            log.info("Fetching SCTR data → %s", request.output_dir)
+
+            raw_json = _fetch_sctr_json(session.page)
+            sctr, date_label = sctr_json_to_dataframe(raw_json)
+
+            if not sctr.empty:
+                sctr_path = save_sctr_data(sctr, request.output_dir, date_label)
+
+                result.sctr = sctr
+                result.sctr_path = sctr_path
+            else:
+                log.warning("No SCTR data retrieved.")
+
+    return result
+
+
+def fetch_daily_data(
     symbols: list[str],
     output_dir: Path,
     *,
     batch_max: int = 10,
 ) -> pd.DataFrame:
     """
-    Launch a browser, navigate to StockCharts, dismiss the cookie popup, then
-    fetch OHLCV + SCTR data for *symbols* in batches.
+    Fetch only daily OHLCV data.
 
-    Each batch result is accumulated into a single DataFrame which is saved as
-    ``stockcharts-YYMMDD.parquet`` inside *output_dir* before being returned.
-
-    Parameters
-    ----------
-    symbols:
-        Ticker strings, e.g. ``["AAPL", "MSFT"]``.
-    output_dir:
-        Directory where the Parquet file is written.
-    batch_max:
-        Maximum number of symbols per API call (default 10).
-
-    Returns
-    -------
-    pd.DataFrame
-        Combined DataFrame with plain columns.
+    Compatibility wrapper around fetch_stockcharts().
     """
-    frames: list[pd.DataFrame] = []
+    result = fetch_stockcharts(
+        SCFetchRequest(
+            daily=True,
+            sctr=False,
+            symbols=symbols,
+            output_dir=output_dir,
+            batch_max=batch_max,
+        )
+    )
 
-    with _BrowserSession() as session:
-        session.page.goto("https://stockcharts.com/")
-        session.page.wait_for_load_state("domcontentloaded")
-        _dismiss_shadow_dom_popup(session.page, "#cmpwrapper")
-
-        for batch in iter_batches(symbols, batch_max):
-            time.sleep(random.uniform(2.0, 5.0))
-            raw_json = _fetch_batch_json(session.page, batch)
-            df_batch = json_to_dataframe(raw_json)
-            frames.append(df_batch)
-            log.info("Batch done: %d rows accumulated", sum(len(f) for f in frames))
-
-    if not frames:
-        log.warning("No data retrieved.")
-        return pd.DataFrame()
-
-    combined = pd.concat(frames, ignore_index=True).reset_index(drop=True)
-
-    save(combined, output_dir)
-
-    return combined
-
-
-# ---------------------------------------------------------------------------
-# SCTR data fetcher
-# ---------------------------------------------------------------------------
-
-_FETCH_SCTR_JS = """\
-(async () => {
-    const url = `https://stockcharts.com/j-sum/sum?cmd=sctr&view=L&timeframe=W&r=${Date.now()}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    return JSON.stringify(data);
-})()
-"""
+    return result.daily if result.daily is not None else pd.DataFrame()
 
 
 def fetch_sctr_data(output_dir: Path) -> pd.DataFrame:
     """
-    Launch a browser, navigate to StockCharts, dismiss the cookie popup, then
-    fetch SCTR data and save to CSV.
+    Fetch only SCTR data.
 
-    The CSV file is named ``stockcharts-sctr-YYMMDD.csv`` where the date comes
-    from the first element of the JSON response.
-
-    Parameters
-    ----------
-    output_dir:
-        Directory where the CSV file is written.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with columns [symbol, close, volume, mcap, SCTR, delta, name, industry, sector].
+    Compatibility wrapper around fetch_stockcharts().
     """
-    with _BrowserSession() as session:
-        session.page.goto("https://stockcharts.com/")
-        session.page.wait_for_load_state("domcontentloaded")
-        _dismiss_shadow_dom_popup(session.page, "#cmpwrapper")
-
-        result: str = session.page.evaluate(_FETCH_SCTR_JS)
-        log.info("Fetched SCTR JSON (%d chars)", len(result))
-
-    payload: list[dict] = json.loads(result)
-    if not payload:
-        log.warning("No SCTR data retrieved.")
-        return pd.DataFrame()
-
-    # Extract date from the first object
-    date_str = payload[0].get("date", "")
-    try:
-        file_date = pd.to_datetime(date_str)
-        date_label = file_date.strftime("%y%m%d")
-    except (ValueError, TypeError):
-        log.warning("Could not parse date '%s', using today.", date_str)
-        date_label = date.today().strftime("%y%m%d")
-
-    records = []
-    for entry in payload[1:]:
-        market_cap = _float_or_none(entry.get("marketCap"))
-        mcap = round(market_cap / 1e9, 2) if market_cap is not None else None
-        records.append(
-            {
-                "symbol": entry.get("symbol"),
-                "close": _float_or_none(entry.get("close")),
-                "volume": _float_or_none(entry.get("vol")),
-                "mcap": mcap,
-                "SCTR": entry.get("SCTR"),
-                "delta": _float_or_none(entry.get("delta")),
-                "name": entry.get("name"),
-                "industry": entry.get("industry"),
-                "sector": entry.get("sector"),
-            }
+    result = fetch_stockcharts(
+        SCFetchRequest(
+            daily=False,
+            sctr=True,
+            output_dir=output_dir,
         )
+    )
 
-    df = pd.DataFrame.from_records(records)
-    if df.empty:
-        log.warning("No SCTR records parsed.")
-        return df
-
-    df = df[["symbol", "close", "volume", "mcap", "SCTR", "delta", "name", "industry", "sector"]]
-
-    dest = output_dir / f"stockcharts-sctr-{date_label}.csv"
-    df.to_csv(dest, index=False)
-    log.info("Saved %d rows → %s", len(df), dest)
-
-    return df
+    return result.sctr if result.sctr is not None else pd.DataFrame()
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
-_OUTPUT_DIR = Path.home() / "Downloads"
 
 
 def _missing_dates(dates: pd.DatetimeIndex) -> list[pd.Timestamp]:
@@ -547,9 +694,50 @@ def _cmd_load(args: argparse.Namespace) -> None:
     df [symbol, date, open, high, low, close, volume, sctr_reg, sctr_snp, sctr_etf]
     """
     syms = sorted(args.symbols) if args.symbols else default_symbols()
-    log.info("Fetching data for %d symbols → %s", len(syms), _OUTPUT_DIR)
-    result = fetch_stock_data(syms, _OUTPUT_DIR)
+    log.info("Fetching daily data for %d symbols → %s", len(syms), _OUTPUT_DIR)
+    result = fetch_daily_data(syms, _OUTPUT_DIR)
     log.info("Done. DataFrame shape: %s", result.shape)
+
+
+def _cmd_fetch(args: argparse.Namespace) -> None:
+    """
+    Fetch daily and/or SCTR data using a single browser session.
+    """
+    daily = args.daily
+    sctr = args.sctr
+
+    if not daily and not sctr:
+        daily = True
+        sctr = True
+
+    symbols = sorted(args.symbols) if args.symbols else None
+
+    if symbols and not daily:
+        log.warning("Symbols were supplied but --daily not set, so symbols are ignored.")
+
+    request = SCFetchRequest(
+        daily=daily,
+        sctr=sctr,
+        symbols=symbols,
+        output_dir=_OUTPUT_DIR,
+    )
+
+    log.info(
+        "Fetching StockCharts data: daily=%s sctr=%s → %s",
+        daily,
+        sctr,
+        _OUTPUT_DIR,
+    )
+
+    result = fetch_stockcharts(request)
+
+    if result.daily is not None:
+        log.info("Daily DataFrame shape: %s", result.daily.shape)
+        log.info("Daily file: %s", result.daily_path)
+
+    if result.sctr is not None:
+        log.info("SCTR DataFrame shape: %s", result.sctr.shape)
+        log.info("SCTR file: %s", result.sctr_path)
 
 
 def _cmd_clean(_args: argparse.Namespace) -> None:
@@ -843,8 +1031,9 @@ class RateOfChangeIndicator:
             self.indicator.quantile(0.95),
         )
 
+
 @dataclass
-class PeriodLogReturnIndicator:
+class LogReturnIndicator:
     """period-normalised log-return"""
 
     indicator: pd.Series = field(init=False)
@@ -867,9 +1056,10 @@ class PeriodLogReturnIndicator:
         else:
             self.marker = self.indicator <= threshold
             self.marker_label = f"PLR ≤ {threshold:.2%}"
-        
+
+
 @dataclass
-class PeriodLogReturnRankIndicator:
+class LogReturnRankIndicator:
     """
     Calculate and hold period-normalised log-return series.
     Marker: rolling k-day rank (lowest in last k days).
@@ -884,26 +1074,120 @@ class PeriodLogReturnRankIndicator:
         self,
         df: pd.DataFrame,
         window: int = 10,
-        threshold: float = 0.10,
+        minmax: bool = True,
         rank_window: int = 21,
     ) -> None:
         # ---- indicator --------------------------------------------------------
         close_n = df["close"].shift(window)
         self.indicator = pd.Series(np.log(df["close"] / close_n), index=df.index)
-        self.indicator_label = f"PLR {window}"
+        self.indicator_label = f"LogRet {window}"
 
-        # ---- marker 2: rolling k-day rank (lowest) ----------------------------
-        self.marker = (
-            self.indicator.rolling(rank_window, min_periods=1)
-            .apply(lambda x: x.iloc[-1] == x.min(), raw=False)
-            .astype(bool)
-        )
-        self.marker_label = f"Lowest {rank_window}-day rank"
-       
+        # ---- marker: rolling k-day rank (lowest) ----------------------------
+        if minmax:
+            self.marker = self.indicator.rolling(rank_window, min_periods=1).apply(lambda x: x.iloc[-1] == x.min(), raw=False).astype(bool)
+            self.marker_label = f"Lowest {rank_window}-day rank"
+        else:
+            self.marker = self.indicator.rolling(rank_window, min_periods=1).apply(lambda x: x.iloc[-1] == x.max(), raw=False).astype(bool)
+            self.marker_label = f"Highest {rank_window}-day rank"
+
         self.marker_extremes = (
             self.indicator.quantile(0.05),
             self.indicator.quantile(0.95),
         )
+
+
+@dataclass
+class AtrPercentIndicator:
+    """ATR as percentage of close"""
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        window: int = 14,
+        threshold: float = 5.0,
+    ) -> None:
+        high = df["high"]
+        low = df["low"]
+        close = df["close"]
+
+        # True Range components
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+
+        # True Range is the max of the three
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        # ATR via simple moving average (Wilder's style uses EWM, but SMA is common)
+        atr = true_range.rolling(window=window).mean()
+
+        # ATR% = (ATR / low) * 100
+        self.indicator = pd.Series((atr / close) * 100, index=df.index)
+        self.indicator_label = f"ATR% {window}"
+
+        if threshold > 0:
+            self.marker = self.indicator >= threshold
+            self.marker_label = f"ATR% ≥ {threshold:.2f}"
+        else:
+            self.marker = self.indicator <= threshold
+            self.marker_label = f"ATR% ≤ {threshold:.2f}"
+
+        self.marker_extremes = (
+            self.indicator.quantile(0.05),
+            self.indicator.quantile(0.95),
+        )
+
+
+@dataclass
+class AtrPercentRankIndicator:
+    """ATR as percentage of close, marker flags max over last k days"""
+
+    indicator: pd.Series = field(init=False)
+    marker: pd.Series = field(init=False)
+    indicator_label: str = field(init=False)
+    marker_label: str = field(init=False)
+    marker_extremes: tuple[float, float] = field(init=False)
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        window: int = 14,
+        rank_window: int = 20,
+    ) -> None:
+        high = df["high"]
+        low = df["low"]
+        close = df["close"]
+
+        # True Range components
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+
+        # True Range is the max of the three
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        # ATR via simple moving average
+        atr = true_range.rolling(window=window).mean()
+
+        # ATR% = (ATR / close) * 100
+        self.indicator = pd.Series((atr / close) * 100, index=df.index)
+        self.indicator_label = f"ATR% {window}"
+
+        # Marker: True when indicator equals rolling max of last rank_window days
+        rolling_max = self.indicator.rolling(window=rank_window, min_periods=1).max()
+        self.marker = self.indicator == rolling_max
+        self.marker_label = f"ATR% max {rank_window}d"
+
+        self.marker_extremes = (
+            self.indicator.quantile(0.05),
+            self.indicator.quantile(0.95),
+        )
+
 
 def _cmd_plot(args: argparse.Namespace) -> None:
     df, _ = _load_latest_parquet()
@@ -918,7 +1202,8 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     warmup_start = one_year_ago - pd.Timedelta(days=80)
     subset = subset[subset["date"] >= warmup_start].copy()
 
-    indicator = PeriodLogReturnRankIndicator(subset, window=2, threshold=-0.0144)
+#    indicator = LogReturnRankIndicator(subset, window=2, minmax=True)
+    indicator = AtrPercentRankIndicator(subset, window=10, rank_window=21)
     subset = subset[subset["date"] >= one_year_ago]
 
     fig = make_subplots(rows=2, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
@@ -934,11 +1219,11 @@ def _cmd_plot(args: argparse.Namespace) -> None:
         col=1,
     )
 
-    high_vol = subset[indicator.marker[subset.index]]
+    markers = subset[indicator.marker[subset.index]]
     fig.add_trace(
         go.Scatter(
-            x=high_vol["date"],
-            y=high_vol["close"],
+            x=markers["date"],
+            y=markers["close"],
             mode="markers",
             marker=dict(size=6, color="red", symbol="triangle-up"),
             name=indicator.marker_label,
@@ -1040,6 +1325,11 @@ def _build_parser() -> argparse.ArgumentParser:
     load = sub.add_parser("load", help="Fetch data from StockCharts and save to Parquet")
     load.add_argument("symbols", nargs="*", default=None, help="Ticker symbols (default: built-in watchlist)")
 
+    fetch = sub.add_parser("fetch", help="Fetch daily, SCTR, or both using one browser session")
+    fetch.add_argument("symbols", nargs="*", default=None, help="Ticker symbols for daily data, default: built-in watchlist")
+    fetch.add_argument("--daily", action="store_true", help="Fetch daily OHLCV data")
+    fetch.add_argument("--sctr", action="store_true", help="Fetch SCTR data")
+
     view = sub.add_parser("view", help="Load the latest Parquet file and print summary info")
     view.add_argument("symbol", nargs="?", default=None, help="Optional single ticker to print tail for")
 
@@ -1072,6 +1362,8 @@ if __name__ == "__main__":
             _cmd_clean(args)
         case "load":
             _cmd_load(args)
+        case "fetch":
+            _cmd_fetch(args)
         case "view":
             _cmd_view(args)
         case "sctr":

@@ -497,7 +497,7 @@ def print_combined_summary(p: Path, spec: str) -> tuple[pd.DataFrame, pd.DataFra
 if __name__ == "__main__":
     # whole_day_concat(Path("c:/temp/z"), 'esu5*.csv', 'zesu5')
     # test_tick()
-    spec = "nqm6*.csv"
+    spec = "zesm6*.csv"
     check_overlap(DATA_DIR, spec)
     df, di = print_combined_summary(DATA_DIR, spec)
     print_summary(df)

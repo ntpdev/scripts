@@ -2286,6 +2286,7 @@ dependencies = [
     { name = "torchaudio" },
     { name = "torchvision" },
     { name = "twelvedata", extra = ["pandas"] },
+    { name = "typer" },
     { name = "xlsxwriter" },
 ]
 
@@ -2325,6 +2326,7 @@ requires-dist = [
     { name = "torchaudio", specifier = ">=2.6.0" },
     { name = "torchvision", specifier = ">=0.21.0" },
     { name = "twelvedata", extras = ["pandas"], specifier = ">=1.2.25" },
+    { name = "typer", specifier = ">=0.15.2" },
     { name = "xlsxwriter", specifier = ">=3.2.2" },
 ]
 

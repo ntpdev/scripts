@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-import argparse
 import io
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from pathlib import Path
-from datetime import datetime
+import typer
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build, Resource
+from googleapiclient.discovery import Resource, build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from rich.console import Console
 from rich.table import Table
-from rich.pretty import pprint
-from google.auth.exceptions import RefreshError
 from rich.text import Text
 
 console = Console()
+app = typer.Typer(rich_markup_mode="rich")
 
 # https://developers.google.com/drive/api/guides/about-sdk
 
@@ -29,15 +29,7 @@ Credentials_JSON = Path.home() / "client_secret_400071456185-tk7tdm2uckmhsqpdjgb
 
 TOKEN_FILE = Path.home() / "Downloads" / "token.json"
 
-mime_types = {
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".7z":  "application/x-compressed",
-    ".zip": "application/zip",
-    ".csv": "text/plain",
-    ".md":  "text/plain",
-    ".txt": "text/plain",
-    ".pdf": "application/pdf"
-}
+mime_types = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".7z": "application/x-compressed", ".zip": "application/zip", ".csv": "text/plain", ".md": "text/plain", ".txt": "text/plain", ".pdf": "application/pdf"}
 
 
 def login(token_file: Path) -> Credentials | None:
@@ -63,6 +55,14 @@ def login(token_file: Path) -> Credentials | None:
             token.write(creds.to_json())
 
     return creds
+
+
+def _get_service() -> Resource:
+    creds = login(TOKEN_FILE)
+    if not creds:
+        console.print("Failed to authenticate with Google Drive.", style="red")
+        raise typer.Exit(code=1)
+    return build("drive", "v3", credentials=creds)
 
 
 def print_table(items: list[dict[str, Any]]) -> None:
@@ -187,60 +187,67 @@ def delete_file(drive_service: Resource, file_id: str) -> None:
         console.print(f"Error deleting file: {e}", style="red")
 
 
-def main(cmd: str, fname: str):
+@app.command("list")
+def cmd_list() -> None:
+    """List files in your Google Drive."""
     try:
-        if creds := login(TOKEN_FILE):
-            service = build("drive", "v3", credentials=creds)
-        match cmd:
-            case "list":
-                list_files(service)
-
-            case "find" if fname:
-                find_file(service, fname)
-
-            case "up" if fname:
-                fn = Path.home() / "Downloads" / fname
-                if fn.exists():
-                    if file_id := find_file(service, fname):
-                        update_file(service, file_id, fn)
-                    else:
-                        create_file(service, fn)
-                else:
-                    console.print(f"File not found: {fn}", style="red")
-
-            case "dn" if fname:
-                if file_id := find_file(service, fname):
-                    fn = Path.home() / "Downloads" / fname
-                    download_file(service, file_id, fn)
-
-            case "rm" if fname:
-                if file_id := find_file(service, fname):
-                    delete_file(service, file_id)
-                else:
-                    console.print(f"File not found: {fname}", style="red")
-
-            case _:
-                console.print(f"Invalid command or missing filename: {cmd} {fname}", style="red")
-
+        service = _get_service()
+        list_files(service)
     except HttpError as error:
-        # TODO(developer) - Handle errors from drive API.
+        console.print(f"An error occurred: {error}", style="red")
+
+
+@app.command("find")
+def cmd_find(fname: str = typer.Argument(..., help="File name to search for")) -> None:
+    """Find files containing FNAME in the name."""
+    try:
+        service = _get_service()
+        find_file(service, fname)
+    except HttpError as error:
+        console.print(f"An error occurred: {error}", style="red")
+
+
+@app.command("up")
+def cmd_up(fname: str = typer.Argument(..., help="File name in Downloads to upload")) -> None:
+    """Upload a file from Downloads to Google Drive."""
+    try:
+        service = _get_service()
+        fn = Path.home() / "Downloads" / fname
+        if fn.exists():
+            if file_id := find_file(service, fname):
+                update_file(service, file_id, fn)
+            else:
+                create_file(service, fn)
+        else:
+            console.print(f"File not found: {fn}", style="red")
+    except HttpError as error:
+        console.print(f"An error occurred: {error}", style="red")
+
+
+@app.command("dn")
+def cmd_dn(fname: str = typer.Argument(..., help="File name in Downloads to download")) -> None:
+    """Download a file from Google Drive to Downloads."""
+    try:
+        service = _get_service()
+        if file_id := find_file(service, fname):
+            fn = Path.home() / "Downloads" / fname
+            download_file(service, file_id, fn)
+    except HttpError as error:
+        console.print(f"An error occurred: {error}", style="red")
+
+
+@app.command("rm")
+def cmd_rm(fname: str = typer.Argument(..., help="File name to move to trash")) -> None:
+    """Move a file matching FNAME to trash."""
+    try:
+        service = _get_service()
+        if file_id := find_file(service, fname):
+            delete_file(service, file_id)
+        else:
+            console.print(f"File not found: {fname}", style="red")
+    except HttpError as error:
         console.print(f"An error occurred: {error}", style="red")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Google Drive command-line interface",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s list            # List files in your Google Drive
-  %(prog)s find document   # Find files containing 'document' in the name
-  %(prog)s up report.xlsx  # Upload report.xlsx from Downloads folder
-  %(prog)s dn report.xlsx  # Download report.xlsx to Downloads folder
-  %(prog)s rm old_file.txt # Move old_file.txt to trash
-        """,
-    )
-    parser.add_argument("cmd", choices=["list", "find", "up", "dn", "rm"], type=str, help="command [list|find|upload|download|rm]")
-    parser.add_argument("fn", type=str, nargs="?", default="", help="file name")
-    args = parser.parse_args()
-    main(args.cmd, args.fn)
+    app()
