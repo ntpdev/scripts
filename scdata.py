@@ -5,7 +5,6 @@ Usage:
     python scdata.py
 """
 
-import argparse
 import json
 import logging
 import random
@@ -20,6 +19,7 @@ from typing import TypeVar
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import typer
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 from plotly.subplots import make_subplots
 from rich.console import Console
@@ -682,43 +682,53 @@ def fetch_sctr_data(output_dir: Path) -> pd.DataFrame:
 # CLI
 # ---------------------------------------------------------------------------
 
+app = typer.Typer(
+    help="Fetch OHLCV data from StockCharts.com and store as Parquet.",
+    no_args_is_help=True,
+)
+
 
 def _missing_dates(dates: pd.DatetimeIndex) -> list[pd.Timestamp]:
     all_dates = pd.date_range(dates.min(), dates.max())
     return list(all_dates.difference(dates))
 
 
-def _cmd_load(args: argparse.Namespace) -> None:
+@app.command()
+def load(
+    symbols: list[str] | None = typer.Argument(None, help="Ticker symbols (default: built-in watchlist)"),
+) -> None:
     """
     returns daily data from stockcharts as a dataframe
     df [symbol, date, open, high, low, close, volume, sctr_reg, sctr_snp, sctr_etf]
     """
-    syms = sorted(args.symbols) if args.symbols else default_symbols()
+    syms = sorted(symbols) if symbols else default_symbols()
     log.info("Fetching daily data for %d symbols → %s", len(syms), _OUTPUT_DIR)
     result = fetch_daily_data(syms, _OUTPUT_DIR)
     log.info("Done. DataFrame shape: %s", result.shape)
 
 
-def _cmd_fetch(args: argparse.Namespace) -> None:
+@app.command()
+def fetch(
+    symbols: list[str] | None = typer.Argument(None, help="Ticker symbols for daily data, default: built-in watchlist"),
+    daily: bool = typer.Option(False, help="Fetch daily OHLCV data"),
+    sctr: bool = typer.Option(False, help="Fetch SCTR data"),
+) -> None:
     """
     Fetch daily and/or SCTR data using a single browser session.
     """
-    daily = args.daily
-    sctr = args.sctr
-
     if not daily and not sctr:
         daily = True
         sctr = True
 
-    symbols = sorted(args.symbols) if args.symbols else None
+    sorted_symbols = sorted(symbols) if symbols else None
 
-    if symbols and not daily:
+    if sorted_symbols and not daily:
         log.warning("Symbols were supplied but --daily not set, so symbols are ignored.")
 
     request = SCFetchRequest(
         daily=daily,
         sctr=sctr,
-        symbols=symbols,
+        symbols=sorted_symbols,
         output_dir=_OUTPUT_DIR,
     )
 
@@ -740,7 +750,8 @@ def _cmd_fetch(args: argparse.Namespace) -> None:
         log.info("SCTR file: %s", result.sctr_path)
 
 
-def _cmd_clean(_args: argparse.Namespace) -> None:
+@app.command()
+def clean() -> None:
     """
     Clean up downloaded files.
     """
@@ -748,13 +759,15 @@ def _cmd_clean(_args: argparse.Namespace) -> None:
     clean_files(_OUTPUT_DIR, "stockcharts-sctr-*.csv")
 
 
-def _cmd_sctr(_args: argparse.Namespace) -> None:
+@app.command()
+def sctr() -> None:
     log.info("Fetching SCTR data → %s", _OUTPUT_DIR)
     result = fetch_sctr_data(_OUTPUT_DIR)
     log.info("Done. DataFrame shape: %s", result.shape)
 
 
-def _cmd_rank(_args: argparse.Namespace) -> None:
+@app.command()
+def rank() -> None:
     latest = find_latest_sctr(_OUTPUT_DIR)
     if latest is None:
         log.error("No stockcharts-sctr-*.csv files found in %s", _OUTPUT_DIR)
@@ -795,14 +808,17 @@ def _cmd_rank(_args: argparse.Namespace) -> None:
     console.print(Markdown(_to_markdown(top_chg)))
 
 
-def _cmd_view(args: argparse.Namespace) -> None:
+@app.command()
+def view(
+    symbol: str | None = typer.Argument(None, help="Optional single ticker to print tail for"),
+) -> None:
     df, latest = _load_latest_parquet(dtype_overrides={"symbol": "category"})
     print(f"File: {latest}")
     print(f"Shape: {df.shape}")
     print()
 
-    if args.symbol:
-        sym = args.symbol.upper()
+    if symbol:
+        sym = symbol.upper()
         subset = df[df["symbol"] == sym]
         if subset.empty:
             log.error("Symbol %s not found in %s", sym, latest)
@@ -815,7 +831,11 @@ def _cmd_view(args: argparse.Namespace) -> None:
         print_summary(df)
 
 
-def _cmd_plotrel(args: argparse.Namespace) -> None:
+@app.command()
+def plotrel(
+    symbols: list[str] | None = typer.Argument(None, help="Ticker symbols (default: built-in watchlist)"),
+    out: str | None = typer.Option(None, help="Optional path to save HTML instead of opening browser"),
+) -> None:
     df, latest = _load_latest_parquet()
 
     spy_df = df[df["symbol"] == "SPY"].sort_values("date")
@@ -829,8 +849,8 @@ def _cmd_plotrel(args: argparse.Namespace) -> None:
     log.info("SPY minimum close in last 100 rows: %.2f on %s", min_row["close"], start_date.date())
 
     filtered = df[df["date"] >= start_date].copy()
-    if args.symbols:
-        filtered = filtered[filtered["symbol"].isin([s.upper() for s in args.symbols])]
+    if symbols:
+        filtered = filtered[filtered["symbol"].isin([s.upper() for s in symbols])]
     wide = filtered.pivot(index="date", columns="symbol", values="close")
     normalized = (wide / wide.iloc[0] - 1) * 100
 
@@ -857,21 +877,26 @@ def _cmd_plotrel(args: argparse.Namespace) -> None:
 
     _print_relative_performance_table(normalized)
 
-    if args.out:
-        fig.write_html(args.out)
-        log.info("Saved plot → %s", args.out)
+    if out:
+        fig.write_html(out)
+        log.info("Saved plot → %s", out)
     else:
         fig.show()
 
 
-def _cmd_rs(args: argparse.Namespace) -> None:
-    if len(args.symbols) < 2:
+@app.command()
+def rs(
+    symbols: list[str] = typer.Argument(..., help="Ticker symbols: first is the baseline, rest are compared against it"),
+    out: str | None = typer.Option(None, help="Optional path to save HTML instead of opening browser"),
+    roc: int | None = typer.Option(None, help="Plot n-day rate of change of RS on a subplot"),
+) -> None:
+    if len(symbols) < 2:
         log.error("rs command requires at least 2 symbols")
         sys.exit(1)
 
     df, _ = _load_latest_parquet()
 
-    symbols_upper = [s.upper() for s in args.symbols]
+    symbols_upper = [s.upper() for s in symbols]
     baseline = symbols_upper[0]
     all_symbols = symbols_upper
 
@@ -893,7 +918,7 @@ def _cmd_rs(args: argparse.Namespace) -> None:
     rs_raw = rs_raw.drop(columns=[baseline])
     rs = rs_raw / rs_raw.iloc[0]
 
-    has_roc = args.roc is not None and args.roc > 0
+    has_roc = roc is not None and roc > 0
     if has_roc:
         fig = make_subplots(rows=2, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
     else:
@@ -912,20 +937,20 @@ def _cmd_rs(args: argparse.Namespace) -> None:
             fig.add_trace(trace)
 
     if has_roc:
-        roc = rs.diff(args.roc)
-        for symbol in roc.columns:
+        roc_series = rs.diff(roc)
+        for symbol in roc_series.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=roc.index,
-                    y=roc[symbol],
+                    x=roc_series.index,
+                    y=roc_series[symbol],
                     mode="lines",
-                    name=f"{symbol}/{baseline} {args.roc}d Δ",
+                    name=f"{symbol}/{baseline} {roc}d Δ",
                 ),
                 row=2,
                 col=1,
             )
         fig.update_yaxes(title_text="RS (normalized to 1.0)", row=1, col=1)
-        fig.update_yaxes(title_text=f"{args.roc}d Δ", row=2, col=1)
+        fig.update_yaxes(title_text=f"{roc}d Δ", row=2, col=1)
     else:
         fig.update_yaxes(title_text="RS (normalized to 1.0)")
 
@@ -942,9 +967,9 @@ def _cmd_rs(args: argparse.Namespace) -> None:
         showlegend=True,
     )
 
-    if args.out:
-        fig.write_html(args.out)
-        log.info("Saved plot → %s", args.out)
+    if out:
+        fig.write_html(out)
+        log.info("Saved plot → %s", out)
     else:
         fig.show()
 
@@ -1189,10 +1214,14 @@ class AtrPercentRankIndicator:
         )
 
 
-def _cmd_plot(args: argparse.Namespace) -> None:
+@app.command()
+def plot(
+    symbol: str = typer.Argument(..., help="Ticker symbol to plot"),
+    out: str | None = typer.Option(None, help="Optional path to save HTML instead of opening browser"),
+) -> None:
     df, _ = _load_latest_parquet()
 
-    sym = args.symbol.upper()
+    sym = symbol.upper()
     subset = df[df["symbol"].str.upper() == sym].sort_values("date")
     if subset.empty:
         log.error("Symbol %s not found in data", sym)
@@ -1202,7 +1231,7 @@ def _cmd_plot(args: argparse.Namespace) -> None:
     warmup_start = one_year_ago - pd.Timedelta(days=80)
     subset = subset[subset["date"] >= warmup_start].copy()
 
-#    indicator = LogReturnRankIndicator(subset, window=2, minmax=True)
+    #    indicator = LogReturnRankIndicator(subset, window=2, minmax=True)
     indicator = AtrPercentRankIndicator(subset, window=10, rank_window=21)
     subset = subset[subset["date"] >= one_year_ago]
 
@@ -1289,9 +1318,9 @@ def _cmd_plot(args: argparse.Namespace) -> None:
         showlegend=True,
     )
 
-    if args.out:
-        fig.write_html(args.out)
-        log.info("Saved plot → %s", args.out)
+    if out:
+        fig.write_html(out)
+        log.info("Saved plot → %s", out)
     else:
         fig.show()
 
@@ -1316,66 +1345,5 @@ def _print_relative_performance_table(normalized: pd.DataFrame) -> None:
     print()
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Fetch OHLCV data from StockCharts.com and store as Parquet.",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    load = sub.add_parser("load", help="Fetch data from StockCharts and save to Parquet")
-    load.add_argument("symbols", nargs="*", default=None, help="Ticker symbols (default: built-in watchlist)")
-
-    fetch = sub.add_parser("fetch", help="Fetch daily, SCTR, or both using one browser session")
-    fetch.add_argument("symbols", nargs="*", default=None, help="Ticker symbols for daily data, default: built-in watchlist")
-    fetch.add_argument("--daily", action="store_true", help="Fetch daily OHLCV data")
-    fetch.add_argument("--sctr", action="store_true", help="Fetch SCTR data")
-
-    view = sub.add_parser("view", help="Load the latest Parquet file and print summary info")
-    view.add_argument("symbol", nargs="?", default=None, help="Optional single ticker to print tail for")
-
-    sub.add_parser("sctr", help="Fetch SCTR data from StockCharts and save to CSV")
-
-    sub.add_parser("rank", help="Load the latest SCTR CSV and print the top 12 rows")
-
-    sub.add_parser("clean", help="Clean up old Parquet files")
-
-    plotrel = sub.add_parser("plotrel", help="Plot relative performance since SPY's lowest close in last 100 days")
-    plotrel.add_argument("--out", default=None, help="Optional path to save HTML instead of opening browser")
-    plotrel.add_argument("symbols", nargs="*", default=None, help="Ticker symbols (default: built-in watchlist)")
-
-    rs_parser = sub.add_parser("rs", help="Plot relative strength of 2+ stocks over the last 2 years")
-    rs_parser.add_argument("symbols", nargs="+", help="Ticker symbols: first is the baseline, rest are compared against it")
-    rs_parser.add_argument("--out", default=None, help="Optional path to save HTML instead of opening browser")
-    rs_parser.add_argument("--roc", type=int, default=None, help="Plot n-day rate of change of RS on a subplot")
-
-    plot_parser = sub.add_parser("plot", help="Plot closing price and standardized volume for a symbol")
-    plot_parser.add_argument("symbol", help="Ticker symbol to plot")
-    plot_parser.add_argument("--out", default=None, help="Optional path to save HTML instead of opening browser")
-
-    return parser
-
-
 if __name__ == "__main__":
-    args = _build_parser().parse_args()
-    match args.command:
-        case "clean":
-            _cmd_clean(args)
-        case "load":
-            _cmd_load(args)
-        case "fetch":
-            _cmd_fetch(args)
-        case "view":
-            _cmd_view(args)
-        case "sctr":
-            _cmd_sctr(args)
-        case "rank":
-            _cmd_rank(args)
-        case "plotrel":
-            _cmd_plotrel(args)
-        case "rs":
-            _cmd_rs(args)
-        case "plot":
-            _cmd_plot(args)
-        case _:
-            log.error("Unknown command: %s", args.command)
-            sys.exit(1)
+    app()
